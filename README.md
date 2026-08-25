@@ -40,6 +40,11 @@ That ordering is driven by a real measured run (`docaget/costo.json`):
 | Rule learning, eval queries | $0.0015 | 3% |
 | **Total, 175-page book** | **$0.0513** | |
 
+The model names in that table are the ones that run charged, and it is old: both
+have since been replaced — `gemini-embedding-001` is no longer served at all, and
+the current models are `gemini-3.6-flash` and `gemini-embedding-2`. The *shape*
+is what the table is here for, and the shape has held.
+
 Correction dominates, not embedding — so the free gate sits before correction,
 and every stage can be switched off individually there.
 
@@ -726,9 +731,72 @@ They answer different questions, and each is the wrong shape for the others'.
 
 #### Qdrant, for the vectors
 
-A vector database stores an embedding per chunk and finds the ones nearest a
-question. Qdrant earns its place by doing three things in the database that
-would otherwise be done badly in the client:
+**An embedding is a passage turned into coordinates.** You hand a chunk of text
+to an embedding model and it returns a fixed-length list of numbers — here 3 072
+of them, from `gemini-embedding-2`. That list is a point in a 3 072-dimensional
+space, and the model has been trained so that passages *meaning* similar things
+land near each other. Nothing about it is keyword matching: "el bautismo de los
+niños" and "paedobaptism" end up close together without sharing a character,
+and "banco" in a passage about rivers ends up far from "banco" in one about
+loans.
+
+**"Near" is measured as an angle, not as a distance.** That is cosine
+similarity: take the two vectors as arrows from the origin and measure the angle
+between them. Identical direction scores 1, unrelated scores about 0, opposite
+scores −1. The formula is the dot product over the two lengths:
+
+```
+cos(a, b) = (a · b) / (|a| × |b|)
+```
+
+**Why the angle rather than the straight-line distance** is easiest to see in two
+dimensions. Take `[2, 1]` and `[20, 10]`:
+
+```
+       ↑                  Euclidean distance:  √(18² + 9²) = 20.1  → "far apart"
+   10  ┤        ● [20,10]  Cosine similarity:   1.0                → "identical"
+       │      ⁄
+       │    ⁄
+    1  ┤  ● [2,1]
+       └──┴─────────────→
+          2           20
+```
+
+They point in exactly the same direction and differ only in magnitude. Straight-
+line distance calls them far apart; the cosine calls them the same. For text that
+is the behaviour you want, because magnitude tracks things like passage length
+and word frequency rather than subject matter — a two-line note and a two-page
+section about the same doctrine should not be pushed apart for the crime of
+being different sizes.
+
+**Here the cosine is just the dot product.** `gemini-embedding-2` returns
+L2-normalised vectors at the full 3 072 dimensions — every vector already has
+length 1 — so the denominator is `1 × 1` and `cos(a, b) = a · b`. Qdrant is
+configured with `"distance": "Cosine"` and needs no renormalisation step.
+(Truncating the vector to 768 or 1 536 dimensions, which the model supports,
+would break that: the truncated vector is no longer unit length.)
+
+That width is also why the collection survived a change of model. A collection's
+vector size is fixed when it is created, and `gemini-embedding-2` kept the 3 072
+dimensions of the `gemini-embedding-001` it replaced — otherwise every existing
+collection would have had to be rebuilt from scratch.
+
+That number is not only an internal ranking score — it is a **decision**
+threshold. A question is embedded too, and a dense-only pass asks whether
+anything in the corpus clears a cosine floor of **0.60**. If nothing does, the
+question comes back as *off corpus* rather than as the five least-bad passages in
+the library. Questions and passages are also embedded with *different* task
+types, because the model places them asymmetrically on purpose and using one task
+for both measurably degrades retrieval.
+
+> **Not the discrete cosine transform.** The DCT is the thing inside JPEG and
+> MP3, which rewrites a signal as a sum of cosine waves so the least perceptible
+> components can be thrown away. It shares the word "cosine" with the above and
+> nothing else, and no part of this system uses one. The only cosine here is the
+> angle between two embeddings.
+
+Qdrant earns its place by doing three things in the database that would otherwise
+be done badly in the client:
 
 - **Hybrid search and fusion, server-side.** One collection holds a *named* dense
   vector and a *named* sparse BM25 vector for the same chunk. A single query

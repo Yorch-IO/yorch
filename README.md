@@ -769,6 +769,32 @@ and word frequency rather than subject matter — a two-line note and a two-page
 section about the same doctrine should not be pushed apart for the crime of
 being different sizes.
 
+**What the numbers actually look like** is worth seeing, because the two-
+dimensional intuition above is misleading in one specific way. Measured on this
+library — 1 753 chunks, every pair of a 260-chunk sample, 33 670 cosines:
+
+| | Cosine |
+|---|---:|
+| Two chunks of the same document, on average | 0.695 |
+| Two chunks of *different* documents, on average | 0.608 |
+| The most similar pair found | 0.995 |
+| The least similar pair found | 0.427 |
+
+**Unrelated is not zero.** Textbook cosine similarity runs −1 to 1 and puts
+"nothing to do with each other" near 0; in a real embedding space it sits around
+0.6, and the whole corpus lives in a band roughly 0.43 to 0.99. Everything here
+is Spanish prose about theology, so everything shares a great deal of direction,
+and what carries the signal is the *spread* within that band rather than the
+absolute value. This is the reason a similarity threshold has to be calibrated
+against the model and the corpus and cannot be read off first principles.
+
+The extremes are both instructive. The lowest pair, at 0.427, is a passage on
+marriage against one on Rousseau and the humanist motive — genuinely unrelated,
+and the model says so. The highest, at **0.995**, turned out to be the same text
+in two files: `Hermeneutica Capitulo 1` and `Hermeneutica Capitulo 1 (1)`, a
+duplicate nobody had noticed. A cosine that close is not similarity, it is
+identity, and it found a copy in the corpus by accident.
+
 **Here the cosine is just the dot product.** `gemini-embedding-2` returns
 L2-normalised vectors at the full 3 072 dimensions — every vector already has
 length 1 — so the denominator is `1 × 1` and `cos(a, b) = a · b`. Qdrant is
@@ -785,15 +811,15 @@ That number is not only an internal ranking score — it is a **decision**
 threshold. A question is embedded too, and a dense-only pass asks whether
 anything in the corpus clears a cosine floor of **0.60**. If nothing does, the
 question comes back as *off corpus* rather than as the five least-bad passages in
-the library. Questions and passages are also embedded with *different* task
-types, because the model places them asymmetrically on purpose and using one task
-for both measurably degrades retrieval.
+the library.
 
-> **Not the discrete cosine transform.** The DCT is the thing inside JPEG and
-> MP3, which rewrites a signal as a sum of cosine waves so the least perceptible
-> components can be thrown away. It shares the word "cosine" with the above and
-> nothing else, and no part of this system uses one. The only cosine here is the
-> angle between two embeddings.
+That floor is not comparable to the passage-to-passage figures in the table
+above, and the difference matters. Questions and passages are embedded with
+*different* task types — the model places a question and the passage answering it
+asymmetrically on purpose, and using one task for both measurably degrades
+retrieval — so question-to-passage cosines are their own distribution. Reading
+the 0.60 floor against the 0.608 average of unrelated *passages* would be
+comparing two different measurements that happen to print similar digits.
 
 Qdrant earns its place by doing three things in the database that would otherwise
 be done badly in the client:
@@ -820,6 +846,59 @@ for Temporal to retry.
 One thing to know if you touch retrieval: **RRF scores are reciprocal ranks, not
 cosines.** A similarity threshold is meaningless on the fused output, so it goes
 on the dense prefetch and nowhere else.
+
+#### And the discrete cosine transform?
+
+Nothing in this system computes one. But "cosine similarity" and "the cosine
+transform" are not merely a coincidence of names either, and the honest answer is
+more interesting than dismissing it: **they are the same arithmetic asking
+different questions.**
+
+The DCT is what sits inside JPEG and MP3. It takes a signal — a row of pixel
+values, a window of audio samples — and rewrites it as a sum of cosine waves of
+increasing frequency, so that the components a human will not miss can be
+quantised away. In its usual form (DCT-II), a signal `x` of `N` samples becomes
+`N` coefficients:
+
+```
+        N-1
+X[k]  =  Σ   x[n] · cos[ (π/N) · (n + ½) · k ]        k = 0 … N-1
+        n=0
+```
+
+Look at what one coefficient is. Fix `k`, and the cosine term is a **fixed vector**
+— call it `c_k`, with components `c_k[n] = cos[(π/N)(n + ½)k]`, a sampled cosine
+wave at frequency `k`. Then the sum above is componentwise multiply-and-add, which
+is exactly the dot product:
+
+```
+X[k]  =  x · c_k        "how much of frequency k is in this signal?"
+```
+
+And cosine similarity, for unit vectors, is:
+
+```
+cos(a, b)  =  a · b     "how much of b's direction is in a?"
+```
+
+**Both are projections — an inner product of a vector onto another vector.** That
+is the relationship, and it is a real one. Where they part company is what the
+second vector *is*, and it is a large difference:
+
+| | Discrete cosine transform | Cosine similarity |
+|---|---|---|
+| Project onto | A **fixed, known** orthogonal basis of cosine waves | Another **learned** embedding |
+| Where "cosine" is | The *basis functions* are cosines | The *result* is the cosine of an angle |
+| How many outputs | `N` coefficients, one per frequency | One number |
+| Reversible? | Yes — the DCT is invertible, which is what makes it a compression tool | No — you cannot recover the passage from its embedding |
+| Chosen by | Mathematics, once, for all signals | Training, from data |
+
+So the DCT is a change of coordinates: same information, rewritten in a basis
+where discarding the small parts is cheap. An embedding is not a change of
+coordinates at all — it is a lossy, learned map into a space where *direction
+means meaning*, and there is no way back. The cosine appears in one as the basis
+you project onto, and in the other as the measurement you get out. Same
+operation, different question, and only the second one runs here.
 
 #### Memgraph, for the relations
 

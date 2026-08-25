@@ -1,10 +1,10 @@
 # Company Brain
 
 A **retrieval-augmented generation (RAG)** system for your own documents. It
-indexes a corpus into a hybrid vector store and a concept graph, then answers
-questions out of it with citations you can check — and it shows you exactly what
-the pipeline is going to do, and what it will cost, **before** it spends
-anything.
+indexes a corpus into a **vector database** (Qdrant) and a **graph database**
+(Memgraph), then answers questions out of both with citations you can check —
+and it shows you exactly what the pipeline is going to do, and what it will
+cost, **before** it spends anything.
 
 RAG is usually the easy half of a product and the hard half of a result: the
 retrieval works, the model writes a fluent paragraph, and nothing tells you
@@ -713,6 +713,85 @@ provider id.
 One measurement worth repeating: retrieval always reports hybrid and dense-only
 side by side, because synthetic eval questions leak vocabulary to the lexical leg
 and the gap between the two modes is the only honest measure of that leak.
+
+### Why three databases
+
+They answer different questions, and each is the wrong shape for the others'.
+
+| | Holds | Answers |
+|---|---|---|
+| **Qdrant** | An embedding and a sparse term vector per chunk | "Which passages are *about* this?" |
+| **Memgraph** | Documents, sections, chunks, concepts, claims, citations | "Which books share this idea, and where exactly?" |
+| **Postgres** | Catalog, run history, costs, workflow state | "What is on the shelf, and what did it cost?" |
+
+#### Qdrant, for the vectors
+
+A vector database stores an embedding per chunk and finds the ones nearest a
+question. Qdrant earns its place by doing three things in the database that
+would otherwise be done badly in the client:
+
+- **Hybrid search and fusion, server-side.** One collection holds a *named* dense
+  vector and a *named* sparse BM25 vector for the same chunk. A single query
+  prefetches both legs and fuses them with reciprocal rank. There is no second
+  store for lexical search and no client-side merge to get wrong.
+- **The IDF lives in the database.** The sparse vector is declared with
+  `modifier: "idf"`, so the corpus statistic is maintained by Qdrant as documents
+  arrive. Stored vectors stay raw term frequencies, and nothing has to be
+  rewritten when the corpus grows — which it does, constantly.
+- **Payload filtering instead of collection-per-library.** A collection's vector
+  size is fixed at creation, so many collections means many places a dimension
+  change has to be migrated, and cross-library search becomes a fan-out rather
+  than a filter. One collection, filtered by payload. Each payload also carries
+  the *graph's* `chunk_id` for the same chunk, which is what lets a vector hit
+  expand through the graph with no lookup table between them.
+
+Point ids are derived from the version and the chunk index rather than assigned,
+so re-indexing converges instead of accumulating and the indexing step is safe
+for Temporal to retry.
+
+One thing to know if you touch retrieval: **RRF scores are reciprocal ranks, not
+cosines.** A similarity threshold is meaningless on the fused output, so it goes
+on the dense prefetch and nowhere else.
+
+#### Memgraph, for the relations
+
+Nearest-neighbour search cannot answer "which of these books discuss the same
+concept", "what does this document *claim* about it", or "which chunk do I open
+to check that". Those are traversals, and a vector store has no edges to
+traverse. Memgraph is where the structure lives, and it was chosen for reasons
+that are mostly unglamorous:
+
+- **It speaks Bolt and Cypher**, so the standard Neo4j driver works unchanged and
+  the query language is one people already know.
+- **It is in-memory**, so a traversal across the whole corpus is fast enough to
+  sit behind an interactive canvas. Measured on the 72-document library: the
+  unfiltered graph — 10 835 concepts and 15 367 edges, aggregated from 24 424
+  mention relations — comes back over HTTP in **400 ms**, and the shared subgraph
+  the canvas opens on in **177 ms**. It is memory-limited explicitly in the
+  Compose file, because it shares a workstation with your editor and browser and
+  its own default is 90% of physical memory.
+- **It runs in a container on loopback**, like everything else here. Nothing about
+  the graph leaves the machine.
+
+Two things about it are worth knowing before you rely on them. **Memgraph does
+not enforce read-only**: a `CREATE` inside a `default_access_mode="READ"` session
+succeeds, because Bolt's access mode is a routing hint for Neo4j clusters and
+Memgraph's role-based access control is an Enterprise feature. What actually
+stops a question writing is that no query text ever reaches the database from a
+model — a planner returns a *template id* plus typed parameters, and the template
+registry is validated at import. And **`CREATE SNAPSHOT` evicts snapshot
+history** as a side effect, so at the stock retention of three, three backups
+destroy everything older than the first of them. The Compose file raises it to
+ten; a backup must never be the thing that removes the state you wanted to go
+back to.
+
+#### Postgres, for the record
+
+The catalog — what exists, where it came from, which version is active, what
+every run cost — plus Temporal's own workflow history. It is the source of truth,
+and the other two are derived from it: removal writes the projections first and
+the catalog last, so a crash leaves the operation retryable rather than leaving
+points and nodes that nothing can find again.
 
 ## Where your data goes
 

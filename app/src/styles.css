@@ -1,0 +1,1555 @@
+:root {
+  --bg: #ffffff;
+  --fg: #16181d;
+  --muted: #5d6470;
+  --line: #e2e5ea;
+  --panel: #f7f8fa;
+  --accent: #2f5fd0;
+  --ok: #1a7f4b;
+  --bad: #b4232b;
+  --warn: #9a6207;
+
+  /* The graph's own palette. It has its own tokens because three kinds of node
+     must be told apart at a glance from a stylesheet that ships four greys, and
+     because the rule they replace read `var(--accent-soft, #dfe7f2)` — a token
+     defined nowhere, so every concept circle painted that hard-coded light blue
+     in both themes, on a #1b1e24 panel in the dark one. A fallback that looks
+     plausible is how a missing token survives. There are none below. */
+  --graph-bg: #fbfcfd;
+  --graph-edge: #8f98a8;
+  --graph-concept-fill: #dce7fb;
+  --graph-concept-stroke: #2f5fd0;
+  --graph-doc-fill: #ffffff;
+  --graph-doc-stroke: #c3c9d4;
+  --graph-centre-fill: #2f5fd0;
+  --graph-centre-fg: #ffffff;
+  /* Painted behind label text so it stays legible over whatever it crosses.
+     Tracks --graph-bg and is named separately because it is a different job. */
+  --graph-halo: #fbfcfd;
+
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --fg: #e8eaee;
+    --muted: #99a1ad;
+    --line: #2b2f37;
+    --panel: #1b1e24;
+    --accent: #7aa2f7;
+    --ok: #56c98b;
+    --bad: #f2777a;
+    --warn: #e0af68;
+
+    --graph-bg: #191c22;
+    --graph-edge: #6b7484;
+    --graph-concept-fill: #23385e;
+    --graph-concept-stroke: #7aa2f7;
+    --graph-doc-fill: #21252d;
+    --graph-doc-stroke: #3b414c;
+    --graph-centre-fill: #7aa2f7;
+    --graph-centre-fg: #10131a;
+    --graph-halo: #191c22;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* --- the shell -----------------------------------------------------------
+ *
+ * A viewport-height frame: navigation down the left, a bar for the controls
+ * that belong to the whole app across the top, and one scrolling workspace.
+ *
+ * The 60rem content column this replaced was not wide enough for the screens
+ * that had grown into it — `.explore-panes` collapses to a single column at
+ * exactly the width the shell capped itself at, so its three panes were never
+ * three panes. Width is now capped per element, on the prose that needs it,
+ * rather than on everything at once.
+ */
+
+.app {
+  display: grid;
+  grid-template-columns: 15rem 1fr;
+  height: 100vh;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.25rem 1rem;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  overflow-y: auto;
+}
+
+.workspace {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  /* Both are load-bearing. A grid item refuses to shrink below its content
+     without them, and the scroller below then never scrolls — the whole page
+     grows instead. */
+  min-width: 0;
+  min-height: 0;
+}
+
+header.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-library {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* The picker's loading, empty and failed states are a `<p>`, not the field —
+   and a paragraph's default margins would make the bar jump by two lines the
+   moment the library list is slow, empty or unreachable. */
+.topbar-library > p {
+  margin: 0;
+}
+
+main.content {
+  overflow-y: auto;
+  padding: 1.5rem 1.5rem 4rem;
+  min-width: 0;
+}
+
+/* Nothing here may set `display` on the screen wrappers inside `main`. They are
+   all mounted at once and hidden with the `hidden` attribute, whose `display:
+   none` is a user-agent rule at the lowest specificity there is — a single
+   `main > div { display: … }` would render all six screens on top of each
+   other. */
+
+/* Narrow: the sidebar becomes a band across the top and the page scrolls as a
+   page again. Every control survives; nothing needs horizontal scrolling
+   except the tab row, which asks for it explicitly. */
+@media (max-width: 60rem) {
+  .app {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    overflow-y: visible;
+  }
+
+  nav.tabs {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  nav.tabs button {
+    border-left: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    white-space: nowrap;
+  }
+
+  nav.tabs button.active {
+    border-left-color: transparent;
+    border-bottom-color: var(--accent);
+    background: none;
+  }
+
+  header.topbar {
+    flex-wrap: wrap;
+  }
+
+  main.content {
+    overflow-y: visible;
+    padding: 1.25rem 1rem 3rem;
+  }
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.1rem;
+}
+
+h3 {
+  margin: 1.75rem 0 0.35rem;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.tagline,
+.muted {
+  color: var(--muted);
+  margin: 0.15rem 0;
+}
+
+.language {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.panel {
+  margin-top: 1.5rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.link {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+  text-decoration: underline;
+}
+
+select {
+  font: inherit;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--fg);
+}
+
+table.services {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+
+table.services th,
+table.services td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+table.services th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  margin-right: 0.45rem;
+  background: var(--muted);
+}
+
+.dot-running {
+  background: var(--ok);
+}
+
+.dot-exited,
+.dot-absent {
+  background: var(--muted);
+}
+
+.dot-restarting {
+  background: var(--warn);
+}
+
+/* Run outcomes, which are not container states. `.dot-exited` is grey because a
+   stopped container is neither good nor bad; a *failed run* is bad, and reusing
+   the grey made the one row a reader needs to notice the one that looks least
+   like anything. */
+.dot-ok {
+  background: var(--ok);
+}
+
+.dot-bad {
+  background: var(--bad);
+}
+
+.dot-warn {
+  background: var(--warn);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 0.8rem;
+}
+
+.progress {
+  color: var(--accent);
+}
+
+.error {
+  border: 1px solid var(--bad);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+
+.error p {
+  margin: 0.4rem 0 0.75rem;
+  white-space: pre-wrap;
+}
+
+pre.detail,
+pre.logs {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  max-height: 22rem;
+}
+
+dl.meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 1rem;
+  font-size: 0.85rem;
+  margin: 1rem 0;
+}
+
+dl.meta dt {
+  color: var(--muted);
+}
+
+dl.meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+ul.probes {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+}
+
+ul.probes li {
+  padding: 0.15rem 0;
+}
+
+.ok {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.bad {
+  color: var(--bad);
+  font-weight: 700;
+}
+
+/* --- navigation ---------------------------------------------------------- */
+
+nav.tabs {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.15rem;
+}
+
+nav.tabs button {
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 0 5px 5px 0;
+  color: var(--muted);
+  padding: 0.45rem 0.75rem;
+  text-align: left;
+}
+
+nav.tabs button.active {
+  color: var(--fg);
+  border-left-color: var(--accent);
+  background: var(--bg);
+}
+
+/* --- forms --------------------------------------------------------------- */
+
+.screen > .intro {
+  color: var(--muted);
+  max-width: 62ch;
+}
+
+label.field {
+  display: block;
+  margin: 0.75rem 0;
+  max-width: 46rem;
+}
+
+label.field > span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+
+label.field input,
+label.field textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+/* The library picker in the top bar: the same control, laid along the bar
+   instead of stacked. The counts and the not-ready warning stay — they are the
+   reason it is a picker with labels rather than an id. */
+label.field-inline {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  max-width: none;
+}
+
+label.field-inline > span {
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+
+label.field-inline select {
+  min-width: 0;
+  max-width: 26rem;
+}
+
+label.inline,
+fieldset.stages label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.3rem 0;
+}
+
+fieldset.stages {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  max-width: 46rem;
+}
+
+fieldset.stages legend {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 0 0.4rem;
+}
+
+/* --- the gate ------------------------------------------------------------ */
+
+.gate {
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-top: 1.5rem;
+  background: var(--panel);
+}
+
+dl.preview {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 1rem;
+  margin: 0.75rem 0;
+}
+
+dl.preview dt {
+  color: var(--muted);
+}
+
+dl.preview dd {
+  margin: 0;
+}
+
+/* A warning here is not decoration: it carries the fact that the previewed
+   chunks are not the indexed ones, and that a profile collision may be silently
+   applying another family's heading rules. */
+.warn {
+  border-left: 3px solid var(--warn);
+  padding: 0.4rem 0.75rem;
+  margin: 0.5rem 0;
+  color: var(--warn);
+}
+
+table.estimate,
+table.documents {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-variant-numeric: tabular-nums;
+}
+
+table.estimate th,
+table.estimate td,
+table.documents th,
+table.documents td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+}
+
+table.estimate tfoot td {
+  font-weight: 600;
+  border-bottom: none;
+}
+
+td.model,
+.model {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+/* "not priced" must never look like a number. */
+.unpriced {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* A range must read as one value, and `white-space: nowrap` was the wrong way to
+   get there: at 520px it pushed the whole estimate table past the viewport with
+   the second figure clipped. The pair is held together in the markup instead —
+   the dash is glued to the low figure with a non-breaking space, so the only
+   place it can break is *after* the dash and the dash never lands alone on a
+   line. Screenshotted at 520 and 760 in both themes before and after. */
+.range {
+  white-space: normal;
+}
+
+.caveat {
+  color: var(--muted);
+  font-size: 0.85rem;
+  max-width: 68ch;
+}
+
+.notice,
+.waiting {
+  color: var(--muted);
+}
+
+tr.absent td {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+/* --- answers ------------------------------------------------------------- */
+
+.answer {
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-top: 1.5rem;
+  background: var(--panel);
+}
+
+.answer.answered {
+  border-left-color: var(--ok);
+}
+
+/* The two refusals are visually distinct from an answer, and from each other:
+   one means "not in this corpus", the other "this corpus does not say". */
+.answer.insufficient_evidence {
+  border-left-color: var(--warn);
+}
+
+.answer.off_corpus {
+  border-left-color: var(--muted);
+}
+
+.answer .prose {
+  max-width: 68ch;
+}
+
+ol.citations {
+  padding-left: 1.2rem;
+}
+
+ol.citations li {
+  margin-bottom: 0.5rem;
+}
+
+ol.citations .claim {
+  display: block;
+}
+
+ol.citations .locator,
+ul.evidence .source {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+ul.evidence {
+  list-style: none;
+  padding: 0;
+}
+
+ul.evidence li {
+  border-top: 1px solid var(--line);
+  padding: 0.6rem 0;
+}
+
+ul.evidence .title {
+  font-weight: 600;
+}
+
+/* -- Ask -------------------------------------------------------------------
+ *
+ * Three columns: what you have asked on the left, the answer and the composer
+ * in the middle, the citations and the passage a citation rests on to the
+ * right. The split is the point of the screen — a claim and the text it was
+ * drawn from have to be readable at the same time, which is what a `<details>`
+ * element folding the passages away made impossible.
+ */
+
+.ask-columns {
+  display: grid;
+  grid-template-columns: minmax(13rem, 1fr) minmax(24rem, 2.2fr) minmax(18rem, 1.4fr);
+  gap: 1.25rem;
+  margin-top: 1rem;
+  align-items: start;
+}
+
+ul.history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+ul.history li {
+  border-top: 1px solid var(--line);
+  padding: 0.5rem 0;
+}
+
+ul.history li:first-child {
+  border-top: none;
+}
+
+ul.history button.link {
+  display: block;
+  /* The question is the label, and questions are sentences. Wrapping it is
+     what keeps a long one from deciding the column's width. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+ul.history .muted {
+  display: block;
+}
+
+/* The question this answer belongs to, above the answer. It is not the
+   composer's contents: selecting an earlier question must not overwrite what
+   you were in the middle of typing. */
+.pane-answer .asked {
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.pane-answer .answer {
+  margin-top: 0;
+}
+
+.pane-answer label.field {
+  margin-top: 1.25rem;
+  max-width: none;
+}
+
+ol.citations button.link {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.passage {
+  border-top: 1px solid var(--line);
+  padding: 0.6rem 0;
+}
+
+.passage .title {
+  display: block;
+  font-weight: 600;
+}
+
+.passage .breadcrumb {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.passage .chunk-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* -- Explore ---------------------------------------------------------------
+ *
+ * Three panes: the document's own structure on the left, what it says in the
+ * middle, and what a model proposed about it on the right. The split is not
+ * decorative — see `.semantic`.
+ */
+
+.explore-panes {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1fr) minmax(20rem, 2fr) minmax(14rem, 1fr);
+  gap: 1.25rem;
+  margin-top: 1rem;
+  align-items: start;
+}
+
+/* 76rem, not 60rem: this media query measures the viewport, and the sidebar
+   now takes 15rem of it before the panes see any. At 60rem the three panes
+   would each get about 18rem of a window that looks wide enough. */
+@media (max-width: 76rem) {
+  .explore-panes,
+  .ask-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pane {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  min-width: 0;
+}
+
+.pane h3 {
+  font-size: 0.95rem;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.pane h3:first-child {
+  margin-top: 0;
+}
+
+.pane ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pane li {
+  margin: 0.3rem 0;
+}
+
+/* A button that reads as a link: every navigation step in this screen is an
+   action, but styling them as buttons would drown the text they sit beside. */
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.link:hover {
+  text-decoration: underline;
+}
+
+button.link.active {
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.outline li {
+  border-left: 2px solid var(--line);
+  padding-left: 0.5rem;
+}
+
+.chunk {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  margin: 0.5rem 0;
+}
+
+.chunk.active {
+  border-color: var(--accent);
+}
+
+.chunk-head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.chunk .kind {
+  color: var(--muted);
+  text-transform: lowercase;
+}
+
+.chunk-text {
+  margin: 0.4rem 0 0;
+  white-space: pre-wrap;
+}
+
+.context .neighbour {
+  color: var(--muted);
+  white-space: pre-wrap;
+  margin: 0.4rem 0;
+}
+
+/* An absent neighbour is a fact about the document — this is its first or last
+   chunk — not a loading state, so it is said rather than left blank. */
+.context .neighbour.empty {
+  font-style: italic;
+}
+
+.context .chunk-text.current {
+  border-left: 3px solid var(--accent);
+  padding-left: 0.75rem;
+}
+
+.locator {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  color: var(--muted);
+  margin: 0.5rem 0 0;
+}
+
+.concept,
+.related li,
+.claims li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.claims li {
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+}
+
+.claims li p {
+  flex-basis: 100%;
+  margin: 0 0 0.25rem;
+}
+
+/* The quote is the document's, the claim above it is a model's. They are set
+   apart deliberately: a reader who cannot tell which is which has no way to know
+   what they are actually checking. */
+.claim-quote {
+  flex-basis: 100%;
+  margin: 0 0 0.35rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--line);
+  color: var(--fg);
+  font-style: italic;
+}
+
+/* A model's summary of other models' readings, so it must not be mistaken for
+   the document's own prose. Set apart the same way a claim's quote is, in the
+   other direction: this one is the least authoritative text on the screen. */
+.concept-description {
+  margin: 0 0 0.6rem;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+/* Comparison mode. Two documents held against each other: what they share
+   lights up, everything else steps back. The faded state is deliberately still
+   legible — dimming a node to invisibility would answer "which concepts are
+   shared" by deleting the question's other half. */
+.graph-canvas .node.is-faded {
+  opacity: 0.28;
+}
+
+.graph-canvas .edge.is-faded {
+  opacity: 0.12;
+}
+
+.graph-canvas .node.concept.is-shared .shape {
+  fill: var(--graph-centre-fill);
+  stroke: var(--graph-concept-stroke);
+  stroke-width: 2;
+}
+
+.graph-canvas .edge.is-shared {
+  stroke: var(--graph-concept-stroke);
+  opacity: 0.9;
+}
+
+/* The chevron that says a card can be opened. Muted so it reads as an
+   affordance rather than as data — the numbers on the card are the data. */
+.graph-canvas .doc-affordance {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.graph-canvas .node.doc.is-selected .doc-affordance {
+  fill: var(--graph-concept-stroke);
+}
+
+.graph-canvas .node.doc.is-selected .shape {
+  stroke: var(--graph-concept-stroke);
+  stroke-width: 2;
+}
+
+.graph-canvas .edge.shares.is-selected {
+  stroke: var(--graph-concept-stroke);
+  opacity: 0.9;
+}
+
+.compare-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0.5rem 0 0.75rem;
+}
+
+/* Scrollable rather than endless: a document sharing 69 concepts would push
+   the two lists below it off the pane entirely. */
+.compare-list {
+  margin: 0 0 0.75rem;
+  padding-left: 1.1rem;
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.compare-list li {
+  margin: 0.1rem 0;
+}
+
+.compare-list.is-shared li {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.claim-status {
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Three states and an absence, in tokens that already answer the theme. The
+   absence is muted rather than green: `sin_estado` means the claim predates the
+   field, and reading it as an assertion is the confusion the field removes. */
+.claim-status.is-afirma {
+  color: var(--ok);
+}
+
+.claim-status.is-niega {
+  color: var(--bad);
+}
+
+.claim-status.is-atribuido {
+  color: var(--warn);
+}
+
+.claim-status.is-sin_estado {
+  color: var(--muted);
+}
+
+.mentions {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+/* The load-bearing one on this screen. A concept, a claim and a related
+   document were *proposed by a model*; an outline entry and a citation were read
+   off the document itself. They must never look alike — a relation nobody can
+   verify is worse than no relation, because it still looks like evidence. */
+.semantic {
+  color: var(--warn);
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--warn);
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  white-space: nowrap;
+}
+
+.semantic .confidence {
+  font-weight: 600;
+}
+
+/* -- the gate's profile block ---------------------------------------------- */
+
+.profile {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+
+.profile h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.profile p {
+  margin: 0.35rem 0;
+}
+
+/* --- Graph ---------------------------------------------------------------
+ *
+ * Everything below is scoped under `.screen.graph` or a `graph-` prefixed
+ * class. That is not decoration: `.concept`, `.mentions` and `.claims` are
+ * already Explore's, this stylesheet has no per-screen scoping anywhere else,
+ * and `.concept { display: flex }` currently matches the canvas's
+ * `<g className="node concept">` — harmless only because the SVG rendering
+ * model ignores `display: flex`. The next such collision will not be harmless.
+ *
+ * There are no `var(--x, #hex)` fallbacks here. The rule this block replaces
+ * had nine of them, one of which — `var(--accent-soft, #dfe7f2)` — stood in for
+ * a token that was never defined, so every concept circle painted a light-mode
+ * blue in dark mode and looked deliberate. A missing token should paint wrong.
+ */
+
+.graph-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.75rem 0;
+}
+
+/* Canvas beside its detail panel, collapsing at the same 76rem as
+   `.explore-panes` and `.ask-columns`, for the reason recorded there: the
+   sidebar takes 15rem of the viewport before this grid sees any.
+ *
+ * The query is repeated here rather than added to that one's selector list,
+ * which is where it was first written and where it did nothing. Those two rules
+ * are declared *above* the query and this block is below it, so at equal
+ * specificity this rule won and the layout stayed two-column all the way down
+ * to a 96px canvas. A media query is not a stronger rule; it is only a
+ * conditional one. */
+.graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  gap: 1.25rem;
+  align-items: start;
+  margin-top: 1rem;
+}
+
+@media (max-width: 76rem) {
+  .graph-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.graph-main {
+  min-width: 0;
+}
+
+/* The canvas scales with the window rather than scrolling: a node-link picture
+   cut off at the edge hides exactly the relationship it was drawn to show.
+   Scoped to a direct child of `.graph-main` so the legend's swatches, which
+   share `.graph-canvas` precisely so their marks cannot drift from the real
+   ones, do not inherit a full-width box. */
+.graph-main > .graph-canvas {
+  width: 100%;
+  height: auto;
+  max-height: 34rem;
+  display: block;
+  background: var(--graph-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  /* Suppresses the double-tap-to-zoom delay, so a tap on a node registers at
+     once instead of 300ms later. */
+  touch-action: manipulation;
+}
+
+.graph-canvas .edge {
+  stroke: var(--graph-edge);
+  /* Low enough that twenty of them do not become the picture, high enough to
+     survive a white background — at 0.35 the light theme washed them out. */
+  opacity: 0.45;
+}
+
+/* MENTIONS and "shares concepts with" are different kinds of claim, so they are
+   drawn differently rather than left to the reader to infer from position. */
+.graph-canvas .edge.mentions {
+  stroke-dasharray: none;
+}
+
+.graph-canvas .edge.shares {
+  stroke-dasharray: 5 4;
+}
+
+.graph-canvas .node text {
+  font-size: 11px;
+  fill: var(--fg);
+  pointer-events: none;
+  /* The halo. A label crossing an edge or the corner of a card stays readable
+     without any layout work, which is the part the ring arithmetic in
+     `lib/radial.ts` cannot promise for a wide card on an arbitrary ray. */
+  paint-order: stroke fill;
+  stroke: var(--graph-halo);
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
+
+/* Document and centre cards label themselves from the middle; concept labels
+   are placed by `labelAnchor` and set their own anchor per quadrant. */
+.graph-canvas .node.doc text,
+.graph-canvas .node.centre text {
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+.graph-canvas .node text.meta {
+  font-size: 9px;
+  fill: var(--muted);
+}
+
+.graph-canvas .node.concept .shape {
+  fill: var(--graph-concept-fill);
+  stroke: var(--graph-concept-stroke);
+}
+
+/* The touch target. `fill: none` with `pointer-events: all` rather than a
+   transparent fill: it is the one combination that is reliably hit-tested
+   without painting anything. */
+.graph-canvas .node .hit {
+  fill: none;
+  pointer-events: all;
+}
+
+/* Selection is a second ring rather than a fill swap, so "open" is still
+   distinguishable from "hovered" when both are true. */
+.graph-canvas .node.concept .ring {
+  fill: none;
+  stroke: var(--graph-concept-stroke);
+  stroke-width: 2;
+}
+
+.graph-canvas .node.concept.is-open .shape {
+  fill: var(--graph-concept-stroke);
+}
+
+.graph-canvas .node.concept.is-open text {
+  font-weight: 600;
+}
+
+.graph-canvas .node.doc .shape {
+  fill: var(--graph-doc-fill);
+  stroke: var(--graph-doc-stroke);
+}
+
+.graph-canvas .node.centre .shape {
+  fill: var(--graph-centre-fill);
+  stroke: var(--graph-centre-fill);
+}
+
+.graph-canvas .node.centre text {
+  fill: var(--graph-centre-fg);
+  font-weight: 600;
+  stroke: none;
+}
+
+.graph-canvas .node.centre text.meta {
+  fill: var(--graph-centre-fg);
+  font-weight: 400;
+  opacity: 0.75;
+}
+
+.graph-canvas .node.concept,
+.graph-canvas .node.doc {
+  cursor: pointer;
+}
+
+/* Hover, keyboard focus and selection are one mechanism: the component keeps a
+   single `active` node from both pointer and focus events, marks it and its
+   incident edge `is-active`, and everything else takes the dim. */
+.graph-canvas.is-probing .node,
+.graph-canvas.is-probing .edge {
+  opacity: 0.2;
+  transition: opacity 120ms ease-out;
+}
+
+.graph-canvas.is-probing .edge.is-active {
+  opacity: 0.75;
+}
+
+/* Selection outlives the dim. Probing another node used to take the open
+   concept's ring down to 0.2 with everything else, so "which one is open" — the
+   thing the panel beside it is describing — stopped being visible on the canvas
+   the moment the pointer moved. Above the dim, below the probe, and declared
+   before the rule below so that hovering the open concept still lifts it to
+   full rather than pinning it here. */
+.graph-canvas.is-probing .node.is-open {
+  opacity: 0.7;
+}
+
+.graph-canvas.is-probing .node.is-active {
+  opacity: 1;
+}
+
+/* Drawn rather than left to the user agent: an outline on an SVG `<g>` renders
+   inconsistently and is clipped by the viewBox for any node near the edge of
+   the ring, which is most of them. */
+.graph-canvas .node:focus {
+  outline: none;
+}
+
+.graph-canvas .node:focus-visible .shape {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+/* The full name of whatever is hovered or focused. `min-height` because this is
+   one line that becomes another line — without it the legend below jumps every
+   time the pointer crosses a node. */
+.graph-inspector {
+  margin: 0.5rem 0 0;
+  min-height: 1.55em;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.graph-legend {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.graph-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.graph-swatch {
+  width: 26px;
+  height: 16px;
+  flex: none;
+  overflow: visible;
+}
+
+/* A legend mark is being pointed at, so it is drawn at full strength. The dim
+   on the canvas is about twenty edges competing; one edge is not competing. */
+.graph-swatch .edge {
+  opacity: 0.9;
+}
+
+.graph-note {
+  margin: 0.6rem 0 0;
+  max-width: 62ch;
+}
+
+.graph-detail {
+  min-width: 0;
+}
+
+/* The global `h3` is uppercase, letter-spaced and muted, which is right for a
+   pane's section label and wrong for a concept's name — it turned the thing you
+   just clicked into a heading for something else. */
+.graph-detail .pane-title {
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--fg);
+  font-size: 1rem;
+}
+
+.graph-detail .claims li .locator {
+  flex-basis: 100%;
+  margin: 0.15rem 0 0;
+}
+
+.small {
+  font-size: 0.82rem;
+}
+
+.claims ul {
+  padding-left: 1.1rem;
+}
+
+/* -- Inicio -----------------------------------------------------------------
+ *
+ * The metric grid auto-fits rather than declaring a column count, so the
+ * stacked layout below needs no separate rule for how many fit — but the panel
+ * grid does, and it carries its own media query *below its own rule* for the
+ * reason `.graph-layout` does: `.explore-panes` and `.ask-columns` work only
+ * because they are declared above the shared 76rem block, and adding a selector
+ * to that block from down here would lose to this rule at equal specificity.
+ * A media query is not a stronger rule; it is only a conditional one.
+ */
+.home-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  min-width: 0;
+}
+
+.metric-value {
+  font-size: 1.7rem;
+  font-weight: 600;
+  line-height: 1.15;
+  /* Tabular figures so a column of counts lines up on the decimal-less digits
+     and does not jitter as the numbers change on a refresh. */
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Why a figure is a dash. Wraps rather than truncating: "0 of 39 versions
+   record one" is the whole explanation, and half of it explains nothing. */
+.metric-absent {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
+.home-offline {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.home-offline p {
+  margin: 0;
+  flex: 1 1 20rem;
+}
+
+.run-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-row {
+  display: grid;
+  /* `max-content` on the title rather than `1fr`: a stretching title column
+     pushed the badge, the state and the time to the far edge of a wide window,
+     a hand's width from the document they describe. */
+  grid-template-columns: auto minmax(0, max-content) auto auto auto;
+  justify-content: start;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.run-row:last-child {
+  border-bottom: none;
+}
+
+.run-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 76rem) {
+  /* The three trailing columns stop fitting beside a title long before the
+     window is narrow enough to matter elsewhere, and a title that has to
+     ellipsis to nothing names no document. */
+  .run-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 0.15rem;
+  }
+
+  .run-row .badge,
+  .run-row .muted {
+    grid-column: 2;
+  }
+}
+
+/* -- the library-wide graph -------------------------------------------------
+ *
+ * `.graph-overview` reuses `.graph-layout` for its two columns, so it inherits
+ * that grid *and* the repeated 76rem query declared directly below it. Nothing
+ * new is added to the shared query's selector list up at line 743: those rules
+ * are declared above it and this one is not, and at equal specificity the later
+ * rule wins. A media query is not a stronger rule; it is only a conditional one.
+ */
+.graph-overview .graph-canvas {
+  /* Taller than the document view's: the overview is the picture, and its
+     nodes are small enough that the extra rows are what make labels findable. */
+  max-height: 44rem;
+  cursor: grab;
+  touch-action: none;
+}
+
+.graph-overview .graph-canvas:active {
+  cursor: grabbing;
+}
+
+/* Filled, not outlined. The document view draws a book as a card with its title
+   inside, where a white fill and a hairline border read as paper. Here a book is
+   an 18px mark on a near-white canvas, and the same tokens made it a hole:
+   screenshotting showed hubs with a gap at the centre where the book should be.
+   The centre tokens are the ones that already mean "the thing this is about". */
+.graph-overview .node.doc .shape {
+  fill: var(--graph-centre-fill);
+  stroke: var(--graph-centre-fill);
+}
+
+.graph-overview .graph-legend {
+  margin-top: 0.5rem;
+}
+
+.graph-modes {
+  margin-top: 0.75rem;
+}
+
+.graph-modes button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.graph-zoom {
+  margin-top: 0.5rem;
+}
+
+.graph-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+.graph-filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+/* The keyboard path to every node, including the ones the degree filter keeps
+   off the canvas. Scrolls on its own so the pane does not grow past the
+   canvas beside it. */
+.graph-index {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  max-height: 26rem;
+  overflow-y: auto;
+}
+
+.graph-index li button {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 0.2rem 0.35rem;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.graph-index li button:hover {
+  background: var(--panel);
+}
+
+/* Book or concept, in the list where there is no shape to tell them apart.
+   Its own colours rather than the dot states', which mean "running". */
+.node-dot {
+  flex: 0 0 auto;
+}
+
+.node-dot.node-doc {
+  background: var(--graph-doc-stroke);
+}
+
+.node-dot.node-concept {
+  background: var(--graph-concept-stroke);
+}
+
+/* A legend for a fieldset that needs no visible one: the two checkboxes label
+   themselves, and the group still needs a name for a screen reader. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

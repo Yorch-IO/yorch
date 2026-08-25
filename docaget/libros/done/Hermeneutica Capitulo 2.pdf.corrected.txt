@@ -1,0 +1,483 @@
+2 La Decodificación del Mensaje
+
+En esta etapa, el estudio bíblico deja de lado las generalidades para aplicar un abordaje técnico y minucioso sobre el cuerpo del texto. El objetivo es ambicioso pero fundamental: realizar una interpretación responsable que nos permita extraer el significado original que el autor plasmó, evitando proyectar nuestras propias ideas sobre los textos a los que nos enfrentamos.
+
+Para lograrlo, nos apoyamos en tres pilares fundamentales que funcionan como lentes de precisión:
+
+La Gramática: Es el estudio de las palabras individuales, con ella analizamos los verbos, sustantivos y partículas en sus idiomas originales (hebreo, arameo o griego) para captar matices que la traducción a veces difumina.
+
+La Sintaxis: Si la gramática estudia las piezas, la sintaxis estudia cómo se ensamblan. Analizar la relación entre las frases nos permite entender el énfasis del autor, las conexiones lógicas y la fuerza de sus argumentos.
+
+Los Géneros Literarios: La Biblia es una biblioteca polifónica. Identificar si estamos ante una ley, una profecía, un poema o una narrativa es crucial, pues cada género tiene sus propias "reglas de juego" interpretativas. No se lee un código legal con el mismo corazón con el que se lee un canto de amor.
+
+En pocas palabras, este tipo de análisis es el que le da 'suelo firme' a lo que entendemos. Cuando respetamos la forma en que está escrito el texto, estamos respetando también a su autor. Es la única manera de dejar que el mensaje hable
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 1 | 40
+
+por sí mismo, con toda la fuerza y claridad que tenía desde el día en que se escribió originalmente. 2.1 La gramática
+
+La gramática es el conjunto de reglas y principios que regulan el uso de una lengua y la organización de las palabras dentro de una oración. Básicamente, es el "manual de instrucciones" que nos permite construir mensajes con sentido para que los demás nos entiendan.
+
+Con el fin de facilitar su estudio y comprensión, la gramática se estructura en diversas disciplinas especializadas. A continuación, presento las ramas principales acompañadas de ejemplos prácticos:
+
+2.1.1 Morfología
+
+La morfología es la disciplina lingüística que estudia la estructura interna de las palabras. Analiza sus procesos de formación y las variaciones gramaticales de género, número y tiempo verbal.
+
+Ejemplos: La palabra "perritos", estaría morfológicamente estructurada así: perr - (raíz) it - (diminutivo) o - (género masculino) s - (plural)
+
+La palabra "Inmejorable" se desglosa morfológicamente así: - In- (morfema derivativo, prefijo de negación). mejor- (lexema o raíz, núcleo de la palabra).
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 2 | 40
+
+able (morfema derivativo, sufijo que indica posibilidad)
+
+La palabra “encaminados”, se compone así: en - (prefijo) camin - (raíz, de camino) a - (sufijo, vocal temática) d - (sufijo) o - (sufijo flexivo de género masculino) s - (sufijo flexivo de número plural)
+
+La palabra “Marítimo”, se forma de los siguientes elementos: - Mar - (lexema o raíz) ítim - (morfema derivativo sufijo) o - (morfema flexivo de género masculino)
+
+2.1.2 Sintaxis
+
+Estudia cómo se combinan y ordenan las palabras para formar oraciones coherentes. Sin ella, cuando habláramos o escribiéramos el conjunto de palabras sería como las piezas sueltas de un rompecabezas. Las palabras de una lengua no operan de manera individual y aislada, sino en una cadena, ya que su significado depende de cómo se combinan unas con otras y del lugar que ocupan en la oración.
+
+Ejemplos de sintaxis: El pájaro está volando hacia el nido. - Sujeto: el pájaro - Núcleo del sujeto: pájaro - Modificador del núcleo del sujeto: el (modificador directo) - Predicado: está volando hacia el nido - Núcleo del predicado: está volando (frase verbal) Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 3 | 40
+
+- Modificadores del núcleo del predicado: hacia el nido (complemento circunstancial de lugar)
+
+La casa es muy grande. - Sujeto: la casa - Núcleo del sujeto: casa - Modificador del núcleo del sujeto: la (modificador directo) - Predicado: es muy grande - Núcleo del predicado: es - Modificador del núcleo del predicado: muy grande (atributo)
+
+El presidente dio un discurso. - Sujeto: el presidente - Núcleo del sujeto: presidente - Modificador del núcleo del sujeto: el (modificador directo) - Predicado: dio un discurso - Núcleo del predicado: dio - Modificador del núcleo del predicado: un discurso (objeto directo)
+
+El perro duerme en la cucha. - Sujeto: el perro - Núcleo del sujeto: perro - Modificador del núcleo del sujeto: el (modificador directo) - Predicado: duerme en la cucha - Núcleo del predicado: duerme - Modificador del núcleo del predicado: en la cucha (circunstancial de lugar)
+
+2.1.3 Semántica
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 4 | 40
+
+Se ocupa del significado de las palabras y las oraciones. Se encarga de analizar y describir los significados de los elementos de un idioma y cómo estos cambian a lo largo del tiempo.
+
+La semántica y la sintaxis son similares, pero no lo mismo. Mientras que la semántica estudia cómo las palabras y las oraciones crean significado, la sintaxis es el conjunto de reglas que rigen cómo se organizan las palabras para formar oraciones gramaticalmente correctas.
+
+La sintaxis puede apoyar la semántica, pero también es posible tener una oración sintácticamente correcta sin significado. También se puede escribir o decir una oración sintácticamente incorrecta, pero que comunique una idea con claridad. Aquí hay dos ejemplos:
+
+Sintácticamente correcto, pero sin sentido: “Las ideas verdes y descoloridas duermen furiosamente”
+
+Sintácticamente incorrecto, pero el significado es claro: “Yo ir a la tienda”.
+
+La diferencia entre semántica y sintaxis es clave para la comprensión del lenguaje. La primera garantiza el significado, mientras que la segunda asegura el orden estructural. Aunque se puede ser gramaticalmente correcto y confuso a la vez (o viceversa), el equilibrio entre ambas funciones es esencial para evitar malentendidos.
+
+Ejemplos de semántica: - Ana se compró unos zapatos nuevos. (significado denotativo) - Juan es muy comprensivo; siempre se pone en los zapatos de los demás. (significado connotativo: se pone en el lugar de los demás)
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 5 | 40
+
+- Anunciaron que hoy habrá tormenta. (significado denotativo) - En su alma había una tormenta. (significado connotativo: estaba muy angustiado)
+
+- Ella tiene ojos marrones. (significado denotativo) - Esta computadora es muy buena, pero me costó un ojo de la cara. (significado connotativo: es muy costosa)
+
+- El cielo está lleno de nubes. (significado denotativo) - Fabián vive en las nubes. (significado connotativo: piensa en algo distinto a lo que está sucediendo en la realidad)
+
+- El avión está volando a máxima velocidad. (significado denotativo) - Estoy apurado, me tengo que ir volando. (significado connotativo: me tengo que ir rápidamente)
+
+- El profesor de arte les repartió hojas en blanco a los estudiantes. (significado denotativo) - Tengo la mente en blanco. (significado connotativo: no se me ocurre nada)
+
+2.1.4 Retórica
+
+Según la Real Académica Española, la retórica es el arte de bien decir, de dar al lenguaje escrito o hablado eficacia bastante para deleitar, persuadir o conmover.
+
+Entender la retórica es comprender cómo se estructuró un discurso para persuadir, emocionar o enseñar a una audiencia específica.
+
+La Biblia no es una recopilación de datos fríos; es una obra maestra de comunicación diseñada para transformar al oyente.
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 6 | 40
+
+La retórica nos ayuda a distinguir entre el contenido bruto y la forma en que se presenta. En el mundo antiguo, la oratoria era la disciplina reina. Los autores bíblicos usaban estructuras específicas para enfatizar sus puntos más importantes.
+
+En la Biblia, respecto del discurso, el punto principal generalmente no suele estar al final, sino en el centro, es mejor tener claridad en ese aspecto para no perdernos el mensaje central pensando que el autor se está repitiendo sin sentido.
+
+Por otro lado, se utiliza frecuentemente la hipérbole, como el arte de la exageración pedagógica, por eso es necesario diferenciar y no interpretar literalmente lo que fue dicho retóricamente. Jesús, como gran maestro de la retórica judía, usaba a menudo la hipérbole (exageración) para grabar una verdad en la mente de sus oyentes.
+
+Ejemplo: Cuando dice que es más fácil que un camello pase por el ojo de una aguja (Mateo 19:24), o que debemos cortarnos la mano si nos hace pecar. Si no involucramos el análisis retórico, estas frases llevan al legalismo extremo o al absurdo. Con la retórica, entendemos que Jesús está usando un recurso de impacto para mostrar la gravedad del pecado o la dificultad de confiar en las riquezas.
+
+2.1.4.1 La intención persuasiva
+
+Los autores bíblicos, especialmente Pablo en sus cartas, utilizan los pilares de la retórica clásica para convencer a sus comunidades:
+
+- Ethos (Credibilidad): Pablo a menudo defiende su apostolado no por ego, sino para establecer su derecho a hablar.
+
+- Pathos (Emoción): El uso de un lenguaje afectivo para mover la voluntad del lector, centrándose en generar sentimientos como compasión, ira, miedo o alegría. Se
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 7 | 40
+
+logra mediante historias vívidas, lenguaje cargado emocionalmente y descripciones expresivas, buscando conectar con los valores del público al que se dirigen.
+
+- Logos (Lógica): Se enfoca en convencer a la audiencia mediante la lógica, la razón, los hechos concretos, los datos y las estructuras argumentativas sólidas. Apela al intelecto del público para demostrar la validez de un argumento.
+
+2.2 Taxonomía de géneros
+
+La taxonomía de géneros en la hermenéutica bíblica consiste en la sistematización y clasificación de las diversas formas literarias que integran el canon sagrado. Identificar el género no es un simple ejercicio técnico, sino un paso ontológico fundamental: cada tipología textual posee sus propias convenciones o «reglas del juego». Por ello, resulta hermenéuticamente inviable abordar la lírica poética bajo los mismos parámetros exegéticos que un código legal o una crónica historiográfica. En este marco, el género opera como un contrato literario entre el autor y el lector. Ignorar las cláusulas de este acuerdo implícito no solo desvirtúa la intención comunicativa original, sino que conduce inevitablemente a errores de interpretación y anacronismos.
+
+Para un análisis detallado, podemos dividir la taxonomía en las siguientes categorías principales:
+
+2.2.1 Narrativa Histórica
+
+Es el género más común en la Biblia (especialmente en el Antiguo Testamento y Hechos). Su objetivo es relatar eventos reales con un propósito teológico.
+
+- Características: Personajes, trama, escenario y punto de vista. Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 8 | 40
+
+- Regla de interpretación: No todo lo que se narra se aprueba. Debemos distinguir entre lo que es descriptivo (lo que pasó) y lo que es normativo (lo que se manda hacer). - Ejemplo: Los libros de Reyes o el libro de Hechos
+
+2.2.2 Ley (Torah) Textos destinados a regular la vida moral, civil y religiosa del pueblo de Israel. - Características: Mandatos directos, prohibiciones y consecuencias. - Regla de interpretación: Es vital distinguir entre leyes ceremoniales (cumplidas en Cristo), civiles (contexto de Israel) y morales (carácter eterno de Dios). - Ejemplo: Levítico y Deuteronomio.
+
+2.2.3 Poesía Utiliza un lenguaje figurado y estructuras rítmicas para expresar emociones y verdades espirituales. - Características: Uso extensivo de metáforas, hipérboles y el paralelismo (repetir una idea con diferentes palabras).
+
+- Regla de interpretación: No debe leerse de forma literalista. Cuando el salmista dice que "los montes saltaron como carneros", está usando una figura retórica, no describiendo un evento geológico.
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 9 | 40
+
+- Ejemplo: Salmos, Cantar de los Cantares. 2.2.4 Sabiduría (Sapiencial). Proverbios y reflexiones sobre la naturaleza de la vida y el temor a Dios. Características: Máximas cortas, aforismos y diálogos filosóficos. Regla de interpretación: Los proverbios son probabilidades generales, no promesas absolutas o garantías automáticas. Ejemplo: Proverbios, Eclesiastés, Job. 2.2.5 Profecía. Mensajes de Dios transmitidos a través de un profeta, enfocados en llamar al arrepentimiento o anunciar juicios y bendiciones. - Características: Oráculos, visiones y lenguaje de "denuncia". - Regla de interpretación: Gran parte de la profecía era para el tiempo inmediato del profeta (cercana), aunque tenga aplicaciones futuras (lejana). - Ejemplo: Isaías, Jeremías, Amós. 2.2.6 Evangelio. Un género único que combina biografía, enseñanza y proclamación (kerygma). - Características: Parábolas, milagros y discursos.
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 10 | 40
+
+- Regla de interpretación: Deben leerse buscando el énfasis teológico particular de cada autor (Mateo para los judíos, Lucas para los gentiles, etc.). - Ejemplo: Mateo, Marcos, Lucas y Juan.
+
+2.2.7 Epístola (Cartas) Documentos escritos a iglesias o individuos específicos para tratar problemas teológicos o prácticos. - Características: Estructura de saludo, cuerpo y despedida. Son textos "ocasionales". - Regla de interpretación: Es crucial entender el contexto histórico y la situación específica que motivó la carta. - Ejemplo: Romanos, Gálatas, 1 Timoteo.
+
+2.2.8 Apocalíptica Un género que utiliza un simbolismo denso y visiones cósmicas para dar esperanza a un pueblo bajo persecución. - Características: Simbolismo numérico, animales fantásticos y lucha entre el bien y el mal. - Regla de interpretación: Los símbolos suelen representar realidades políticas o espirituales de la época, no necesariamente mapas cronológicos literales del futuro. - Ejemplo: Apocalipsis y partes de Daniel. Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 11 | 40
+
+Carecer de una taxonomía clara lleva al lector al literalismo ingenuo (tratar la poesía como ciencia) o a la alegorización excesiva (tratar la historia como un cuento de hadas). La hermenéutica saludable respeta la forma en que Dios decidió comunicarse a través de la diversidad literaria humana.
+
+2.3 Figuras de dicción
+
+En el ámbito de la hermenéutica, las figuras de dicción son herramientas que transforman la forma habitual de las palabras para imprimir ritmo y belleza al relato bíblico. Mientras que las figuras de pensamiento se basan en el significado, estas se enfocan en la estructura.
+
+Identificarlas es un paso crucial en la interpretación. Si el lector no advierte que el autor emplea la repetición de forma consciente, corre el riesgo de ver una simple redundancia allí donde existe un recurso diseñado para dar peso a una verdad teológica fundamental.
+
+2.3.1 El Pleonasmo (Redundancia intencional) Consiste en añadir palabras que no son estrictamente necesarias para el sentido gramatical, pero que refuerzan la emoción o la certeza del mensaje.
+
+- Aplicación bíblica: Se usa para enfatizar la solemnidad de una declaración divina.
+
+- Ejemplo: "Y respondiendo Jesús, dijo..." (Mateo 11:25). Técnicamente, si respondes, ya estás diciendo algo. Sin embargo, en el hebreo y griego bíblico, esto subraya la autoridad de la respuesta.
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 12 | 40
+
+- En la hermenéutica: Nos indica que lo que sigue es una declaración oficial o una enseñanza clave.
+
+2.3.2 El Polisíndeton (Repetición de conjunciones) Es la repetición constante de conjunciones (como "y", "ni", "o") para dar un efecto de lentitud, solemnidad o enumeración exhaustiva.
+
+- Aplicación bíblica: Muy común en el Génesis y en los Salmos para mostrar la magnitud de la creación o de las bendiciones.
+
+- Ejemplo: "Y creó Dios al hombre a su imagen... y creó Dios los grandes monstruos marinos, y toda criatura viviente..." (Génesis 1).
+
+- En la hermenéutica: Obliga al lector a detenerse en cada elemento. No es una lista rápida; cada punto tiene un peso específico en el plan de Dios.
+
+2.3.3 El Asíndeton (Omisión de conjunciones) Lo opuesto al anterior. Se eliminan las conjunciones para dar rapidez, urgencia o viveza al texto.
+
+- Aplicación bíblica: Se utiliza en momentos de acción inmediata o mandatos directos.
+
+- Ejemplo: "Por tanto, vayan y hagan discípulos de todas las naciones, bautizándolos en el nombre del Padre y del Hijo y del Espíritu Santo, enseñándoles a obedecer todo lo que les he mandado a ustedes ..." (Mateo 28:19-20). La falta de "y" entre los verbos iniciales genera un sentido de misión urgente.
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 13 | 40
+
+- En la hermenéutica: Sugiere que las acciones mencionadas son inseparables o que deben ocurrir de forma simultánea y rápida.
+
+2.3.4 La Anáfora (Repetición al inicio) Es la repetición de una palabra o frase al comienzo de versículos o cláusulas sucesivas.
+
+- Aplicación bíblica: Es la base de la poesía hebrea y de las enseñanzas didácticas de Jesús.
+
+- Ejemplo: Las Bienaventuranzas en Mateo 5. "Dichosos los pobres... Dichosos los que sufren ... Dichosos los compasivos ..."
+
+- En la hermenéutica: La anáfora actúa como un "clavo" que fija una idea en la mente. Si una palabra se repite al inicio, se convierte en el eje central de toda la sección.
+
+2.3.5 El Hipérbaton (Alteración del orden) Consiste en cambiar el orden lógico de las palabras en la oración para destacar una palabra específica al ponerla al principio o al final.
+
+- Aplicación bíblica: Dado que el griego original es muy flexible, los autores movían palabras clave al inicio de la frase para darles prioridad teológica.
+
+- Ejemplo: En el griego de Juan 1:1, la palabra "Dios" se coloca antes que el verbo para enfatizar la esencia del Verbo: "Dios era el Verbo".
+
+- En la hermenéutica: Nos ayuda a identificar cuál es el énfasis real del autor original, más allá de la traducción al español. Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 14 | 40
+
+2.4 Historia y cultura
+
+Interpretar la Biblia sin considerar su contexto histórico y cultural es como intentar ver una película en 3D sin las gafas puestas: las imágenes están ahí, pero pierdes la profundidad, el relieve y la verdadera intención del autor.
+
+La Biblia no cayó del cielo en un vacío temporal; fue escrita a lo largo de 1,500 años por personas con costumbres, idiomas y cosmovisiones muy distintas a las nuestras.
+
+2.4.1 Acortando la distancia de los siglos Cuando leemos un texto antiguo, solemos cometer el error de eiségesis: proyectar nuestros valores del siglo XXI sobre el texto. Conocer la cultura nos permite eliminar la posibilidad de caer en ese sesgo y tener un elemento más de juicio para que la comprensión del texto bíblico objeto de nuestro estudio nos permita llegar a una interpretación que extraiga el significado que originalmente se quiso registrar.
+
+Ejemplos: - En la parábola del "Buen Samaritano", un lector moderno ve una historia sobre ser amable. Sin embargo, en el contexto histórico, la rivalidad étnica y religiosa entre judíos y samaritanos era tan visceral que la historia no era solo sobre bondad, sino una provocación radical sobre quién es realmente nuestro prójimo.
+
+- En los Evangelios, leemos sobre una mujer que padece hemorragias y toca el manto de Jesús. Para un lector moderno, es una historia de fe y sanación física. Sin embargo, el peso histórico reside en las Leyes de Pureza de Levítico, ya que, según la ley judía de la época, esta mujer era "impura" permanentemente. No podía tocar a nadie sin contaminarlo ritualmente, lo que la condenaba al aislamiento social y Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 15 | 40
+
+religioso total, para el caso de la samaritana durante 12 años. Respecto de la cultura al tocar a Jesús, ella no solo buscaba medicina, buscaba restauración social. Lo más impactante es que Jesús, en lugar de quedar "contaminado" según la tradición, la llama "Hija", reintegrándola públicamente a la comunidad. Sin conocer las leyes de pureza, solo vemos una cura; conociéndolas, vemos un acto de liberación social radical.
+
+- En la Última Cena, Jesús lava los pies de sus discípulos. Hoy lo vemos como un gesto de humildad general, pero en el siglo I, este acto tenía una carga jerárquica específica: las sandalias y los caminos polvorientos (compartidos con animales) hacían que los pies estuvieran demasiado sucios. Lavar los pies era la tarea del esclavo de más bajo rango en una casa. Era una tarea considerada tan degradante que incluso algunos esclavos judíos estaban exentos de realizarla. La ruptura cultural se da cuando el "Maestro" se arrodilla, no tanto por estar haciendo un gesto "lindo"; sino más bien porque está invirtiendo el orden social del Imperio Romano y del judaísmo del segundo templo, diciendo que, en su reino, la autoridad se mide por la capacidad de ocupar el lugar más bajo de la escala social.
+
+2.4.2 Modismos Muchas frases bíblicas son expresiones idiomáticas que, traducidas literalmente, pierden el sentido o suenan extrañas.
+
+Cuando tomamos un modismo de forma literal, el mensaje puede parecer absurdo o incluso cruel, pero cuando entendemos la expresión cultural detrás de las palabras, el significado brilla con claridad.
+
+- "Por tanto, si tu ojo derecho te hace pecar, sácatelo y tíralo …” (Mateo 5:29) Jesús usa una expresión radical que ha causado mucha confusión a lo largo de los siglos, algunos grupos extremistas en la historia tomaron esto de forma literal, sugiriendo la automutilación como camino a la santidad. En la retórica semítica de Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 16 | 40
+
+la época, se utilizaba la hipérbole extrema (exageración) para enfatizar una decisión radical. El "ojo" y la "mano" representaban los instrumentos de la voluntad y el deseo. Jesús no pedía cirugías, sino una amputación ética. El mensaje es: "Si algo en tu vida, por más valioso que sea (como un ojo), te está destruyendo moralmente, córtalo de raíz inmediatamente". Es un modismo sobre la prioridad de los valores, no sobre la anatomía.
+
+- “… ascuas de fuego amontonarás sobre su cabeza” (Romanos 12:20 RVR 1960) Pablo cita Proverbios diciendo que, si alimentas a tu enemigo, harás que se le quemen las ideas (literalmente). Es incorrecto en este pasaje, pensar que ser bueno con el enemigo es una forma "pasivo-agresiva" de castigarlo o hacer que sufra más. En el antiguo Egipto y regiones cercanas, existía un ritual de arrepentimiento donde una persona cargaba una vasija con carbones encendidos sobre su cabeza para mostrar públicamente su vergüenza y cambio de actitud. El fuego simbolizaba el calor del arrepentimiento que "quema" el orgullo. Entonces, al responder al mal con bien, estaríamos creando el ambiente propicio para que el otro sienta una vergüenza saludable que lo lleve a cambiar. No es para torturarlo, sino para "encender" su conciencia y restaurar la relación.
+
+- “si tus ojos son buenos” (Mateo 6:22) Muchas versiones antiguas traducen esto literalmente del griego haplous, que en español moderno es un "ojo sencillo", pero eso no tiene mayor significado en nuestro idioma (¿un ojo que no es complicado?). Es un hebraísmo. Cuando los judíos mencionaban tener un "ojo bueno" (ayin tovah) significaba ser generoso, mientras que un "ojo malo" (ayin ra'ah) significaba ser tacaño o envidioso. Jesús no está hablando de la vista física, sino de la generosidad financiera. En la Nueva Versión Internacional acertadamente se traduce como “ojo bueno”, es decir ser generoso, si eso sucede toda nuestra vida estará llena de luz. Por eso, el verso siguiente habla inmediatamente de que no se puede servir a Dios y a las riquezas.
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 17 | 40
+
+2.5 El Método Literal de Interpretación Bíblica
+
+Se le identifica también como Método Histórico Gramatical y hay tratadistas que prefieren llamarle literario, por cuanto se refiere básicamente a la forma común del lenguaje.
+
+En este el significado debe determinarse tanto por sus consideraciones literales, gramaticales e históricas. En cuanto al ámbito literal, es clave identificar el género literario, como ya hemos visto, del pasaje o libro bíblico que es tema de estudio.
+
+Luego, se debe dar a las palabras y frases de la Biblia su sentido usual y corriente, acudiendo básicamente al análisis gramatical de las expresiones, la retórica o intencionalidad; pero analizando también el escenario histórico con que se desarrollan los hechos contemplados en la Escritura.
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 18 | 40
+
+Figura 4. Esquema del Métodos Literal de Interpretación Bíblica
+
+Fue este el método utilizado por el sacerdote Esdras para explicar el contenido de la ley al pueblo de Israel que se había olvidado de las instrucciones mosaicas durante el cautiverio en Babilonia (Nehemías 8:1-8).
+
+Al pueblo se le explicó literalmente el contenido de la Escritura.
+
+“La Biblia fue escrita en lenguaje humano y por consecuencia debe ser interpretada, antes que todo, gramaticalmente. En el estudio del texto el intérprete puede proceder de dos maneras: empezar con la sentencia o expresión del pensamiento del escritor, como una unidad, y descender a los detalles interpretando los conceptos y palabras separadas, o puede empezar con estas últimas y gradualmente ascender a la consideración del argumento o pensamiento como un todo”, afirma Berkhof (1989).
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 19 | 40
+
+“Distinguiéndose de otros métodos de interpretación, podemos referirnos al Histórico-Gramático como el método que más se recomienda al criterio y a la conciencia de los estudiantes cristianos. Su principio fundamental consiste en conseguir de las Escrituras mismas el significado preciso que los escritores quisieron dar”, dice Terry (1990).
+
+“Interpretar la Biblia literalmente es interpretarla como literatura. O sea que el significado natural de un pasaje debe ser interpretado de acuerdo con las reglas normales de la gramática, lenguaje, sintaxis y contexto”, recomienda R.C. Sproul (1981).
+
+2.5.1 Ventajas del método literal o histórico-gramatical. Hay varias situaciones evidentes y de sentido común que respaldan este método de interpretación:
+
+a) El significado literal de las oraciones es la forma normal de todos los idiomas. b) La mayor parte de la Biblia tiene sentido adecuado cuando se interpreta literalmente (Éxodo 20:13 “No mates”). El mandato es claro y no deja lugar a la imaginación. c) El enfoque literal no descarta el sentido figurado, sino que, si la naturaleza de la oración así lo requiere, fácilmente acepta el segundo sentido (Ver contexto simbólico en tema anterior). d) Este método es el único obstáculo cuerdo y seguro para la imaginación humana. e) Quizá una de las evidencias más fuertes del método literal es el uso que hace el Nuevo Testamento del Antiguo. Cuando el Antiguo Testamento se cita en el Nuevo, solo se hace en sentido literal.
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 20 | 40
+
+Algunos ejemplos: Antiguo Testamento Nuevo Testamento “Por eso, el Señor mismo les dará una señal: La joven concebirá y dará a luz un hijo, y lo llamará Emanuel.” Isaías 7: 14 “Todo esto sucedió para que se cumpliera lo que el Señor había dicho por medio del profeta: «La virgen concebirá y dará a luz un hijo, y lo llamarán Emanuel» (que significa «Dios con nosotros»).” Mateo 1: 22-
+
+“Te humilló y te hizo pasar hambre, pero luego te alimentó con maná, comida que ni tú ni tus antepasados habían conocido, con lo que te enseñó que no solo de pan vive el hombre, sino de todo lo que sale de la boca del Señor.” Deuteronomio 8: “—Si eres el Hijo de Dios —le propuso el diablo—, dile a esta piedra que se convierta en pan. Jesús le respondió: —Escrito está: “No solo de pan vive el hombre.” Lucas 4:3-4
+
+“»Teme al Señor tu Dios, sírvele solamente a él, y jura solo en su nombre.” Deuteronomio 6: 13 “—Sobre estos reinos y todo su esplendor —le dijo—, te daré la autoridad, porque a mí me ha sido entregada, y puedo dársela a quien yo quiera. Así que, si me adoras, todo será tuyo. Jesús le contestó: —Escrito está: “Adora al Señor tu Dios y sírvele solamente a él.” Lucas 4:6-8: “El diablo lo llevó luego a Jerusalén e hizo que se pusiera de pie en la parte más alta del templo, y le dijo: “Porque él ordenará que sus ángeles te cuiden en todos tus caminos.” Salmos 91:11
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 21 | 40
+
+—Si eres el Hijo de Dios, ¡Tírate de aquí! Pues escrito está: »“Ordenará que sus ángeles te cuiden. Te sostendrán en sus manos para que no tropieces con piedra alguna.” Lucas 4:9-11: “»No pongas a prueba al Señor tu “—También está escrito: “No pongas Dios, como lo hiciste en Masá.” Deuteronomio 6:16 replicó Jesús.” Lucas 4:12. Cuando Jesús oyó que habían “A pesar de todo, no habrá más encarcelado a Juan, regresó a estuvo la para penumbra que Galilea. Partió de Nazaret y se fue a angustiada. En el pasado Dios humilló a la tierra de Zabulón y a la vivir a Capernaúm, que está junto al lago en la región de Zabulón y de tierra de Neftalí; pero en el futuro Neftalí, para cumplir lo dicho por el honrará a Galilea, tierra de paganos, en el camino del mar, al otro lado del profeta Isaías: «Tierra de Zabulón y Jordán. tierra de Neftalí, camino del mar, al el andaba en la otro lado del Jordán, Galilea de los pueblo que gentiles; el pueblo que habitaba en la oscuridad ha visto una gran luz;” Isaías 9:1-2 oscuridad ha visto una gran luz; sobre los que vivían en densas tinieblas la luz ha resplandecido.» Mateo 4:12-16 Por ejemplo, Moisés dijo: “Honra a tu “»Honra a tu padre y a tu madre, para padre y a tu madre”, y: “El que disfrutes de una larga vida en la maldiga a su padre o a su madre será tierra que te da el Señor tu Dios.” Éxodo 20:12 Marcos 7:10 Ustedes, pues, son herederos de los “Puesto que me has obedecido, profetas y del pacto que Dios todas las naciones del mundo serán Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 22 | 40
+
+bendecidas con de estableció medio nuestros por tu antepasados al decirle a Abraham: descendencia.” Génesis 22: 18 “Todos los pueblos del mundo serán bendecidos de medio por tu descendencia.” Hechos 3: 25
+
+2.6 Reglas de Interpretación Bíblica Nuestro Señor es un Dios de orden, y esa característica se manifiesta de manera clara tanto en la creación como en la revelación de su Palabra. Todo cuanto Él ha hecho responde a un diseño intencional, sistemático y coherente, lo cual nos lleva a reconocer que la Escritura no puede ser abordada de forma improvisada o arbitraria. Al contrario, en la misma Palabra de Dios encontramos principios sólidos que orientan su correcta interpretación y que sirven como fundamento para comprender su mensaje con fidelidad.
+
+Figura 5. Resumen de Reglas de Interpretación Bíblica Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 23 | 40
+
+Como intérpretes de la Escritura, entendemos que apartarnos de dichos principios implica el riesgo de distorsionar el sentido del texto bíblico y, en consecuencia, alejarnos de la verdad revelada por Dios. Por ello, asumimos la responsabilidad de acercarnos a la Palabra con reverencia, disciplina y usando un método, conscientes de que su interpretación requiere reglas que nos guíen y nos protejan del error doctrinal y de lecturas subjetivas.
+
+En este sentido, es indispensable hacer de las reglas de interpretación bíblica, pues ellas nos permiten alinear nuestro entendimiento y comprensión con la voluntad y la verdad de Dios. Al aplicar estas reglas, buscamos no solo interpretar correctamente el texto sagrado, sino también honrar al Dios que se ha revelado a través de su Palabra y que nos llama a conocerla y vivirla conforme a su propósito.
+
+A continuación, presentamos una síntesis de las principales reglas en las que coincide la mayoría de los estudiosos de la hermenéutica, provenientes de diversas corrientes teológicas y tradiciones denominacionales:
+
+2.6.1 La Analogía de la Fe Está considerada como la regla de oro de la interpretación bíblica. Responde al convencimiento de que la Biblia es su propio intérprete; es decir, que la Biblia se debe interpretar por la misma Biblia. Toda interpretación que de alguna manera contradiga alguna parte de las Escrituras, será contraria a la verdad de la Palabra de Dios.
+
+Al referirse a esta norma hermenéutica esencial, Martín Lutero dijo:
+
+“Si la Biblia es la Palabra de Dios inspirada, entonces la analogía de la fe no es una opción, sino requisito para la interpretación.”
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 24 | 40
+
+Cada pasaje debe ser interpretado en armonía con todos los demás pasajes. Esta es la ley normal de consistencia en la verdad. Ninguna doctrina puede ser verdad si se opone a cualquier declaración clara de la Palabra de Dios. Cuando se observa una posible contradicción entre los significados de los pasajes, una o más de las interpretaciones deben ser incorrectas.
+
+Un texto bíblico puede, en muchas ocasiones, explicar el sentido de otro pasaje. De hecho, un pasaje puede contribuir a aclarar aquel cuya interpretación y comprensión ha tomado años. No obstante, debemos proceder con cautela en el uso de esta práctica, pues puede tornarse excesiva si se fuerzan comparaciones que no guardan una relación real ni contextual entre sí.
+
+2.6.2 Cada pasaje tiene un significado Debemos reconocer que cada versículo de la Palabra de Dios posee un significado propio y una intención específica dentro de la revelación divina. Esta afirmación constituye un principio fundamental de la interpretación bíblica, ya que nos lleva a entender que ninguna porción de la Escritura ha sido incluida de manera accidental. Si bien existen aparentes excepciones a esta regla, estas no la contradicen, sino que la confirman, pues responden a la riqueza y profundidad del mensaje bíblico. Un ejemplo de ello lo encontramos en las profecías, las cuales, en muchos casos, presentan un cumplimiento inmediato y, al mismo tiempo, un significado futuro que se desarrolla a lo largo del plan redentor de Dios.
+
+Asimismo, comprendemos que la correcta identificación del significado de cada versículo requiere una lectura cuidadosa y contextualizada. En este sentido, las versiones más actualizadas de la Biblia facilitan dicha tarea, ya que presentan los textos organizados en párrafos, lo que permite apreciar con mayor claridad la unidad de pensamiento y la relación entre las ideas expresadas. Esta disposición no altera el contenido inspirado, sino que ayuda al lector a discernir el mensaje de manera ordenada y coherente. Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 25 | 40
+
+De esta manera, asumimos la responsabilidad de estudiar cada pasaje con atención, procurando una interpretación fiel que nos conduzca a una comprensión más profunda de la verdad revelada, reconociendo que cada versículo, dentro de su lugar y propósito, contribuye de forma significativa al mensaje integral de la Palabra de Dios.
+
+2.6.3 La simplicidad Tengamos en cuenta que el significado más evidente de un texto bíblico es, por lo general, el que mejor refleja su sentido original. Por esta razón, al acercarnos a la Escritura debemos procurar, en primer lugar, una interpretación natural y directa del pasaje, respetando el lenguaje, el contexto y la intención manifiesta del autor inspirado. Solo cuando el propio texto, su género literario o el conjunto de la revelación bíblica lo exijan, debemos considerar una interpretación distinta de la más obvia.
+
+Asimismo, reconocemos que en algunos pasajes pueden presentarse varias posibilidades interpretativas. En tales casos, consideramos prudente optar por la interpretación más simple y coherente, aquella que no requiere explicaciones forzadas ni construcciones ajenas al texto mismo. La sencillez en la interpretación no implica superficialidad, sino fidelidad al mensaje que Dios ha querido comunicar de manera clara a su pueblo.
+
+De esta manera, podemos afirmar que la interpretación más sencilla suele estar en mejores condiciones de revelar la intención del Señor, ya que Dios, en su gracia, se ha expresado de forma comprensible y accesible. Al aplicar este principio, buscamos evitar especulaciones innecesarias y mantenernos firmes en una comprensión bíblica equilibrada, ordenada y alineada con la verdad revelada en las Escrituras.
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 26 | 40
+
+2.6.4 Armonice con el contexto
+
+El contexto es toda la sección de pensamiento en donde se encuentra escrito el pasaje. Incluye el tiempo inmediatamente precedido y lo que sigue y todas las acciones que estén conectadas a ella. Puede ser un párrafo, un capítulo, una gran parte o la escritura completa. Los escritos bíblicos tienen un flujo continuo y lógico de pensamientos. Un conocimiento del contexto será de gran ayuda en la exégesis de cualquier pasaje dudoso.
+
+Si aplicamos correctamente el método literal podemos ubicar la porción que deseamos interpretar dentro del contexto general del mensaje, al tiempo que identificamos la clase de contexto especial en el que se mueve el significado.
+
+Lo primero que se debe hacer para ubicar el sentido contextual es mirar los versículos anteriores, por lo menos, incluso hasta el anterior punto aparte y volver a leer el pasaje con los versículos posteriores hasta donde se termine la idea principal.
+
+No hay que dejar de lado la gramática, es decir, el significado de la palabra en el contexto inmediato, y la estructura del pasaje.
+
+El sentido contextual contempla cuatro contextos fundamentales: Contexto literal, Contexto Simbólico, Contexto histórico y Contexto Virtual.
+
+2.6.4.1 El contexto literal Se refiere a la forma explícita como está escrito el texto y que, por la misma razón, no admite interpretación distinta a la que expresa directamente ese texto. Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 27 | 40
+
+Cuando usted lee Éxodo 20:13, la Biblia dice “no mates”. ¿Qué le puede agregar a ese mandato? El texto es tan directo, que no admite ninguna otra interpretación.
+
+Lo mismo ocurre con Éxodo 20:14 “no cometas adulterio” o Éxodo 20:15 “no robes”. De manera más amplia se puede decir que el contexto literal es una proposición taxativa, es decir, que no admite ningún tipo de comentario, explicación o ampliación.
+
+2.6.4.2 El contexto simbólico Está más enfocado a lo que significa el texto, a los alcances siguientes a la expresión. En la Biblia encontramos numerosos pasajes en los que el intérprete debe atender más al significado ampliado de una expresión (una metáfora, una parábola, una alegoría) que a su forma textual.
+
+Cuando leemos Juan 6:35 “Yo soy el pan de vida —declaró Jesús—. El que a mí viene nunca pasará hambre, y el que en mí cree nunca más volverá a tener sed.” la expresión “soy el pan” no se quiere decir que Jesús sea una masa de harina cocida, sino que aquí hay una figura literaria que se resuelve cuando el mismo Jesús explica que con Él nadie pasará hambre ni tendrá sed, que tampoco es literal, pues se refiere a otro tipo de alimento, el espiritual.
+
+2.6.4.3 El contexto histórico-geográfico Nos permite observar que existen escritos definidos para épocas determinadas y que no es aplicable de manera literal en todos los tiempos ni lugares.
+
+Observe Deuteronomio 22:5 “»La mujer no se pondrá ropa de hombre, ni el hombre se pondrá ropa de mujer, porque el SEÑOR tu Dios detesta a Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 28 | 40
+
+cualquiera que hace tal cosa.” ¿Acaso puede aplicarse a las costumbres de hoy, cuando casi toda la moda es unisex?
+
+2.6.4.4 El contexto virtual Es el centro de la interpretación, puede definirse a partir de la respuesta a las preguntas: ¿qué dice el texto? y ¿qué significa?, con la conclusión de cuál es la aplicación que tiene para la vida de cada uno.
+
+En las Sagradas Escrituras reconocemos que Dios, en su infinita sabiduría, responde en numerosas ocasiones a las inquietudes y a los interrogantes tanto del intérprete como del creyente que se acerca a Él en oración. Estas respuestas divinas no surgen de manera aislada ni circunstancial, sino que forman parte de la revelación progresiva de Dios. Aunque dichas respuestas fueron dirigidas originalmente a personajes concretos de la Biblia y pronunciadas en momentos determinados de la historia, entendemos que su valor no se limita a ese contexto temporal. Por el contrario, al estudiar la Escritura con atención y respeto por sus principios de interpretación, podemos discernir cómo esas respuestas contienen verdades eternas que trascienden el tiempo y el espacio, y que siguen siendo relevantes para nuestra vida como creyentes en la actualidad.
+
+En términos prácticos, si el intérprete no llega al contexto virtual, quizás no ha encontrado los anteriores contextos y en consecuencia su estudio puede ser estéril; de manera que el virtual viene a ser el más importante de los contextos.
+
+En algunos casos el contexto virtual se da no para una persona sino para una comunidad o para un país, como ocurre con algunas profecías.
+
+2.6.5 Ubique el objetivo
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 29 | 40
+
+Dentro del ejercicio hermenéutico, uno de los pasos más críticos es la identificación precisa del objetivo particular de cada pasaje. Aunque es fácil quedarse entre los diversos contextos históricos o culturales, estamos obligados a desentrañar la intención original del autor para no desvirtuar el mensaje. No basta con una lectura superficial; debemos precisar qué buscaba comunicar el escritor inspirado en esa porción específica, evitando así la tendencia de aplicar de forma generalizada promesas o mandatos que fueron diseñados para una situación única y concreta.
+
+La Biblia como mosaico de destinatarios, trae consigo una dirección específica para cada mensaje que debemos respetar. Un texto puede haber sido redactado exclusivamente para un pueblo en un momento de crisis, o incluso para un grupo menor, como una tribu específica dentro de Israel, con instrucciones que respondían a su geografía o rituales particulares. Del mismo modo, nos encontramos con las cartas apostólicas, las cuales, aunque contienen verdades universales, fueron enviadas originalmente a iglesias locales con problemas internos muy puntuales que definen el tono y el propósito de la exhortación.
+
+Independientemente de si el enfoque está puesto en un individuo, una tribu o una congregación del primer siglo, lo que verdaderamente trasciende el tiempo son los fundamentos doctrinales. Nuestra tarea como lectores es distinguir entre las circunstancias transitorias —como las costumbres de la época o instrucciones logísticas— y las verdades teológicas inamovibles que vienen en el texto. Al hacer esta distinción, logramos rescatar el núcleo del mensaje divino, el cual permanece vigente como base de nuestra fe, sin importar cuántos siglos nos separen del destinatario original.
+
+Así, la correcta interpretación nace de este equilibrio entre lo particular y lo universal. Si ignoramos a quién se le habló primero, corremos el riesgo de malinterpretar la voluntad de Dios para nosotros hoy; pero si nos quedamos solo en la historia antigua, perdemos la riqueza espiritual del mensaje. Al ubicar correctamente el Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 30 | 40
+
+objetivo del texto, permitimos que la doctrina brille con claridad, transformando una lectura informativa en una experiencia formativa que respeta la estructura con la que Dios decidió revelarse a la humanidad.
+
+2.6.6 La Correlación La correlación es fundamental, no solo como norma de interpretación, sino también, como veremos en el siguiente capítulo, como un paso elemental del método de interpretación bíblico literal.
+
+La correlación es la correspondencia o relación recíproca entre dos o más textos bíblicos. Todos los pasajes relacionados con un tema deben ser estudiados. Nadie nunca debería sacar una conclusión general de un tema hasta que haya recopilado, considerado y comparado en toda la Biblia los pasajes concernientes. Solo la suma total de los pasajes sobre un tema determinado dará su entendimiento completo
+
+Miremos ejemplos de correlación entre dos textos:
+
+“Pero el Consolador, el Espíritu Santo, a quien el Padre enviará en mi nombre, les enseñará todas las cosas y les hará recordar todo lo que les he dicho.” Juan 14:26: “Ábreme los ojos, para que contemple las maravillas de tu ley.” Salmo 119:18 “Porque, así como por la desobediencia de uno solo muchos fueron constituidos pecadores, también por la obediencia de uno solo muchos serán constituidos justos.” Romanos 5:19 “Y al manifestarse como hombre, se humilló a sí mismo y se hizo obediente hasta la muerte, ¡y muerte de cruz!” Filipenses 2:8
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 31 | 40
+
+Recordemos que el texto no está solo o aislado del resto de la Biblia y que los análisis de otros libros que traten el mismo tema estudiado y las armonizaciones de los temas analizados permiten una mayor comprensión del contenido y, por ende, del significado de la Escritura.
+
+En cuanto a la dificultad, deje que otros textos determinen el nivel de complejidad en la comprensión de un pasaje. Algunos pasajes son difíciles de comprender, (2 Pedro 3: 15-16) siempre el significado de un texto oscuro o difícil armoniza con otro pasaje más fácil, más claro, sobre el mismo tema.
+
+2.6.7 El Paralelismo El paralelismo por su parte es la relación entre dos frases o cláusulas que se corresponden en similitud o se relacionan. Sirve para detallar una explicación, es decir, se presenta más en las ideas y conceptos.
+
+En todos los libros de la Biblia se pueden encontrar, pero su importancia se resalta en los Salmos, los escritos sapienciales y la literatura poética.
+
+Hay tres tipos básicos de paralelismo: sinónimo, antitético y sintético.
+
+- El paralelismo sinónimo ocurre cuando diferentes partes de un pasaje presentan el mismo pensamiento en una forma de expresión ligeramente alterada. Por ejemplo:
+
+“El testigo falso no quedará sin castigo; el que esparce mentiras no saldrá bien librado.” (Proverbios 19:5)
+
+“Vengan, postrémonos reverentes, doblemos la rodilla ante el Señor nuestro Hacedor.” (Salmos 95:6)
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 32 | 40
+
+- El paralelismo antitético ocurre cuando las dos partes se encuentran en contraste la una con la otra. Pueden decir lo mismo, pero en forma negativa:
+
+“El hijo sabio atiende a la corrección de su padre, pero el insolente no hace caso a la reprensión.” (Proverbios 13: 1)
+
+“Las manos ociosas conducen a la pobreza; las manos hábiles atraen riquezas.” (Proverbios 10:4)
+
+El paralelismo sintético es un poco más complejo que las otras formas. Aquí la primera parte del pasaje crea un sentido de expectación, el cual se completa con la segunda parte. También puede avanzar en un movimiento progresivo "en escalinata", hasta alcanzar una conclusión en la tercera línea: “Ciertamente tus enemigos, Señor, ciertamente tus enemigos perecerán; ¡dispersados por todas partes serán todos los malhechores!”, (SaImos 92:9)
+
+La apariencia de paralelismo también puede enriquecer nuestro conocimiento de los conceptos bíblicos. Por ejemplo, ¿cómo entendía la mente hebrea la noción de la bienaventuranza? Escuche las palabras clásicas de la bendición hebrea y trate de avistar su intención: “Pero el Consolador, el Espíritu Santo, a quien el Padre enviará en mi nombre, les enseñará todas las cosas y les hará recordar todo lo que les he dicho.” Juan 14:26
+
+2.6.8 Equilibrio apropiado de la verdad bíblica. Sea por los sentimientos que mueven, por lo florido del lenguaje, o por las bendiciones que profiere, etc., existen pasajes de la Palabra de Dios a los que se les ha dado prelación en nuestro entendimiento y que son de fácil recordación. Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 33 | 40
+
+Esta situación impide que veamos la totalidad del mensaje, quedando incompleto y, por ende, la interpretación no reflejará con claridad y suficiencia lo que el Espíritu Santo plasmó allí.
+
+Finalmente, ningún pasaje debe ser menospreciado. La clave es equilibrar la Verdad como Dios quiere.
+
+2.6.9 Tener en cuenta los modismos. Un modismo es «cualquier uso o construcción peculiar del lenguaje, una forma de expresión». La interpretación de un pasaje bíblico debe supeditarse al sentido cultural de sus modismos, evitando una lectura literal que distorsione el mensaje original, por ejemplo: «Si alguno viene a mí y no sacrifica el amor a su padre y a su madre, a su esposa y a sus hijos, a sus hermanos y a sus hermanas, y aun a su propia vida, no puede ser mi discípulo», Lucas 14:26, NVI. «Si alguno viene a mí, y no aborrece a su padre, y madre, y mujer, e hijos, y hermanos, y hermanas, y aun también su propia vida, no puede ser mi discípulo», Lucas 14:26, RVR 1960.
+
+Cuando, en la versión Reina Valera, Jesús dice que para ser su discípulo hay que «aborrecer» a padre y madre, está usando un modismo semítico de comparación. No pide odio real, sino que el amor por Dios sea tan grande que cualquier otro afecto parezca «odio» en comparación. Es una forma exagerada de decir «amar menos».
+
+«Santiago y su hermano Juan, hijos de Zebedeo (a quienes llamó Boanerges, que significa «Hijos del trueno»)», Marcos 3:17.
+
+La mención que hace Jesús, refiriéndose a Santiago y Juan, no afirmaba que fueran hijos de un fenómeno meteorológico. El modismo indicaba que tenían un carácter Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 34 | 40
+
+impetuoso, fuerte o explosivo. Del mismo modo, expresiones como «hijos de consolación» o «hijos de desobediencia» significan que la identidad de esas personas está definida por la paz o por la rebeldía, respectivamente.
+
+«Que la belleza de ustedes no sea la externa, que consiste en adornos tales como peinados ostentosos, joyas de oro y vestidos lujosos. Que su belleza sea más bien la incorruptible, la que procede de lo íntimo del corazón y consiste en un espíritu suave y apacible. Ésta sí que tiene mucho valor delante de Dios», 1 Pedro 3:3-4.
+
+«No dejemos de congregarnos, como acostumbran a hacerlo algunos, sino animémonos unos a otros, y con mayor razón ahora que vemos que aquel día se acerca», Hebreos 10:25
+
+Con el uso de «No... pero» se expresaba una comparación de importancia para darle prelación a una de las dos acciones.
+
+2.6.10 Identifique al autor y su entorno. La identificación del autor de un libro bíblico enriquece la interpretación del texto. Ante expresiones de difícil comprensión, debe prevalecer la intención original del autor, permitiendo que su propio contexto y estilo definan el significado preciso de las expresiones utilizadas.
+
+El autor utiliza las circunstancias de la vida que él vivió para enmarcar el mensaje revelado. Se basó en las costumbres, sus días, las opiniones de su tiempo, las circunstancias de su vida, y la naturaleza de su propia personalidad. Algunas consideraciones para tener en cuenta sobre el autor: - ¿Era un hombre inspirado? - ¿Era un hombre educado? - ¿Qué tendencias religiosas defendía Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 35 | 40
+
+- ¿Qué prejuicios tenía? - ¿Qué estilo de son del mensaje? - Un escritor generalmente condena los males que resulten ser los más peligrosos para él.
+
+2.6.11 En los evangelios también hay doctrina
+
+Muchos de los escritos de Pablo presentan características didácticas. La relación entre el evangelio y las epístolas ha sido definida con frecuencia simplemente diciendo que los evangelios registran lo que Jesús hizo y las epístolas interpretan su significado. Tal definición es demasiado simplista, toda vez que los evangelios en muchas porciones enseñan e interpretan a la vez que narran.
+
+Pero es cierto que el énfasis de los evangelios está en la crónica de eventos, mientras que las epístolas están más interesadas en interpretar el significado de esos eventos en términos de doctrina, exhortación y aplicación.
+
+Así pues, el principio de la interpretación de la narración por el método didáctico no está concebido para poner a un apóstol contra otro o a un apóstol contra Cristo. Es meramente para reconocer una de las tareas principales del apóstol: enseñar e interpretar la mente de Cristo para su rebaño.
+
+2.6.12 Identifique el «espíritu» del mensaje
+
+Todos conocemos la reputación de los fariseos en el Nuevo Testamento. Eran muy escrupulosos respecto a guardar la ley en forma literal mientras que burlaban su espíritu constantemente. Existen historias de israelitas que estiraban la regla de no poder viajar grandes distancias en el día sabático, astutamente alargando sus propios «viajes sabatinos». Los rabinos establecieron que el viaje sabatino se Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 36 | 40
+
+limitaría a una distancia determinada midiendo a partir del lugar de residencia de cada uno. Por lo tanto, si un «legalista» quería viajar una distancia mayor a la establecida para el día sabático, durante la semana él o algún amigo viajero depositaría su cepillo de dientes o algún otro artículo personal bajo una roca a diferentes intervalos espaciados.
+
+De esta manera, los legalistas tenían una residencia técnicamente establecida en cada lugar. Para viajar en el día sabático, todo lo que deberían hacer sería ir de una «residencia» a otra recogiendo sus objetos personales según avanzaban. Así, la letra de la ley era obedecida literalmente, pero el espíritu de la ley era quebrantado.
+
+Había una gran variedad de legalistas en los tiempos del Nuevo Testamento. El primer y más famoso tipo es el que legislaba reglas y órdenes más allá de las que Dios había ordenado. Jesús reprendió a los fariseos por concederle a la tradición de los rabinos la misma autoridad que la Ley de Moisés.
+
+Atribuirle autoridad divina a las leyes humanas es el tipo máximo de legalismo que existe. Pero no solamente existe este tipo. El incidente del viaje en el día sabático ilustra el otro tipo de ley más frecuentemente encontrado. El obedecer la letra al mismo tiempo que se viola el espíritu lo convierte a uno técnicamente en justo, pero realmente corrupto.
+
+La letra y el espíritu se encuentran inseparablemente
+
+2.6.13 De un tratamiento especial a los proverbios, las parábolas y la profecía
+
+2.6.13.1 A los Proverbios
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 37 | 40
+
+Un error muy común en la interpretación bíblica y la aplicación es darle a un proverbio el peso y la fuerza de un absoluto moral. Los proverbios son textos diseñados para expresar situaciones que en la práctica se han presentado. Reflejan principios de sabiduría para una vida devota, pero no son leyes morales que deban aplicarse a absolutamente toda situación concebible.
+
+Para aclarar podemos citar dichos sabios de Jesús: «El que no está de mi parte, está contra mí» (Mt. 12: 30), y «el que no está contra ustedes está a favor de ustedes» (Lc. 9:50). ¿Cómo pueden ambos ser ciertos? Todos sabemos que en algunas circunstancias el silencio otorga, y en otras indica hostilidad. En algunos casos la falta de oposición demuestra apoyo, en otros casos la falta de apoyo indica oposición.
+
+2.6.13.2 A las Parábolas
+
+De todas las formas literarias que encontramos en la Escritura, la parábola con frecuencia se considera la más fácil de entender e interpretar. La gente suele disfrutar los sermones basados en parábolas. Como que las parábolas son historias concretas basadas en situaciones normales, parecen más fáciles de tratar que los conceptos abstractos.
+
+Sin embargo, desde el punto de vista del erudito del Nuevo Testamento, las parábolas presentan dificultades únicas de interpretación.
+
+¿Qué es tan difícil acerca de las parábolas? ¿Por qué no pueden simplemente ser presentadas e interpretadas?
+
+Hay varias respuestas a estas preguntas. Primero, existe el problema de la intención original de la parábola. Es obvio que Jesús era afecto a usar la parábola como medio de enseñanza. Sin embargo, la pregunta enigmática es si utilizaba las parábolas Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 38 | 40
+
+para elucidar sus enseñanzas o para oscurecerlas. El debate se enfoca en las palabras misteriosas de Jesús encontradas en Marcos 4: 10-12: «10 Cuando se quedó solo, los doce y los que estaban alrededor de él le hicieron preguntas sobre las parábolas. 11 «A ustedes se les ha revelado el secreto del reino de Dios —les contestó—; pero a los de afuera todo les llega por medio de parábolas, 12 para que »“por mucho que vean, no perciban; y por mucho que oigan, no entiendan; no sea que se conviertan y sean perdonados.”»
+
+2.6.13.3 A las Profecías
+
+El trato de la profecía vatídica (que predice) tanto en el Nuevo como en el Antiguo Testamento es una de las formas de interpretación bíblica que más ha sufrido el abuso. Las interpretaciones abarcan desde el método escéptico naturalista, el cual virtualmente elimina la profecía vatídica, al desorbitado método de ver en cada evento contemporáneo un cumplimiento «claro» de una profecía bíblica.
+
+Los métodos de alta crítica funcionan a veces basados en la suposición de que todo cuanto sugiere predicción del futuro y cumplimiento de las profecías indica una interpolación posterior en el texto. La suposición implícita es que la predicción del futuro con resultados exactos es imposible. Por tanto, cualquier suceso relacionado debe indicar que la predicción fue inscrita o insertada en una fecha posterior a la del «cumplimiento». Esto implica fraude teológico y no debe ser tomado en serio. El problema es el «prejuicio» en el sentido clásico del término; el texto ha sido «prejuzgado» partiendo de suposiciones injustificadas.
+
+Por otra parte, algunos pensadores tradicionalistas insisten en que cada detalle de la profecía bíblica debe llevarse a cabo sin dejar lugar a predicciones simbólicas o que tengan una gama más amplia de significado.
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 39 | 40
+
+La interpretación de la profecía puede resultar tan compleja que proporcionar cualquier fórmula detallada para ese fin traspasa las barreras de este curso. El estudiante de la Escritura haría bien en realizar un estudio especial.
+
+Bibliografía:
+
+(1999). Biblia Nueva Versión Internacional. (Sociedad Bíblica Internacional). Miami. Lund E., Luce A. (1975). Hermenéutica Introducción Bíblica. (Editorial Vida). Sproul, R.C. (1981). Cómo estudiar e interpretar la Biblia. (Editorial UNILIT). Miami. Berkhof, L. (1989). Principios de Interpretación Bíblica. (Editorial CLIE). Barcelona. Terry, M.S. (1990). Hermenéutica. (Editorial CLIE). Barcelona.
+
+Unidad Educativa IBLI FACTER - Hermenéutica Capítulo 2 Página 40 | 40

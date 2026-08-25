@@ -1,0 +1,34 @@
+[project]
+name = "docagent"
+version = "0.1.0"
+description = "Self-tuning LangGraph agent that learns how to index a document family, then indexes it into Qdrant via Vertex AI"
+requires-python = ">=3.13"
+
+# Deliberately minimal. Vertex AI and Qdrant are reached over raw REST with the
+# payloads already verified against the running instance — less risk than
+# learning a client library's surface, and no pandas/numpy/grpcio bulk on a disk
+# that has ~2.7 GB free.
+dependencies = [
+    "langgraph>=1.2.9",
+    "langgraph-checkpoint-sqlite>=3.1.0",
+    "pymupdf>=1.28.0",  # AGPL (dual). MIT alternative: pdfplumber, slower.
+    "openpyxl>=3.1.5",
+    "python-docx>=1.2.0",
+    "python-pptx>=1.0.2",
+    "httpx>=0.28.1",
+    # Gemini Enterprise refuses API keys, so ADC is the only auth that works.
+    "google-auth>=2.40",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+docagent = "docagent.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

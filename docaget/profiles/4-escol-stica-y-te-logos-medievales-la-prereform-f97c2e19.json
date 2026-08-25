@@ -1,0 +1,449 @@
+{
+  "fingerprint": "f97c2e19362e6a54",
+  "slug": "4-escol-stica-y-te-logos-medievales-la-prereform-f97c2e19",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.675,
+    "recall_at_5": 0.95,
+    "mrr_at_10": 0.7935,
+    "recall_at_5_dense_only": 0.925,
+    "noise_floor": 0.5866,
+    "chunks": 103,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Qué puesto eclesiástico desempeñó Alberto Magno en Ratisbona durante los primeros años de la década de 1260?",
+      "chunk_index": 16,
+      "char_mid": 16740,
+      "cell_ref": "",
+      "breadcrumb": "14. EL ESCOLASTICISMO. > 14.2. Teólogos Destacados:"
+    },
+    {
+      "question": "¿Qué invención tecnológica fue fundamental para la propagación de las ideas humanistas y reformistas, convirtiendo los textos escritos en un instrumento de emancipación intelectual?",
+      "chunk_index": 60,
+      "char_mid": 58729,
+      "cell_ref": "",
+      "breadcrumb": "18. LA IGLESIA REFORMADA. > 18.1. Causas de La Reforma"
+    },
+    {
+      "question": "¿Qué tipo de asamblea solicitaron con insistencia Martín Lutero y otros reformadores, y cuál fue la postura inicial de los papas ante esta propuesta durante los primeros años del movimiento reformista?",
+      "chunk_index": 95,
+      "char_mid": 96437,
+      "cell_ref": "",
+      "breadcrumb": "22. EL CONCILIO DE TRENTO"
+    },
+    {
+      "question": "¿Qué principio teológico fundamental, que luego adoptarían los reformadores protestantes, se infería de las declaraciones de Cisneros sobre la importancia de la nueva edición bíblica?",
+      "chunk_index": 51,
+      "char_mid": 48720,
+      "cell_ref": "",
+      "breadcrumb": "17. ISABEL LA CATÓLICA. > 17.2. Las letras y la Políglota Complutense."
+    },
+    {
+      "question": "¿Qué área de la teología cristiana fue más desarrollada por Juan Calvino, a diferencia de Martín Lutero, cuya principal preocupación fue la justificación personal?",
+      "chunk_index": 87,
+      "char_mid": 86533,
+      "cell_ref": "",
+      "breadcrumb": "21. JUAN CALVINO"
+    },
+    {
+      "question": "¿Cuál fue el desenlace para Jan Hus tras su comparecencia ante la asamblea de Constanza y qué principios fundamentales defendía sobre la autoridad eclesiástica y el perdón divino?",
+      "chunk_index": 33,
+      "char_mid": 33386,
+      "cell_ref": "",
+      "breadcrumb": "16. LA PRERREFORMA (1.366-1.517) > 16.2. Juan Huss (1.369-1.415):"
+    },
+    {
+      "question": "¿Cuáles eran los postulados principales de los anabaptistas en cuanto a la independencia de la congregación religiosa del gobierno civil y la paridad entre sus adeptos?",
+      "chunk_index": 86,
+      "char_mid": 85278,
+      "cell_ref": "",
+      "breadcrumb": "20. EL MOVIMIENTO ANABAPTISTA > 20.1. Los primeros Anabaptistas."
+    },
+    {
+      "question": "¿Qué factores causaron las interrupciones y suspensiones tempranas de la asamblea eclesiástica que se celebró en Trento?",
+      "chunk_index": 96,
+      "char_mid": 97526,
+      "cell_ref": "",
+      "breadcrumb": "22. EL CONCILIO DE TRENTO"
+    },
+    {
+      "question": "¿Qué nombre recibe el intervalo histórico, comprendido entre el final del siglo XIV y el inicio del XVI, caracterizado por diferentes movimientos que criticaron la desviación de los principios cristianos medievales desde una perspectiva bíblica?",
+      "chunk_index": 28,
+      "char_mid": 27741,
+      "cell_ref": "",
+      "breadcrumb": "16. LA PRERREFORMA (1.366-1.517)"
+    },
+    {
+      "question": "Según la perspectiva de Calvino, ¿de qué manera los fieles se unen a Cristo durante la eucaristía y cuál es la función del Espíritu Santo en ese proceso?",
+      "chunk_index": 92,
+      "char_mid": 93395,
+      "cell_ref": "",
+      "breadcrumb": "21. JUAN CALVINO > 21.4. Calvino y el calvinismo."
+    },
+    {
+      "question": "¿Qué transformaciones políticas y sociales impulsó Savonarola en Florencia, y cuál fue la respuesta del pontífice a su postura radical?",
+      "chunk_index": 39,
+      "char_mid": 38424,
+      "cell_ref": "",
+      "breadcrumb": "16. LA PRERREFORMA (1.366-1.517) > 16.3. Jerónimo de Savonarola (1.452-1.498):"
+    },
+    {
+      "question": "¿Qué obra de carácter personal y biográfico fue escrita por Abelardo?",
+      "chunk_index": 12,
+      "char_mid": 13525,
+      "cell_ref": "",
+      "breadcrumb": "14. EL ESCOLASTICISMO. > 14.2. Teólogos Destacados:"
+    },
+    {
+      "question": "¿Cuál es la postura de Lutero respecto a la autoridad suprema y el origen tanto de la Biblia como de la Iglesia, en contraste con la idea de que la institución eclesiástica estableció el canon bíblico?",
+      "chunk_index": 65,
+      "char_mid": 63360,
+      "cell_ref": "",
+      "breadcrumb": "18. LA IGLESIA REFORMADA. > 18.3. La Teología de Lutero"
+    },
+    {
+      "question": "¿Qué figura real es reconocida por haber establecido los cimientos del gran esplendor cultural español?",
+      "chunk_index": 50,
+      "char_mid": 47562,
+      "cell_ref": "",
+      "breadcrumb": "17. ISABEL LA CATÓLICA. > 17.2. Las letras y la Políglota Complutense."
+    },
+    {
+      "question": "¿Qué figura teológica del siglo XII es reconocida por haber establecido las bases para el pensamiento de Tomás de Aquino?",
+      "chunk_index": 15,
+      "char_mid": 15903,
+      "cell_ref": "",
+      "breadcrumb": "14. EL ESCOLASTICISMO. > 14.2. Teólogos Destacados:"
+    },
+    {
+      "question": "¿Qué tipo de vivencia espiritual individual fue la que Martín Lutero consideró fundamental para la obtención de la salvación, en oposición a las formalidades y ceremonias eclesiásticas?",
+      "chunk_index": 69,
+      "char_mid": 67165,
+      "cell_ref": "",
+      "breadcrumb": "18. LA IGLESIA REFORMADA. > 18.3. La Teología de Lutero"
+    },
+    {
+      "question": "¿Qué desafío teológico enfrentó el teólogo italiano Juan de Fidanza al intentar armonizar dos corrientes de pensamiento religioso, y cuál fue el resultado de este esfuerzo?",
+      "chunk_index": 20,
+      "char_mid": 20888,
+      "cell_ref": "",
+      "breadcrumb": "14. EL ESCOLASTICISMO. > 14.2. Teólogos Destacados:"
+    },
+    {
+      "question": "¿Qué medidas implementaron las autoridades para fomentar la conversión de los judíos y permitirles permanecer en el territorio?",
+      "chunk_index": 56,
+      "char_mid": 55683,
+      "cell_ref": "",
+      "breadcrumb": "17. ISABEL LA CATÓLICA. > 17.3. Medidas represivas."
+    },
+    {
+      "question": "¿Qué transformaciones religiosas y sociales concretas se implementaron en Zúrich tras la influencia de Zwinglio?",
+      "chunk_index": 78,
+      "char_mid": 75318,
+      "cell_ref": "",
+      "breadcrumb": "18. LA IGLESIA REFORMADA. > 19.2. La ruptura con Roma."
+    },
+    {
+      "question": "¿Cuál era la postura de un prominente pensador irlandés del siglo IX sobre la interacción entre el intelecto y las creencias religiosas, especialmente en relación con las ideas de Platón?",
+      "chunk_index": 10,
+      "char_mid": 12079,
+      "cell_ref": "",
+      "breadcrumb": "14. EL ESCOLASTICISMO. > 14.2. Teólogos Destacados:"
+    },
+    {
+      "question": "¿Qué denominación recibe la corriente que fusionó elementos del Renacimiento con una orientación religiosa y las ideas de Erasmo?",
+      "chunk_index": 22,
+      "char_mid": 22095,
+      "cell_ref": "",
+      "breadcrumb": "14. EL ESCOLASTICISMO."
+    },
+    {
+      "question": "¿Qué apartados temáticos y qué pensadores centrales se detallan en las secciones que cubren el escolasticismo y el movimiento renacentista de corte religioso?",
+      "chunk_index": 3,
+      "char_mid": 4006,
+      "cell_ref": "",
+      "breadcrumb": "4. ESCOLÁSTICA Y TEÓLOGOS MEDIEVALES, LA"
+    },
+    {
+      "question": "¿Cuáles son los individuos destacados y sus respectivos periodos de vida que se mencionan en la sección de la Prerreforma?",
+      "chunk_index": 4,
+      "char_mid": 5959,
+      "cell_ref": "",
+      "breadcrumb": "4. ESCOLÁSTICA Y TEÓLOGOS MEDIEVALES, LA"
+    },
+    {
+      "question": "¿Cuál fue la razón del establecimiento de las instituciones educativas en la Edad Media y qué repercusiones tuvieron en la evolución del pensamiento religioso de la época?",
+      "chunk_index": 99,
+      "char_mid": 100912,
+      "cell_ref": "",
+      "breadcrumb": "22. EL CONCILIO DE TRENTO"
+    },
+    {
+      "question": "¿Cuál es el título del decimonoveno apartado?",
+      "chunk_index": 72,
+      "char_mid": 70021,
+      "cell_ref": "",
+      "breadcrumb": "18. LA IGLESIA REFORMADA."
+    },
+    {
+      "question": "¿Qué aspectos clave caracterizaron la doctrina religiosa de Ulrico Zwinglio y su separación de la Iglesia de Roma?",
+      "chunk_index": 5,
+      "char_mid": 7891,
+      "cell_ref": "",
+      "breadcrumb": "4. ESCOLÁSTICA Y TEÓLOGOS MEDIEVALES, LA"
+    },
+    {
+      "question": "¿Qué líder religioso y qué asamblea eclesiástica se abordan en las páginas 40 y 41 del documento?",
+      "chunk_index": 6,
+      "char_mid": 8968,
+      "cell_ref": "",
+      "breadcrumb": "4. ESCOLÁSTICA Y TEÓLOGOS MEDIEVALES, LA"
+    },
+    {
+      "question": "¿En qué año los miembros de la hermandad bohemia que no emigraron establecieron su propia declaración de fe y en qué momento se unieron a la comunidad religiosa utraquista, que ya había adoptado la Confesión de Augsburgo?",
+      "chunk_index": 37,
+      "char_mid": 36963,
+      "cell_ref": "",
+      "breadcrumb": "16. LA PRERREFORMA (1.366-1.517) > 16.2. Juan Huss (1.369-1.415):"
+    },
+    {
+      "question": "¿Qué conceptos particulares introdujo Duns Escoto en la teología cristiana relacionados con la condición humana y la transmisión del pecado original?",
+      "chunk_index": 21,
+      "char_mid": 21758,
+      "cell_ref": "",
+      "breadcrumb": "14. EL ESCOLASTICISMO. > 14.2. Teólogos Destacados:"
+    },
+    {
+      "question": "Según Lutero, ¿dónde se manifiesta la divinidad de una manera que contrasta con la comprensión puramente intelectual?",
+      "chunk_index": 66,
+      "char_mid": 64303,
+      "cell_ref": "",
+      "breadcrumb": "18. LA IGLESIA REFORMADA. > 18.3. La Teología de Lutero"
+    },
+    {
+      "question": "¿Cuál fue el enfoque metodológico de Anselmo de Canterbury al integrar la creencia religiosa con el razonamiento sistemático?",
+      "chunk_index": 14,
+      "char_mid": 15202,
+      "cell_ref": "",
+      "breadcrumb": "14. EL ESCOLASTICISMO. > 14.2. Teólogos Destacados:"
+    },
+    {
+      "question": "¿Cuál fue la finalidad específica de la venta de indulgencias que Jan Hus criticó?",
+      "chunk_index": 32,
+      "char_mid": 32236,
+      "cell_ref": "",
+      "breadcrumb": "16. LA PRERREFORMA (1.366-1.517) > 16.2. Juan Huss (1.369-1.415):"
+    },
+    {
+      "question": "¿Qué método inicial utilizó la Inquisición española para enfrentar la herejía y cuál fue la reacción a su implementación temprana en Sevilla?",
+      "chunk_index": 52,
+      "char_mid": 50002,
+      "cell_ref": "",
+      "breadcrumb": "17. ISABEL LA CATÓLICA. > 17.3. Medidas represivas."
+    },
+    {
+      "question": "¿Cuál es el nombre de la obra teológica más destacada atribuida a Juan Wiclyff?",
+      "chunk_index": 31,
+      "char_mid": 31098,
+      "cell_ref": "",
+      "breadcrumb": "16. LA PRERREFORMA (1.366-1.517) > 16.1. Juan Wiclyff (1.324-1.384):"
+    },
+    {
+      "question": "¿Cuál es el nombre de una obra literaria significativa atribuida a Savonarola, aparte de sus múltiples sermones?",
+      "chunk_index": 40,
+      "char_mid": 39175,
+      "cell_ref": "",
+      "breadcrumb": "16. LA PRERREFORMA (1.366-1.517) > 16.3. Jerónimo de Savonarola (1.452-1.498):"
+    },
+    {
+      "question": "¿Cuáles fueron los elementos clave que influyeron en la formación de las convicciones reformistas de Zwinglio, diferenciándolo del camino de Lutero, antes de su llegada a Zúrich?",
+      "chunk_index": 74,
+      "char_mid": 71560,
+      "cell_ref": "",
+      "breadcrumb": "18. LA IGLESIA REFORMADA. > 19.1. La peregrinación de Zwinglio."
+    },
+    {
+      "question": "Qué pensadores fueron los primeros en instruir a Abelardo y cuál fue su opinión sobre las enseñanzas recibidas de ellos?",
+      "chunk_index": 11,
+      "char_mid": 12778,
+      "cell_ref": "",
+      "breadcrumb": "14. EL ESCOLASTICISMO. > 14.2. Teólogos Destacados:"
+    },
+    {
+      "question": "¿Qué circunstancias específicas impulsaron a ciertos académicos y pensadores religiosos a alejarse de la institución eclesiástica en los años previos al Renacimiento?",
+      "chunk_index": 2,
+      "char_mid": 2447,
+      "cell_ref": "",
+      "breadcrumb": "4. ESCOLÁSTICA Y TEÓLOGOS MEDIEVALES, LA"
+    },
+    {
+      "question": "¿Qué ejemplos concretos evidenciaban la falta de adhesión a los votos de castidad y la formación de núcleos familiares por parte de los miembros del clero y las órdenes religiosas?",
+      "chunk_index": 47,
+      "char_mid": 45000,
+      "cell_ref": "",
+      "breadcrumb": "17. ISABEL LA CATÓLICA. > 17.1. La Reforma del Clero."
+    },
+    {
+      "question": "¿Cuál fue la fecha y los participantes del primer bautismo realizado por el grupo de creyentes en Zúrich que buscaban una reforma más radical?",
+      "chunk_index": 84,
+      "char_mid": 82804,
+      "cell_ref": "",
+      "breadcrumb": "20. EL MOVIMIENTO ANABAPTISTA > 20.1. Los primeros Anabaptistas."
+    }
+  ],
+  "learned_from": "libros/4. ESCOLÁSTICA Y TEÓLOGOS MEDIEVALES, LA PREREFORMA Y LA REFORMA.pdf",
+  "learned_at": 1785529311.9325385,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: none proposed; nothing to strip",
+    "FAIL heading_guards: level-1 numbering is [4, 14, 15, 16, 17, 18, 19, 20, 21, 22], which is not contiguous",
+    "OK  question_pattern: 1/157 paragraphs, 100% confirmed by an independent signal",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": [
+    {
+      "round": 1,
+      "candidate": "per_section=1",
+      "mrr_at_10": 0.7458,
+      "recall_at_5": 0.85,
+      "accepted": false,
+      "why": "MRR@10 -0.062 (recall@5 -0.100) is within the 0.051 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "per_section=3",
+      "mrr_at_10": 0.7927,
+      "recall_at_5": 0.975,
+      "accepted": false,
+      "why": "MRR@10 -0.015 (recall@5 +0.025) is within the 0.051 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "min_score=0.55",
+      "mrr_at_10": 0.8098,
+      "recall_at_5": 0.95,
+      "accepted": false,
+      "why": "MRR@10 +0.002 (recall@5 +0.000) is within the 0.051 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "min_score=0.65",
+      "mrr_at_10": 0.7798,
+      "recall_at_5": 0.95,
+      "accepted": false,
+      "why": "MRR@10 -0.028 (recall@5 +0.000) is within the 0.051 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "target=900",
+      "mrr_at_10": 0.7537,
+      "recall_at_5": 0.9,
+      "accepted": false,
+      "why": "MRR@10 -0.054 is within the 0.051 noise margin"
+    },
+    {
+      "round": 2,
+      "candidate": "per_section=1",
+      "mrr_at_10": 0.7312,
+      "recall_at_5": 0.825,
+      "accepted": false,
+      "why": "MRR@10 -0.062 (recall@5 -0.125) is within the 0.053 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "per_section=3",
+      "mrr_at_10": 0.814,
+      "recall_at_5": 0.95,
+      "accepted": false,
+      "why": "MRR@10 +0.020 (recall@5 +0.000) is within the 0.053 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "min_score=0.55",
+      "mrr_at_10": 0.8065,
+      "recall_at_5": 0.95,
+      "accepted": false,
+      "why": "MRR@10 +0.013 (recall@5 +0.000) is within the 0.053 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "min_score=0.65",
+      "mrr_at_10": 0.8032,
+      "recall_at_5": 0.95,
+      "accepted": false,
+      "why": "MRR@10 +0.010 (recall@5 +0.000) is within the 0.053 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "target=1600",
+      "mrr_at_10": 0.7675,
+      "recall_at_5": 0.875,
+      "accepted": false,
+      "why": "MRR@10 -0.026 is within the 0.053 noise margin"
+    },
+    {
+      "round": 3,
+      "candidate": "per_section=1",
+      "mrr_at_10": 0.7812,
+      "recall_at_5": 0.875,
+      "accepted": false,
+      "why": "MRR@10 -0.013 (recall@5 -0.075) is within the 0.051 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "per_section=3",
+      "mrr_at_10": 0.8135,
+      "recall_at_5": 0.95,
+      "accepted": false,
+      "why": "MRR@10 +0.020 (recall@5 +0.000) is within the 0.051 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "min_score=0.55",
+      "mrr_at_10": 0.806,
+      "recall_at_5": 0.95,
+      "accepted": false,
+      "why": "MRR@10 +0.012 (recall@5 +0.000) is within the 0.051 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "min_score=0.65",
+      "mrr_at_10": 0.7902,
+      "recall_at_5": 0.95,
+      "accepted": false,
+      "why": "MRR@10 -0.004 (recall@5 +0.000) is within the 0.051 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "overlap=300",
+      "mrr_at_10": 0.794,
+      "recall_at_5": 0.925,
+      "accepted": false,
+      "why": "MRR@10 +0.000 is within the 0.051 noise margin"
+    }
+  ]
+}

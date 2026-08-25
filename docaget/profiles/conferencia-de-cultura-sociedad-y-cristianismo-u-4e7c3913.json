@@ -1,0 +1,680 @@
+{
+  "fingerprint": "4e7c3913094948f7",
+  "slug": "conferencia-de-cultura-sociedad-y-cristianismo-u-4e7c3913",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [
+      "^CULTURA,\\s+SOCIEDAD\\s+Y\\s+CRISTIANISMO$"
+    ],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 30,
+    "heading_l2_max": 70
+  },
+  "question_pattern": "^(\\d+)\\.\\s+",
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.6889,
+    "recall_at_5": 0.9222,
+    "mrr_at_10": 0.7906,
+    "recall_at_5_dense_only": 0.9222,
+    "noise_floor": 0.5862,
+    "chunks": 380,
+    "eval_questions": 90
+  },
+  "evalset": [
+    {
+      "question": "¿Cómo el humanismo transformó los principios fundamentales del cristianismo y por qué no se le considera una corriente pagana, sino una que redefinió la fe en la individualidad?",
+      "chunk_index": 55,
+      "char_mid": 67730,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad > 1.1.2. El motivo cristiano: creación, caída y redención > 1.1.4. El motivo del humanismo secular: Naturaleza y libertad"
+    },
+    {
+      "question": "¿Qué figuras o citas se utilizan para ejemplificar la visión bíblica sobre la relevancia del día a día en contraste con la perspectiva posmoderna?",
+      "chunk_index": 240,
+      "char_mid": 289466,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad > 3.2.2.1. El auge del sentimiento > 3.2.4. Nihilismo > 3.2.4.1. El culto al presente"
+    },
+    {
+      "question": "¿Según la perspectiva de Max Lucado, qué factor inesperado se identifica como el origen de las dificultades en la sociedad, derivado de la prosperidad material en lugar de la escasez?",
+      "chunk_index": 203,
+      "char_mid": 246847,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad > 3.2. Descripción y valoración crítica de la posmodernidad > 3.2.1. Consumismo"
+    },
+    {
+      "question": "¿Cómo se caracteriza la confrontación entre las culturas islámica y occidental desde una perspectiva social, política y económica, en términos de sus etapas históricas y sistemas de gobierno?",
+      "chunk_index": 357,
+      "char_mid": 419396,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.9. Cristianismo humilde: las lecciones del paganismo > 4.9.1. Occidente, islam y cristianismo"
+    },
+    {
+      "question": "¿Qué rasgo fundamental diferenciaba la incredulidad total, según la descripción de André Frossard, de la simple negación de la existencia divina?",
+      "chunk_index": 124,
+      "char_mid": 152140,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.7. Augusto Comte y el carácter obsoleto de la religión"
+    },
+    {
+      "question": "¿Qué efecto mutuo puede surgir cuando un evangelizador se relaciona con otras culturas, según lo expresado en el texto?",
+      "chunk_index": 352,
+      "char_mid": 414185,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.9. Cristianismo humilde: las lecciones del paganismo"
+    },
+    {
+      "question": "¿Qué tipo de formación planteaba Rousseau para que las personas pudieran coexistir socialmente sin caer en vicios, según las interpretaciones de Antonio Cruz?",
+      "chunk_index": 104,
+      "char_mid": 125646,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Qué paradoja se le atribuye al pensamiento marxista en relación con su postura hacia la fe y la consecución del bienestar social?",
+      "chunk_index": 147,
+      "char_mid": 183065,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.9. Marx y la dictadura del proletariado"
+    },
+    {
+      "question": "¿Qué tipo de fundamento bíblico permite a los creyentes interpretar el pasado y los propósitos divinos, ofreciendo una estructura para la comprensión y el razonamiento adecuado de la existencia?",
+      "chunk_index": 36,
+      "char_mid": 43712,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad > 1.1.2. El motivo cristiano: creación, caída y redención > 1.1.2.1. La soberanía de las esferas > 1.1.2.2. La antítesis del motivo cristiano"
+    },
+    {
+      "question": "¿Qué significado particular se le otorga a la prohibición bíblica de crear representaciones divinas, y cómo se conecta esta interpretación con la tendencia contemporánea de concebir a la deidad a imagen y semejanza del ser humano?",
+      "chunk_index": 268,
+      "char_mid": 318659,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.1. Comunicaciones > 4.1.1. La cultura de la imagen"
+    },
+    {
+      "question": "¿Qué dificultad se señala en relación con los intentos de lograr una gestión económica familiar saludable?",
+      "chunk_index": 200,
+      "char_mid": 243317,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad > 3.2. Descripción y valoración crítica de la posmodernidad > 3.2.1. Consumismo"
+    },
+    {
+      "question": "¿A pesar de su inicial inclinación por el estudio de las escrituras, qué principio central, diferente de la motivación religiosa tradicional, comenzó a definir la esencia del humanismo temprano?",
+      "chunk_index": 49,
+      "char_mid": 60263,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad > 1.1.2. El motivo cristiano: creación, caída y redención > 1.1.4. El motivo del humanismo secular: Naturaleza y libertad"
+    },
+    {
+      "question": "¿Qué impacto tiene la gran capacidad financiera de las corporaciones en la observancia de las leyes en naciones con estructuras gubernamentales frágiles, y qué se intenta prevenir con esto?",
+      "chunk_index": 282,
+      "char_mid": 336771,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.2. Economía > 4.2.1. Corporaciones transnacionales y multinacionales"
+    },
+    {
+      "question": "¿Qué elementos determinan la aprobación general de las acciones de un líder para asegurar su dominio, según la visión expuesta?",
+      "chunk_index": 75,
+      "char_mid": 90408,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Cómo afecta el narcisismo actual a la concepción de la igualdad entre las personas y a la solidez de los principios democráticos?",
+      "chunk_index": 226,
+      "char_mid": 272599,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad > 3.2.2.1. El auge del sentimiento > 3.2.3. Individualismo > 3.2.3.1. Diferencia y semejanza"
+    },
+    {
+      "question": "¿Qué evento específico provocó un cambio drástico en las actitudes favorables hacia la comunidad musulmana en las naciones occidentales industrializadas?",
+      "chunk_index": 317,
+      "char_mid": 375674,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.5. Migraciones > 4.5.2. Resistencia, asimilación o integración"
+    },
+    {
+      "question": "¿Qué factor subyace a una percepción dividida de la existencia y qué elementos esenciales de la realidad no logra comprender este factor?",
+      "chunk_index": 31,
+      "char_mid": 37254,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad > 1.1.2. El motivo cristiano: creación, caída y redención > 1.1.2.1. La soberanía de las esferas"
+    },
+    {
+      "question": "¿Cuáles son los motivos de optimismo y las inquietudes que suscita el sistema de participación ciudadana impulsado por la red?",
+      "chunk_index": 293,
+      "char_mid": 348630,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.3. Política > 4.3.1. La colaboración transnacional. > 4.3.1.1. La democracia de la información"
+    },
+    {
+      "question": "¿Qué fundamento filosófico guio a Tomás de Aquino para armonizar las ideas aristotélicas con los principios de la doctrina católica romana en relación con la naturaleza y la gracia?",
+      "chunk_index": 43,
+      "char_mid": 52165,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad > 1.1.2. El motivo cristiano: creación, caída y redención > 1.1.3. El motivo católico romano: Naturaleza y gracia"
+    },
+    {
+      "question": "¿Según un analista, cómo la concepción del pacto social, que prometía equidad, acabó afianzando la disparidad social?",
+      "chunk_index": 86,
+      "char_mid": 101609,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Qué concepto popular en el pensamiento secular contemporáneo del mundo desarrollado remite a las ideas de Rousseau, posiblemente como resultado de un sentimiento de culpa?",
+      "chunk_index": 103,
+      "char_mid": 124193,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Por qué la visión cristiana no interpreta la redención como la eliminación definitiva de la oposición entre el estado original y la condición caída del ser humano, sino como una coexistencia de fuerzas opuestas?",
+      "chunk_index": 34,
+      "char_mid": 40777,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad > 1.1.2. El motivo cristiano: creación, caída y redención > 1.1.2.1. La soberanía de las esferas > 1.1.2.2. La antítesis del motivo cristiano"
+    },
+    {
+      "question": "¿Cuál es la base fundamental del acuerdo social según la perspectiva política de Locke y en qué radica la diferencia esencial con la visión de Hobbes respecto a su naturaleza intrínseca?",
+      "chunk_index": 92,
+      "char_mid": 109362,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.4. John Locke y el carácter sagrado de la propiedad privada"
+    },
+    {
+      "question": "¿De qué manera las ideas de John Locke sentaron las bases para las democracias contemporáneas, pero al mismo tiempo facilitaron el desarrollo de un poder económico sin restricciones?",
+      "chunk_index": 96,
+      "char_mid": 113940,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Según la perspectiva teológica expuesta, cómo se armoniza la intervención divina que utiliza acciones reprobables para propósitos positivos, con la responsabilidad moral ineludible de los individuos que las ejecutan?",
+      "chunk_index": 112,
+      "char_mid": 136534,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.6. Hegel y las guerras como condición para el progreso"
+    },
+    {
+      "question": "¿Cómo la constante interacción con los medios visuales puede llevar a la pérdida de la determinación personal y de los grandes propósitos?",
+      "chunk_index": 214,
+      "char_mid": 257759,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad"
+    },
+    {
+      "question": "¿Qué dificultad particular se presenta para aquellos que niegan una deidad al intentar ofrecer una explicación lógica del universo y la existencia?",
+      "chunk_index": 338,
+      "char_mid": 399201,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.7. El universalismo y las religiones del mundo"
+    },
+    {
+      "question": "¿Cuándo se prevé la resolución definitiva de las tensiones fundamentales en la perspectiva cristiana y cuál es la actitud recomendada para los creyentes ante los logros y el progreso de la sociedad actual?",
+      "chunk_index": 37,
+      "char_mid": 44565,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad > 1.1.2. El motivo cristiano: creación, caída y redención > 1.1.2.1. La soberanía de las esferas > 1.1.2.2. La antítesis del motivo cristiano"
+    },
+    {
+      "question": "¿De qué manera las vivencias personales de Freud, específicamente sus interacciones familiares, ejemplifican la falacia de la neutralidad en la investigación científica al influir en sus postulados sobre comportamientos humanos extendidos?",
+      "chunk_index": 159,
+      "char_mid": 197070,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.10. Freud y el libre ejercicio de la sexualidad"
+    },
+    {
+      "question": "¿Qué figura religiosa destacada de Norteamérica fue impactada por la obra de Locke sobre la comprensión humana, y cuál era la perspectiva de Locke sobre la conexión entre la capacidad de razonar y las convicciones espirituales?",
+      "chunk_index": 91,
+      "char_mid": 108111,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.4. John Locke y el carácter sagrado de la propiedad privada"
+    },
+    {
+      "question": "¿Qué característica distintiva es la única que se designa al categorizar a las entidades como fundaciones, asociaciones o cooperativas?",
+      "chunk_index": 291,
+      "char_mid": 346789,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.3. Política > 4.3.1. La colaboración transnacional."
+    },
+    {
+      "question": "¿En qué asignatura y período académico futuro se profundizará sobre la integración de diversas perspectivas espirituales dentro del plan de estudios de Facter?",
+      "chunk_index": 343,
+      "char_mid": 404858,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.7. El universalismo y las religiones del mundo"
+    },
+    {
+      "question": "¿En qué asignatura y nivel académico se revisará la teoría de Aristóteles desde la perspectiva de la teología cristiana?",
+      "chunk_index": 14,
+      "char_mid": 15608,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad"
+    },
+    {
+      "question": "¿En qué parte específica de la conferencia de la asignatura Introducción al Pensamiento Cristiano se puede encontrar un estudio sobre las ideas de Kierkegaard?",
+      "chunk_index": 9,
+      "char_mid": 10334,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad"
+    },
+    {
+      "question": "¿Qué principio fundamental postula la corriente que considera la historia como la disciplina primordial para descifrar la realidad social, y cómo concibe la validez de los hechos y las manifestaciones culturales?",
+      "chunk_index": 194,
+      "char_mid": 235469,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad"
+    },
+    {
+      "question": "¿Cuál es la justificación detrás de la etiqueta de 'bárbaros modernos' aplicada a las poblaciones que se trasladan a otras naciones?",
+      "chunk_index": 376,
+      "char_mid": 441632,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización"
+    },
+    {
+      "question": "¿Según el texto, el sermón del Monte elogia a quienes se esfuerzan por establecer la paz o a quienes solo se oponen a la guerra?",
+      "chunk_index": 329,
+      "char_mid": 388221,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización"
+    },
+    {
+      "question": "Identifique la narrativa social contemporánea predominante que engloba otras ideas y mencione a la figura clave vinculada a ella.",
+      "chunk_index": 168,
+      "char_mid": 208117,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿De qué manera la combinación de la transformación espiritual y la comprensión divina confiere a los seguidores de Cristo la capacidad para contrarrestar la desunión característica de la era contemporánea?",
+      "chunk_index": 258,
+      "char_mid": 307512,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad"
+    },
+    {
+      "question": "¿Qué tipo de comportamiento hacia los residentes no nativos en Israel es fomentado por las directrices mosaicas, incluso considerando la selección divina de una nación y los enfrentamientos bélicos?",
+      "chunk_index": 324,
+      "char_mid": 383222,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización"
+    },
+    {
+      "question": "¿Cuál es la justificación para considerar que el islam tiene una postura potencialmente adversa hacia aquellos que no comparten su fe?",
+      "chunk_index": 378,
+      "char_mid": 443432,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización"
+    },
+    {
+      "question": "Según un autor citado, ¿qué diversas configuraciones pueden existir entre naciones y estados en la era actual, y cuáles son algunos ejemplos de cada una?",
+      "chunk_index": 320,
+      "char_mid": 378179,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización"
+    },
+    {
+      "question": "¿Por qué un número creciente de expertos considera que la restricción de la ciencia a explicaciones puramente materialistas podría obstaculizar su progreso?",
+      "chunk_index": 79,
+      "char_mid": 93492,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Qué corriente filosófica, atribuida a Augusto Comte, llevó el racionalismo cartesiano a sus últimas consecuencias, sentando las bases de la ciencia actual y dejando de lado las motivaciones religiosas cristianas que inicialmente impulsaron su desarrollo?",
+      "chunk_index": 84,
+      "char_mid": 99008,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿En qué sección del programa de estudio se puede consultar una exposición alternativa de las ideas de Locke, específicamente en el contexto de la filosofía y las creencias religiosas?",
+      "chunk_index": 93,
+      "char_mid": 110193,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Cuál es el origen de la verdadera integridad de un individuo, sea líder o no, que no se deja influenciar por la aceptación popular, sino por su fuero interno y su deber ante una autoridad superior?",
+      "chunk_index": 296,
+      "char_mid": 351707,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización"
+    },
+    {
+      "question": "¿Qué se solicita en el apartado número nueve?",
+      "chunk_index": 254,
+      "char_mid": 305336,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad"
+    },
+    {
+      "question": "¿Qué evaluación se hace de las ideas de Rousseau en términos de su simplicidad y los riesgos que podrían implicar?",
+      "chunk_index": 169,
+      "char_mid": 208787,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿De qué manera la perspectiva cristiana permite el desarrollo independiente de campos como el arte y la ciencia, mientras que simultáneamente los integra en una comprensión última y unificada de la existencia?",
+      "chunk_index": 253,
+      "char_mid": 304305,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad"
+    },
+    {
+      "question": "¿Qué interrogantes fundamentales se plantean sobre la coexistencia entre el islam y la cultura occidental, abarcando desde la percepción del extremismo hasta las implicaciones de los flujos migratorios y la postura eclesiástica ante la modernidad?",
+      "chunk_index": 379,
+      "char_mid": 444462,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización"
+    },
+    {
+      "question": "¿Qué conferencias se recomiendan para estudiar el pensamiento y la dialéctica de Hegel?",
+      "chunk_index": 6,
+      "char_mid": 7508,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad"
+    },
+    {
+      "question": "¿Cómo se denomina a la inclinación incontenible hacia el ejercicio de la autoridad?",
+      "chunk_index": 73,
+      "char_mid": 88264,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "Qué se busca lograr y qué amenazas subyacen en la idea de un reordenamiento global de poder?",
+      "chunk_index": 375,
+      "char_mid": 440534,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización"
+    },
+    {
+      "question": "¿Por qué la figura mítica de Narciso sirve como la mejor representación del egocentrismo de la era posmoderna?",
+      "chunk_index": 257,
+      "char_mid": 306468,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad"
+    },
+    {
+      "question": "¿Qué sugiere el empleo extendido de términos que aluden a lo actual y lo simultáneo acerca de la perdurabilidad de la modernidad, a pesar de las críticas a su proyecto?",
+      "chunk_index": 173,
+      "char_mid": 213135,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad"
+    },
+    {
+      "question": "¿De qué manera la tendencia al consumo excesivo en la sociedad actual puede fomentar acciones que se consideran moralmente incorrectas?",
+      "chunk_index": 256,
+      "char_mid": 305464,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad"
+    },
+    {
+      "question": "Qué corrientes de pensamiento posmodernas vinculadas a la moralidad se analizarán con mayor detenimiento?",
+      "chunk_index": 212,
+      "char_mid": 255475,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad"
+    },
+    {
+      "question": "¿Qué problemáticas contemporáneas son objeto de interrogación en la serie de planteamientos expuestos?",
+      "chunk_index": 373,
+      "char_mid": 438981,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización"
+    },
+    {
+      "question": "¿Qué iniciativa distintiva, aunque paradójica, del humanismo contemporáneo fue impulsada por Augusto Comte, y de qué manera buscó conciliar sus propias inconsistencias?",
+      "chunk_index": 170,
+      "char_mid": 209624,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Según el texto, qué idea cristiana complementaria propone John Stott para solucionar la contradicción inherente al pensamiento cristiano convencional y en qué momento se lograría esa armonización definitiva?",
+      "chunk_index": 60,
+      "char_mid": 74191,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad"
+    },
+    {
+      "question": "¿Cuál es la convención establecida para la procedencia de las citas textuales en este capítulo, a menos que se especifique lo contrario?",
+      "chunk_index": 65,
+      "char_mid": 79939,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Cuál es la crítica fundamental a la concepción freudiana respecto a la función atribuida a las principales estructuras psíquicas que propone para el ser humano?",
+      "chunk_index": 171,
+      "char_mid": 210635,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Cuál es el pilar fundamental de la economía global contemporánea y qué capacidad es indispensable para el éxito de las corporaciones a nivel mundial?",
+      "chunk_index": 277,
+      "char_mid": 330732,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.2. Economía"
+    },
+    {
+      "question": "¿Cómo se describe la naturaleza de la cultura humana en cuanto a su inherente capacidad para lo positivo y lo negativo, según la perspectiva del texto?",
+      "chunk_index": 144,
+      "char_mid": 178943,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.9. Marx y la dictadura del proletariado"
+    },
+    {
+      "question": "¿Qué impacto ha tenido el abandono de la razón en favor de la emoción en la posmodernidad sobre la calidad de la cultura, y qué principio utilizan los artistas de esa época para juzgar el valor de una creación?",
+      "chunk_index": 243,
+      "char_mid": 292880,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad > 3.2.2.1. El auge del sentimiento > 3.2.4. Nihilismo > 3.2.4.2. La cultura de la frivolidad"
+    },
+    {
+      "question": "¿Qué clase de perspectivas sobre la sociedad, originadas por la visión humanista no religiosa durante la modernidad reciente, serán el foco de estudio en el próximo apartado y por qué mantienen su vigencia en la época actual, denominada posmodernidad?",
+      "chunk_index": 58,
+      "char_mid": 71513,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad > 1.1.2. El motivo cristiano: creación, caída y redención > 1.1.4. El motivo del humanismo secular: Naturaleza y libertad"
+    },
+    {
+      "question": "¿Cuál es el motivo particular para volver a analizar el pensamiento de Descartes, a pesar de haber sido estudiado en cursos previos como Filosofía y Cristianismo?",
+      "chunk_index": 76,
+      "char_mid": 90876,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.2. René Descartes y la autonomía de la razón"
+    },
+    {
+      "question": "¿Por qué la visión cristiana sugiere que la defensa inquebrantable de una cultura particular resulta desfasada en el contexto actual?",
+      "chunk_index": 321,
+      "char_mid": 379605,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización"
+    },
+    {
+      "question": "¿Qué tipo de devoción es considerada la creencia principal y la motivación vital para una gran cantidad de jóvenes en Occidente, según el texto?",
+      "chunk_index": 246,
+      "char_mid": 296203,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad > 3.2.2.1. El auge del sentimiento > 3.2.4. Nihilismo > 3.2.4.2. La cultura de la frivolidad"
+    },
+    {
+      "question": "¿Qué fenómeno demográfico contemporáneo, potenciado por la interconexión global, se asemeja a las tendencias de asentamiento de civilizaciones antiguas y difiere de la estructura social predominante en periodos feudales?",
+      "chunk_index": 306,
+      "char_mid": 362661,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.4. Urbanismo"
+    },
+    {
+      "question": "¿Cuál es la definición de la idea cristiana reformada sobre la autonomía de los distintos ámbitos de la vida y cómo se puede mostrar visualmente?",
+      "chunk_index": 59,
+      "char_mid": 72680,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad"
+    },
+    {
+      "question": "¿Cuál es la razón principal para proponer el uso del término 'Occidente' como una denominación más adecuada para la cultura y sociedad, en lugar de 'Civilización Cristiana Occidental'?",
+      "chunk_index": 7,
+      "char_mid": 8624,
+      "cell_ref": "",
+      "breadcrumb": "1. Cultura y sociedad"
+    },
+    {
+      "question": "¿Qué distinción importante establece el Dr. Cruz sobre la relevancia del complejo de Edipo en el desarrollo personal y su mitificación como causa universal de problemas psicológicos?",
+      "chunk_index": 160,
+      "char_mid": 198476,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.10. Freud y el libre ejercicio de la sexualidad"
+    },
+    {
+      "question": "¿Cuál es la discrepancia entre la percepción de una llegada masiva de forasteros y la cantidad real de inmigrantes que se establecen, y qué rol desempeñan estos en el mercado laboral de los países receptores?",
+      "chunk_index": 311,
+      "char_mid": 369000,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.5. Migraciones > 4.5.1. Supervivencia y mano de obra barata"
+    },
+    {
+      "question": "¿Qué etapa vital, caracterizada por el juego y el placer, ha evolucionado de ser una fase natural a convertirse en un modelo aspiracional constante, según lo descrito en el texto?",
+      "chunk_index": 211,
+      "char_mid": 255075,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad > 3.2.2. Hedonismo"
+    },
+    {
+      "question": "¿Qué término acuñó Giovanni Sartori para describir al individuo moderno cuya percepción de la realidad está dominada por las imágenes visuales en lugar de la palabra escrita?",
+      "chunk_index": 265,
+      "char_mid": 314323,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.1. Comunicaciones > 4.1.1. La cultura de la imagen"
+    },
+    {
+      "question": "¿Qué elementos históricos y culturales se mencionan como los cimientos del predominio mundial de Estados Unidos y su modelo de gobierno representativo?",
+      "chunk_index": 356,
+      "char_mid": 417937,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.9. Cristianismo humilde: las lecciones del paganismo > 4.9.1. Occidente, islam y cristianismo"
+    },
+    {
+      "question": "Según Rousseau, ¿qué motivó la necesidad de un pacto social y cómo concebía la condición original del ser humano?",
+      "chunk_index": 105,
+      "char_mid": 127064,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Qué cautela se recomienda al evaluar presentaciones innovadoras de principios perdurables, y qué criterio deben superar para ser consideradas válidas a largo plazo?",
+      "chunk_index": 209,
+      "char_mid": 252674,
+      "cell_ref": "",
+      "breadcrumb": "3. Posmodernidad"
+    },
+    {
+      "question": "¿Qué nuevas modalidades de comercio ilícito y explotación humana se desarrollan en la parte de internet que no es indexada por los motores de búsqueda, y qué retos supone esto para los organismos de seguridad estatales?",
+      "chunk_index": 286,
+      "char_mid": 341843,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.2. Economía > 4.2.1. Corporaciones transnacionales y multinacionales > 4.2.1.1. Multinacionales del crimen"
+    },
+    {
+      "question": "¿Cómo caracterizaba Freud la creencia religiosa y qué mecanismo propuso para que la humanidad trascendiera esa fase, al alcanzar una madurez impulsada por el conocimiento del subconsciente?",
+      "chunk_index": 155,
+      "char_mid": 192605,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.10. Freud y el libre ejercicio de la sexualidad"
+    },
+    {
+      "question": "¿Qué motivó a Augusto Comte a proponer una forma de espiritualidad secular, con la lógica como su principio rector, para establecer una moralidad universal, tras reconocer que la mera racionalidad era insuficiente para este fin?",
+      "chunk_index": 120,
+      "char_mid": 147725,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.7. Augusto Comte y el carácter obsoleto de la religión"
+    },
+    {
+      "question": "¿Qué grupos delictivos de alcance global se mencionan por su capacidad de actuar en conjunto y desestabilizar naciones, y qué tipo de actividades ilícitas abarcan?",
+      "chunk_index": 285,
+      "char_mid": 340563,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.2. Economía > 4.2.1. Corporaciones transnacionales y multinacionales > 4.2.1.1. Multinacionales del crimen"
+    },
+    {
+      "question": "¿Qué pensador fue el primero en articular una estructura social fundamentada en un acuerdo implícito o explícito entre individuos para la convivencia?",
+      "chunk_index": 88,
+      "char_mid": 104474,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad"
+    },
+    {
+      "question": "¿Qué figura pública, identificada como católico, denunció una actitud de aversión hacia el cristianismo y con qué frase específica defendió los derechos de los creyentes en una sociedad inclusiva?",
+      "chunk_index": 370,
+      "char_mid": 435726,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.9. Cristianismo humilde: las lecciones del paganismo > 4.9.2. Cristianofobia esperanzadora"
+    },
+    {
+      "question": "¿Según el texto, cuál es la paradoja del acceso masivo a la información mediante la red global y los dispositivos modernos?",
+      "chunk_index": 261,
+      "char_mid": 310664,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.1. Comunicaciones"
+    },
+    {
+      "question": "¿Qué figura central es presentada como el único medio para acceder a la divinidad, según las afirmaciones citadas?",
+      "chunk_index": 344,
+      "char_mid": 405242,
+      "cell_ref": "",
+      "breadcrumb": "4. Globalización > 4.7. El universalismo y las religiones del mundo"
+    },
+    {
+      "question": "¿Cuál es la paradoja que se presenta cuando los detractores de la fe tradicional adoptan la ciencia como su principal sistema de creencias, según la influencia de Comte?",
+      "chunk_index": 122,
+      "char_mid": 150365,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.7. Augusto Comte y el carácter obsoleto de la religión"
+    },
+    {
+      "question": "¿Qué nociones fundamentales sobre la aspiración comunitaria y la tenencia de bienes individuales asimiló Marx de los planteamientos de Rousseau?",
+      "chunk_index": 154,
+      "char_mid": 191631,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.10. Freud y el libre ejercicio de la sexualidad"
+    },
+    {
+      "question": "¿Cuál es la discrepancia entre el carácter personal de Maquiavelo, según registros biográficos, y la percepción negativa generalizada asociada a su figura?",
+      "chunk_index": 67,
+      "char_mid": 81261,
+      "cell_ref": "",
+      "breadcrumb": "2. Modernidad > 2.1. Nicolás Maquiavelo y las razones de Estado"
+    }
+  ],
+  "learned_from": "../sociologia/Conferencia de Cultura, Sociedad y Cristianismo - Unificada.pdf",
+  "learned_at": 1785180677.5415106,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^CULTURA,\\\\s+SOCIEDAD\\\\s+Y\\\\s+CRISTIANISMO$' matches 'CULTURA, SOCIEDAD Y CRISTIANISMO' on 175 pages, no body hits",
+    "OK  heading_guards: 4 chapters numbered [1, 2, 3, 4], 62 subsections",
+    "OK  question_pattern: 22/552 paragraphs, 82% confirmed by an independent signal",
+    "FAIL footnote_pattern: degenerate: fires on 1/552 paragraphs"
+  ],
+  "tuning_history": []
+}

@@ -1,0 +1,28 @@
+# ADC overlay: mount Application Default Credentials into the api and worker.
+#
+#     docker compose -f docker-compose.yaml -f docker-compose.adc.yaml up -d
+#
+# Applied by the app only when it has actually found a credentials file, which
+# is why this is a separate overlay rather than a volume in the base file.
+# Compose creates a *directory* at the source path of a bind mount that does not
+# exist, so an unconditional mount on a machine without ADC would silently put an
+# empty directory where the credentials belong and fail at authentication with
+# no hint about the cause.
+#
+# Gemini Enterprise refuses API keys outright — `401 CREDENTIALS_MISSING, "API
+# keys are not supported by this API"` — so ADC is not one option among several.
+# It is the only authentication that works, which is why the file is mounted
+# rather than a key being passed.
+#
+# Read-only, like the provider secrets beside it: the container has no reason to
+# write to the user's credentials, and a refresh that rewrote them inside a
+# container would be lost with it.
+
+services:
+  api: &adc
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/adc.json
+    volumes:
+      - ${BRAIN_ADC_FILE}:/run/secrets/adc.json:ro
+
+  worker: *adc

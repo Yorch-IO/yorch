@@ -1,0 +1,328 @@
+{
+  "fingerprint": "61b524b4ac4b3182",
+  "slug": "hermeneutica-capitulo-4-61b524b4",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 30,
+    "heading_l2_max": 45
+  },
+  "question_pattern": null,
+  "footnote_pattern": "^\\d+\\s",
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.575,
+    "recall_at_5": 0.875,
+    "mrr_at_10": 0.7194,
+    "recall_at_5_dense_only": 0.95,
+    "noise_floor": 0.5898,
+    "chunks": 58,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Cuál es la única transgresión que, según los pasajes bíblicos mencionados, carece de posibilidad de ser perdonada?",
+      "chunk_index": 6,
+      "char_mid": 4356,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.1 Tema propiamente dicho"
+    },
+    {
+      "question": "¿Qué virtudes son consideradas de mayor importancia para la deidad que las ofrendas rituales?",
+      "chunk_index": 29,
+      "char_mid": 25575,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.2.1.1 Paráfrasis normal > 3.2.2 Resúmenes"
+    },
+    {
+      "question": "¿Cuál es la denominación del diagrama que organiza los encuentros de Jesús resucitado según el texto?",
+      "chunk_index": 51,
+      "char_mid": 42256,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6)"
+    },
+    {
+      "question": "¿Cuál es el procedimiento para elaborar una versión abreviada de un escrito, donde se extraen las nociones fundamentales para presentarlas de forma concisa?",
+      "chunk_index": 25,
+      "char_mid": 21071,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.2.1.1 Paráfrasis normal"
+    },
+    {
+      "question": "¿Cuáles son los versículos específicos de 1 Corintios que, tras una evaluación del texto y su contexto, se consideraron los más relevantes para abordar el tema de las apariciones del Mesías resucitado?",
+      "chunk_index": 45,
+      "char_mid": 38855,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6) > 3.2.5 Esquemas > 4.2.5.1 Pasos para hacer un esquema"
+    },
+    {
+      "question": "¿Qué declaración fundamental atribuyó Martín Lutero a la doctrina de la justificación por la fe en relación con la estabilidad de la iglesia?",
+      "chunk_index": 15,
+      "char_mid": 13024,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.3 Tópico doctrinal"
+    },
+    {
+      "question": "¿Qué organización educativa se menciona en este pasaje?",
+      "chunk_index": 49,
+      "char_mid": 41555,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6)"
+    },
+    {
+      "question": "¿Cuál era el nombre de nacimiento del apóstol Pablo y qué suceso específico marcó el momento en que comenzó a ser identificado por su apelativo más conocido?",
+      "chunk_index": 11,
+      "char_mid": 9737,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.2 Tópico biográfico"
+    },
+    {
+      "question": "¿Qué clase de convicción personal posibilita la justificación y de qué manera se vincula con la asignación de los logros de Cristo?",
+      "chunk_index": 18,
+      "char_mid": 15932,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.3 Tópico doctrinal"
+    },
+    {
+      "question": "¿Qué advertencia se hace a quien se abstiene de prestar ayuda a un semejante por la proximidad del año de la remisión de obligaciones?",
+      "chunk_index": 4,
+      "char_mid": 3132,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.1 Tema propiamente dicho"
+    },
+    {
+      "question": "¿Qué método se utiliza para condensar múltiples ideas o elementos específicos bajo una denominación más general, en lugar de enumerarlos individualmente?",
+      "chunk_index": 33,
+      "char_mid": 27622,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.2.1.1 Paráfrasis normal > 3.2.3 Cuadros sinópticos > 3.2.3.1 Pasos para hacer un cuadro sinóptico2"
+    },
+    {
+      "question": "¿Cuántas categorías de reinterpretación textual existen según la extensión o el impacto que generan en un escrito?",
+      "chunk_index": 24,
+      "char_mid": 19950,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica"
+    },
+    {
+      "question": "¿Qué entidad educativa se identifica en esta porción del texto?",
+      "chunk_index": 5,
+      "char_mid": 3743,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.1 Tema propiamente dicho"
+    },
+    {
+      "question": "¿Quién es el escritor de la obra titulada 'Panorama del Nuevo Testamento'?",
+      "chunk_index": 52,
+      "char_mid": 42681,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6)"
+    },
+    {
+      "question": "¿Quién es el autor del diccionario bíblico manual mencionado en la fuente?",
+      "chunk_index": 12,
+      "char_mid": 10366,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.2 Tópico biográfico"
+    },
+    {
+      "question": "¿Cuál es la dirección web que proporciona una guía sobre cómo elaborar un esquema sinóptico?",
+      "chunk_index": 32,
+      "char_mid": 26949,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.2.1.1 Paráfrasis normal > 3.2.3 Cuadros sinópticos > 3.2.3.1 Pasos para hacer un cuadro sinóptico2"
+    },
+    {
+      "question": "¿Qué día de la semana y en qué localidad se manifestó Jesús resucitado al apóstol Pedro, según la información proporcionada?",
+      "chunk_index": 50,
+      "char_mid": 41746,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6)"
+    },
+    {
+      "question": "¿Qué inconveniente se percibe en que las personas expresen las enseñanzas sagradas en su lengua materna, permitiéndoles así una mejor asimilación?",
+      "chunk_index": 22,
+      "char_mid": 18237,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica"
+    },
+    {
+      "question": "¿Qué pasaje de 1 Corintios se asocia con el trayecto del apóstol hacia una ciudad siria?",
+      "chunk_index": 56,
+      "char_mid": 43249,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6)"
+    },
+    {
+      "question": "¿En qué pasaje bíblico se describe una aparición de Jesús a un grupo de quinientas personas al mismo tiempo?",
+      "chunk_index": 54,
+      "char_mid": 43040,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6)"
+    },
+    {
+      "question": "¿Qué evangelio relata la aparición de Jesús a siete de sus discípulos en la región de Galilea?",
+      "chunk_index": 48,
+      "char_mid": 41154,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6)"
+    },
+    {
+      "question": "¿Qué cualidad física se destacaba en las hijas de Job?",
+      "chunk_index": 40,
+      "char_mid": 34279,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica"
+    },
+    {
+      "question": "¿Qué acontecimientos se le permitieron al adversario de Job en su primera agresión contra él, según el listado de interrogantes?",
+      "chunk_index": 39,
+      "char_mid": 32854,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica"
+    },
+    {
+      "question": "¿Cuál es la explicación del acto por el cual individuos moralmente imperfectos son vistos como correctos ante la presencia divina, y qué elemento es indispensable para que esto ocurra, descartando los esfuerzos personales?",
+      "chunk_index": 16,
+      "char_mid": 14060,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.3 Tópico doctrinal"
+    },
+    {
+      "question": "¿Qué obras y escritores se incluyen en la sección de referencias al concluir el material didáctico sobre hermenéutica?",
+      "chunk_index": 57,
+      "char_mid": 43653,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6)"
+    },
+    {
+      "question": "¿Cuáles son las formas comunes de organizar la exposición de un texto interpretado o un tema?",
+      "chunk_index": 19,
+      "char_mid": 16569,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.2 Presentación del texto interpretado"
+    },
+    {
+      "question": "¿Qué pasos debe seguir un individuo para alcanzar la remisión de sus faltas y cómo puede expresar públicamente su compromiso de fe para asegurar una existencia perpetua?",
+      "chunk_index": 9,
+      "char_mid": 7743,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.1 Tema propiamente dicho"
+    },
+    {
+      "question": "¿Qué individuos o grupos presenciaron la manifestación de Jesús tras su resurrección, y en qué pasajes bíblicos se documentan estos eventos?",
+      "chunk_index": 46,
+      "char_mid": 39844,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6) > 3.2.5 Esquemas > 4.2.5.1 Pasos para hacer un esquema"
+    },
+    {
+      "question": "¿En qué ciudad y tras cuánto tiempo se mostró Jesús a sus once apóstoles, según el relato de Juan 20:26-31?",
+      "chunk_index": 53,
+      "char_mid": 42842,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6)"
+    },
+    {
+      "question": "¿Según una fuente enciclopédica, cuál es el propósito de una síntesis escrita con un diseño visual que permite captar lo esencial de forma sencilla?",
+      "chunk_index": 30,
+      "char_mid": 26070,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.2.1.1 Paráfrasis normal > 3.2.3 Cuadros sinópticos"
+    },
+    {
+      "question": "¿Qué herramientas o enfoques se aconsejan para investigar a fondo un tema específico en los textos sagrados?",
+      "chunk_index": 2,
+      "char_mid": 1457,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.1 Tema propiamente dicho"
+    },
+    {
+      "question": "¿Qué beneficios se obtienen ineludiblemente al cambiar de actitud y ser sumergido en agua en el nombre de Jesús?",
+      "chunk_index": 8,
+      "char_mid": 6717,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.1 Tema propiamente dicho"
+    },
+    {
+      "question": "¿Cuáles son los segmentos escriturales principales que se consideran más contributivos al entendimiento de la doctrina de la justificación, una vez analizado el entorno de las referencias iniciales?",
+      "chunk_index": 14,
+      "char_mid": 11882,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos > 3.1.3 Tópico doctrinal"
+    },
+    {
+      "question": "¿Cuál es el propósito de la declaración que encapsula el tema central de un párrafo y cómo se utiliza para encabezar un esquema visual?",
+      "chunk_index": 35,
+      "char_mid": 29939,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.2.1.1 Paráfrasis normal > 3.2.3 Cuadros sinópticos > 3.2.3.1 Pasos para hacer un cuadro sinóptico2"
+    },
+    {
+      "question": "¿Qué tipos de vida vegetal fueron establecidos en la tierra durante el tercer ciclo de la creación, según lo descrito?",
+      "chunk_index": 34,
+      "char_mid": 28778,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.2.1.1 Paráfrasis normal > 3.2.3 Cuadros sinópticos > 3.2.3.1 Pasos para hacer un cuadro sinóptico2"
+    },
+    {
+      "question": "¿Cuál se propone como el concepto central para un esquema sobre la trayectoria de Job y qué ideas secundarias se sugieren para su desarrollo?",
+      "chunk_index": 41,
+      "char_mid": 35142,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica"
+    },
+    {
+      "question": "¿Qué criterios adicionales, aparte de los nombres de los individuos, son útiles para distinguir entre instancias repetidas de un mismo evento en un esquema, como las apariciones de Jesús?",
+      "chunk_index": 47,
+      "char_mid": 40533,
+      "cell_ref": "",
+      "breadcrumb": "15. 11:1-6, 13-20. 32:2, 5-6) > 3.2.5 Esquemas > 4.2.5.1 Pasos para hacer un esquema"
+    },
+    {
+      "question": "¿Qué aspiración manifestó Erasmo de Rotterdam sobre quiénes deberían tener acceso a la lectura del Evangelio?",
+      "chunk_index": 20,
+      "char_mid": 17232,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.2 Presentación del texto interpretado > 3.2.1 Paráfrasis"
+    },
+    {
+      "question": "¿Cuántos elementos temáticos principales se pueden distinguir al examinar un texto, un capítulo o un fragmento bíblico?",
+      "chunk_index": 1,
+      "char_mid": 740,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica > 3.1 Temas o Tópicos"
+    },
+    {
+      "question": "¿Qué secuencia de acciones se debe seguir al aplicar la interpretación bíblica para presentar un mensaje?",
+      "chunk_index": 0,
+      "char_mid": 301,
+      "cell_ref": "",
+      "breadcrumb": "4. Hermenéutica Práctica"
+    }
+  ],
+  "learned_from": "libros/done/Hermeneutica Capitulo 4.pdf",
+  "learned_at": 1785538214.4797168,
+  "revisions": 3,
+  "validation_notes": [
+    "OK  header_patterns: none proposed; nothing to strip",
+    "OK  heading_guards: 2 chapters numbered [4, 15], 14 subsections",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: 3/174 paragraphs, 100% confirmed by an independent signal"
+  ],
+  "tuning_history": []
+}

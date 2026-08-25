@@ -1,0 +1,36 @@
+[project]
+name = "brainworker"
+version = "0.1.0"
+description = "Temporal workflows and control API wrapping the docagent indexing engine"
+requires-python = ">=3.13"
+
+dependencies = [
+    "docagent",
+    "temporalio>=1.9",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "psycopg[binary,pool]>=3.2",
+    "httpx>=0.28.1",
+    "neo4j>=5.28",
+    "google-genai>=1.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+# Local path dependency for development. The Docker build installs ../docaget
+# explicitly before this package, so the resolver finds docagent already
+# present and this source is never consulted there.
+[tool.uv.sources]
+docagent = { path = "../docaget", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.hatch.build.targets.wheel]
+packages = ["brainworker"]

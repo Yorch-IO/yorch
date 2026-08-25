@@ -1,0 +1,35 @@
+---
+title: "Obertura en sí mayor"
+chapter: "Intro"
+page: 11
+notion_url: "https://app.notion.com/6cda6be8388c4ddcaa02a376f2838079"
+exported_at: "2026-08-24"
+---
+
+Here is the result of "view" for the Page with URL https://app.notion.com/p/6cda6be8388c4ddcaa02a376f2838079 as of 2023-02-11T15:31:43.102Z:
+<page url="https://app.notion.com/p/6cda6be8388c4ddcaa02a376f2838079" icon="⛳">
+<ancestor-path>
+<parent-data-source url="collection://271932c1-6703-475e-bf2b-6bbbaf43eb46" name="El reto de Dios "/>
+<ancestor-2-database url="https://app.notion.com/p/55af027fac854f7f819883c4fc517c29" title=""/>
+<ancestor-3-page url="https://app.notion.com/p/fef5b734b9b2447dad7eebfe543381dc" title=""/>
+<ancestor-4-page url="https://app.notion.com/p/997b9b9cdfb34359bc8877b86c83a93e" title=""/>
+<ancestor-5-page url="https://app.notion.com/p/36048d30065746f4b8c987c507c4aad6" title="Teología Integral"/>
+</ancestor-path>
+<properties>
+{"Capítulo":"Intro","Name":"Obertura en sí mayor","Página":11,"Tags":["0"],"Tema":["Contexto"],"url":"https://app.notion.com/p/6cda6be8388c4ddcaa02a376f2838079"}
+</properties>
+<content>
+El escenario latinoamericano se agita con el tema religioso en el cruce de siglos y milenios que vive hoy la I humanidad. Esta región del mundo ha sido deficientemente evangelizada debido a su complejidad geográfica, étnica, política y, por supuesto, espiritual. El descubrimiento de América, su conquista y colonización se produjeron en una época de trascendentales cambios históricos: se clausuraba la Edad Media, emergía el Renacimiento y el cristianismo experimentaba la traumática y saludable sacudida de la<br>Reforma Protestante.<br>El Imperio Español, cerradamente católico romano, quiso imponer a los aborígenes, no tan solo su hegemonía política, económica y militar, sino un estilo religioso tiránico que trajo por consecuencia un abierto rechazo o una adhesión de mala gana. De esta manera, los indígenas, y más tarde los africanos importados contra su voluntad, terminaron por mezclar las supersticiones propias de sus cultos paganos con elementos de la fe cristiana, en un sincretismo que hoy sobrevive en toda la región. Por otra parte, la evangelización protestante se inició en medio de enormes dificultades, en forma clandestina y paralelamente a la emergencia mundial del Imperio Británico, por oposición al español. Es natural, entonces, que las misiones formaran compartimientos estancos, origen de algunas iglesias bien orientadas, pero, también y lamenta. blemente, de muchas sectas autóctonas, alejadas del todo, o parcialmente, de la sana doctrina.
+A lo anterior debe sumarse la secularización, tardíamente llegada a Latinoamérica cuando ya se halla en marcha la pos-modernidad con todos sus formidables retos: las nuevas fron-teras, el fin de la llamada economía tecnológica, la creciente sofisticación de las guerras, el auge de los gigantes amarillos de Oriente, la transformación del socialismo, la globalización, la posible clonación de seres humanos; en una palabra, el presente velozmente futurizado.
+El cristianismo debe enfrentar hoy tres fenómenos negativos que le conciernen:
+- <mention-page url="https://app.notion.com/p/d7bcb0f831f149509978e964ecd05aab"/> . Sin darse cuenta, muchos grupos incorporan elementos exógenos, como los implantes de silicona de algunas damas.
+- Parálisis teológica . En este campo, todo es superficial y facilista. Se practica el inmediatismo. Hay un mar de conocimientos con un centímetro de profundidad.
+- Inanidad religiosa. El culto muerto y aburrido, o superficialmente emocional, a nadie salva ni regenera.<br>No hay vida, solo eclesiasticismo.
+Ante tales realidades esterilizantes proponemos:
+- Vitalismo espiritual: La creación se produce por una diástole-sístole del corazón de Dios, donde el Logos palpita como principio vital. Antes del antes.
+- <mention-page url="https://app.notion.com/p/03982133fc16401aa576d8a7f65ca3dc"/> teológico: La «eclessia semper reforman-da» que soñó el protestantismo hace ya medio mile-nio. Siempre ahora.
+- <mention-page url="https://app.notion.com/p/7b4be7826c244cb89b42964f94bf6708"/>  bíblico: El sagrado libro como Manual del Fabricante, con todas las instrucciones de manejo.<br>Antes, ahora, después.
+Estos tres elementos suman lo que a lo largo de este<br>ensayo llamaremos esencialismo.<br>Hace falta, pues, intentar un examen de los antecedentes, desarrollos y consecuencias de los fenómenos mencionados, en procura de un adecuado tratamiento. Urge buscar salidas hacia la consolidación de una iglesia latinoamericana que interprete correctamente la misión que le corresponde en su propio contexto, sin descartar que las ideas aquí planteadas puedan ser útiles en otras zonas geográficas y bajo otras cul-turas. En el cristianismo nada es local, todo se universaliza.<br>Al modo de una eclosión, desde Jerusalén, pasando por Judea y Samaria, y hasta lo último de la tierra, la luz se propaga. A partir de Colombia, mi país, puedo examinar a Latinoaméri-ca; a partir de Latinoamérica, mi continente, puedo analizar a la Tierra, mi planeta. Desde Casa sobre la Roca, mi iglesia, puedo abarcar con mirada periférica a toda la iglesia, si el Espíritu Santo me suministra su colirio fresco. Jamás pasemos por alto que este continente es hoy, sin duda alguna, el laboratorio de la nueva sociedad humana. Aquí se elabora el futuro.<br>Las anteriores consideraciones justifican este humilde esfuer-zo, que solo busca honrar el Nombre sobre todo nombre.<br>No tengo la ufanía de presentar estas observaciones como si ellas hubieran descifrado un enigma; son, tan solo, el planteamiento de un problema, o, quizás, una pieza que encaje dentro del gran rompecabezas que el cristianismo debe armar en el nuevo milenio. La Biblia nos informa cómo la apertura cristiana de Pablo y Bernabé al mundo gentil provocó suspicacia y rechazo en el círculo original de la iglesia, cerradamente judío; pero cómo el haber planteado francamente la nueva situación en el Concilio de Jerusalén (Hechos<br>15) trajo por consecuencia que después de mucha discusión el<br>Espíritu Santo diera la salida adecuada.<br>Latinoamérica no es Europa, ni Estados Unidos; no es ni siquiera ella misma todavía, está buscando su identidad, y bien puede hallarla a través del evangelio si este la interpre ta en su propio contexto, no bajo parámetros ajenos a su realidad. Así mismo, los hispanos desarraigados de sus países confrontan dificultades en entornos sociológicos extraños, y las iglesias que allí operan no interpretan sus necesidades.<br>Las páginas siguientes contienen comentarios de alguien que ha trajinado el acontecer latinoamericano durante casi treinta años de periodismo profesional; y, desde hace veinte, como ministro evangélico, mira a su continente a través de las Sagradas Escrituras. Este libro es el primer movimiento de una partida de ajedrez: peón-cuatro-rey, apertura de las blancas; que después jueguen las negras. Dios dirá si, más adelante, se necesita algún enroque; al fin y al cabo, él tiene dispuesto el jaque mate desde toda la eternidad.
+</content>
+</page>
+

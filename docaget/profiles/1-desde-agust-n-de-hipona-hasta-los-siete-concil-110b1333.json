@@ -1,0 +1,328 @@
+{
+  "fingerprint": "110b133388662111",
+  "slug": "1-desde-agust-n-de-hipona-hasta-los-siete-concil-110b1333",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.725,
+    "recall_at_5": 0.975,
+    "mrr_at_10": 0.8542,
+    "recall_at_5_dense_only": 0.975,
+    "noise_floor": 0.5984,
+    "chunks": 114,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Por cuánto tiempo Agustín mantuvo su estatus de mero oyente dentro del maniqueísmo y a qué sabio se le prometió que aclararía sus cuestionamientos?",
+      "chunk_index": 16,
+      "char_mid": 18985,
+      "cell_ref": "",
+      "breadcrumb": "1. AGUSTÍN DE HIPONA"
+    },
+    {
+      "question": "¿Cuál fue la razón principal por la que la asamblea optó por redactar una nueva declaración de fe en lugar de resolver las disputas doctrinales solo con referencias bíblicas?",
+      "chunk_index": 59,
+      "char_mid": 72035,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿Qué inquietaba a los obispos de Occidente sobre la censura de ciertos escritos?",
+      "chunk_index": 93,
+      "char_mid": 118761,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿De qué manera la imposición de la fe cristiana después de la conversión de Constantino alteró su esencia original, volviéndola menos voluntaria y más autoritaria?",
+      "chunk_index": 50,
+      "char_mid": 60406,
+      "cell_ref": "",
+      "breadcrumb": "2. LA IGLESIA MEDIEVAL > 2.2. Principales reinos bárbaros. > 2.3.5. Cristianismo entre los ostrogodos."
+    },
+    {
+      "question": "¿De qué raíces griegas se deriva la palabra que describe a los creyentes que afirmaban una sola esencia en la figura de Cristo, y qué significa literalmente?",
+      "chunk_index": 85,
+      "char_mid": 107905,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿Qué líder visigodo encabezó una revuelta contra el dominio imperial y cuáles fueron las medidas que tomaron los visigodos una vez que se establecieron de forma permanente en la península ibérica?",
+      "chunk_index": 32,
+      "char_mid": 38961,
+      "cell_ref": "",
+      "breadcrumb": "2. LA IGLESIA MEDIEVAL > 2.2. Principales reinos bárbaros. > 2.2.1. Los visigodos en España."
+    },
+    {
+      "question": "¿Qué corriente de pensamiento filosófico anterior al Concilio de Calcedonia contribuyó a la dificultad de conciliar la naturaleza divina con la humana en la figura de Cristo, al concebir la divinidad como radicalmente opuesta a lo terrenal?",
+      "chunk_index": 84,
+      "char_mid": 106531,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿Cuál fue la resolución final del concilio celebrado en Constantinopla en el año 553 respecto a los textos conocidos como los Tres Capítulos, y cómo fue finalmente aceptada por la iglesia de Occidente?",
+      "chunk_index": 94,
+      "char_mid": 119759,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿Qué argumentos se emplean para desestimar las interpretaciones simplistas sobre el colapso del Imperio Romano, que responsabilizan a la falta de devoción pagana o a la conducta de los cristianos?",
+      "chunk_index": 27,
+      "char_mid": 33050,
+      "cell_ref": "",
+      "breadcrumb": "2. LA IGLESIA MEDIEVAL > 2.1.1 Causas de la caída del Imperio Romano."
+    },
+    {
+      "question": "¿Qué iniciativa impulsó Justiniano para organizar el vasto cuerpo de leyes del Imperio y quién fue el jurista clave responsable de esta monumental compilación?",
+      "chunk_index": 90,
+      "char_mid": 114612,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿Cuánto tiempo se prolongó la profunda disputa teológica sobre el arrianismo en la parte oriental del Imperio antes de que fuera finalmente resuelta?",
+      "chunk_index": 38,
+      "char_mid": 45456,
+      "cell_ref": "",
+      "breadcrumb": "2. LA IGLESIA MEDIEVAL > 2.2. Principales reinos bárbaros. > 2.2.5. Los ostrogodos en Italia."
+    },
+    {
+      "question": "¿Qué reconocimiento obtuvo Agustín por parte de las generaciones futuras tras su dedicación a la vida espiritual y el abandono de su profesión como educador?",
+      "chunk_index": 12,
+      "char_mid": 13881,
+      "cell_ref": "",
+      "breadcrumb": "1. AGUSTÍN DE HIPONA"
+    },
+    {
+      "question": "¿Según la doctrina de Arrio, cómo se concebía la naturaleza de Jesucristo en relación con su origen y la forma en que adquirió el título de 'Hijo de Dios'?",
+      "chunk_index": 64,
+      "char_mid": 78945,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿Qué condiciones particulares en la península itálica contribuyeron al incremento de la influencia del líder religioso de Roma?",
+      "chunk_index": 49,
+      "char_mid": 59198,
+      "cell_ref": "",
+      "breadcrumb": "2. LA IGLESIA MEDIEVAL > 2.2. Principales reinos bárbaros. > 2.3.5. Cristianismo entre los ostrogodos."
+    },
+    {
+      "question": "¿Qué dos objeciones fundamentales tenía Agustín respecto a la fe cristiana, una sobre la presentación de sus textos sagrados y otra sobre la procedencia de la maldad en el mundo?",
+      "chunk_index": 15,
+      "char_mid": 17584,
+      "cell_ref": "",
+      "breadcrumb": "1. AGUSTÍN DE HIPONA"
+    },
+    {
+      "question": "¿Qué corrientes teológicas iniciales sostenían que la encarnación de Jesús era solo una apariencia o que su existencia era puramente humana, sin la presencia divina?",
+      "chunk_index": 68,
+      "char_mid": 84627,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿En qué lugar específico experimentó Agustín su transformación personal y qué pasos iniciales tomó en relación con su fe y su ocupación profesional tras ese suceso?",
+      "chunk_index": 20,
+      "char_mid": 24508,
+      "cell_ref": "",
+      "breadcrumb": "1. AGUSTÍN DE HIPONA"
+    },
+    {
+      "question": "¿Cuántas doctrinas heterodoxas importantes afectaron a la Iglesia en el Imperio Romano de Oriente y en qué período histórico?",
+      "chunk_index": 55,
+      "char_mid": 66217,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿Podría describir la secuencia de ubicaciones a las que fue confinado Nestorio tras ser depuesto?",
+      "chunk_index": 76,
+      "char_mid": 95380,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿Cómo se explica en el texto que el mensaje divino ha perdurado a través de las generaciones, a pesar de las imperfecciones de los creyentes y de la aparente desviación de la institución eclesiástica en ciertos momentos?",
+      "chunk_index": 10,
+      "char_mid": 12552,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿En qué consiste la doctrina teológica denominada Apolinarismo?",
+      "chunk_index": 110,
+      "char_mid": 137340,
+      "cell_ref": "",
+      "breadcrumb": "4. LOS TRES CREDOS"
+    },
+    {
+      "question": "¿Qué figura histórica se menciona como punto de partida para el contenido de esta sección?",
+      "chunk_index": 0,
+      "char_mid": 21,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuáles fueron algunos de los factores que contribuyeron a la desintegración del Imperio Romano en Occidente?",
+      "chunk_index": 5,
+      "char_mid": 5196,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué postura se expone en la obra 'El Reto De Dios' de un determinado autor eclesiástico con respecto a las reuniones conciliares?",
+      "chunk_index": 111,
+      "char_mid": 138177,
+      "cell_ref": "",
+      "breadcrumb": "4. LOS TRES CREDOS"
+    },
+    {
+      "question": "¿Qué grupos de origen no romano se asentaron en el norte de África, la Galia, las islas británicas e Italia, según el índice de contenidos?",
+      "chunk_index": 6,
+      "char_mid": 7158,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué controversias conciliares y formulaciones de credo se enumeran en esta sección?",
+      "chunk_index": 7,
+      "char_mid": 8751,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué acontecimiento particular, que involucra a una figura de la realeza y un caudillo extranjero, evidencia la atracción de algunos romanos hacia la vida más allá de sus fronteras?",
+      "chunk_index": 31,
+      "char_mid": 38327,
+      "cell_ref": "",
+      "breadcrumb": "2. LA IGLESIA MEDIEVAL > 2.1.1 Causas de la caída del Imperio Romano. > 2.1.1.4 Atracción de los bárbaros hacia los romanos."
+    },
+    {
+      "question": "¿Qué líder militar depuso al último gobernante simbólico del Imperio Romano de Occidente y qué grupo tomó el control de la península itálica después de este evento?",
+      "chunk_index": 36,
+      "char_mid": 42893,
+      "cell_ref": "",
+      "breadcrumb": "2. LA IGLESIA MEDIEVAL > 2.2. Principales reinos bárbaros. > 2.2.5. Los ostrogodos en Italia."
+    },
+    {
+      "question": "Después del deceso de su madre, ¿cómo se describió el estilo de vida que Agustín eligió en su retiro y qué corriente de pensamiento aún se reflejaba en sus primeras composiciones escritas?",
+      "chunk_index": 21,
+      "char_mid": 25571,
+      "cell_ref": "",
+      "breadcrumb": "1. AGUSTÍN DE HIPONA"
+    },
+    {
+      "question": "¿Qué movimientos o congregaciones actuales se identifican con las posturas teológicas conocidas como Modalismo y Arrianismo?",
+      "chunk_index": 65,
+      "char_mid": 80358,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿Qué fundamentos teológicos principales emplearon los partidarios de las representaciones visuales para justificar la creación de imágenes, relacionándolos con la encarnación de Cristo y la condición del ser humano?",
+      "chunk_index": 101,
+      "char_mid": 127970,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿Qué descubrimiento filosófico impulsó a Agustín a buscar la verdad, dirigiéndolo hacia el maniqueísmo, y cuál era la creencia principal de esta religión sobre la composición interna del ser humano?",
+      "chunk_index": 14,
+      "char_mid": 16321,
+      "cell_ref": "",
+      "breadcrumb": "1. AGUSTÍN DE HIPONA"
+    },
+    {
+      "question": "¿Qué centros eclesiásticos principales ejercían autoridad sobre obispados regionales desde el siglo IV, y cuáles eran?",
+      "chunk_index": 51,
+      "char_mid": 61917,
+      "cell_ref": "",
+      "breadcrumb": "2. LA IGLESIA MEDIEVAL > 2.2. Principales reinos bárbaros. > 2.3.5. Cristianismo entre los ostrogodos."
+    },
+    {
+      "question": "¿Cuáles son algunos de los títulos de libros y autores mencionados en las secciones de bibliografía principal y complementaria?",
+      "chunk_index": 112,
+      "char_mid": 138901,
+      "cell_ref": "",
+      "breadcrumb": "4. LOS TRES CREDOS"
+    },
+    {
+      "question": "¿Qué fenómeno migratorio de origen asiático, impulsado por cambios climáticos, forzó a las tribus germánicas a establecerse dentro de las fronteras del Imperio Romano, dando origen a nuevas entidades políticas en la Europa medieval?",
+      "chunk_index": 30,
+      "char_mid": 37521,
+      "cell_ref": "",
+      "breadcrumb": "2. LA IGLESIA MEDIEVAL > 2.1.1 Causas de la caída del Imperio Romano."
+    },
+    {
+      "question": "¿Qué acciones de un pueblo germánico en el norte de África dieron origen al significado peyorativo actual de una palabra?",
+      "chunk_index": 39,
+      "char_mid": 46589,
+      "cell_ref": "",
+      "breadcrumb": "2. LA IGLESIA MEDIEVAL > 2.2. Principales reinos bárbaros. > 2.3.1. Cristianismo entre los vándalos."
+    },
+    {
+      "question": "¿Qué herejía concerniente a la naturaleza divina del Espíritu Santo fue rechazada, resultando en la adición de nuevas afirmaciones a un credo fundamental y en su posterior denominación con un nombre compuesto?",
+      "chunk_index": 72,
+      "char_mid": 89578,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    },
+    {
+      "question": "¿Qué se afirma acerca de nuestra inclusión en los eventos espirituales y la continuidad del designio divino?",
+      "chunk_index": 11,
+      "char_mid": 13619,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué grupos de invasores contribuyeron al colapso del Imperio Romano y a la reconfiguración del continente europeo?",
+      "chunk_index": 3,
+      "char_mid": 2702,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué nombres se les dieron a las dos facciones que aparecieron en el debate sobre las representaciones religiosas y cuál era el significado de cada término?",
+      "chunk_index": 100,
+      "char_mid": 127042,
+      "cell_ref": "",
+      "breadcrumb": "3. LOS CONCILIOS ECUMÉNICOS."
+    }
+  ],
+  "learned_from": "libros/done/1. DESDE AGUSTÍN DE HIPONA HASTA LOS SIETE CONCILIOS ECUMÉNICOS.pdf",
+  "learned_at": 1785524608.3713317,
+  "revisions": 3,
+  "validation_notes": [
+    "OK  header_patterns: none proposed; nothing to strip",
+    "FAIL heading_guards: level-1 numbering is [2, 5, 6, 7], which is not contiguous",
+    "OK  question_pattern: 2/165 paragraphs, 100% confirmed by an independent signal",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

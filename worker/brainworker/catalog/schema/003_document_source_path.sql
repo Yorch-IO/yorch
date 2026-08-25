@@ -1,0 +1,15 @@
+-- Where to read this document again.
+--
+-- `source_key` answers a different question and cannot answer this one. It is
+-- library-relative on purpose, so that moving a library root does not orphan
+-- every document in it — which is exactly what makes it unable to name a file
+-- on disk. Identity and location are two facts, and the catalog stored only the
+-- first.
+--
+-- Nullable, and the null is meaningful: documents imported before this
+-- migration have no recorded path, so re-index refuses them by name rather than
+-- guessing a path and failing somewhere less obvious. It can go stale too — a
+-- file moved after import leaves this pointing at nothing — which has the same
+-- standing as a folder that was unmounted, already modelled by
+-- `present`/`absent_since`.
+ALTER TABLE document ADD COLUMN source_path text;

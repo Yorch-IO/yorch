@@ -1,0 +1,328 @@
+{
+  "fingerprint": "f2e8acf6ba32e1d4",
+  "slug": "clase-4-clases-de-sermones-f2e8acf6",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.475,
+    "recall_at_5": 0.975,
+    "mrr_at_10": 0.6879,
+    "recall_at_5_dense_only": 0.925,
+    "noise_floor": 0.5719,
+    "chunks": 42,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Qué estrategia se propone para construir un sermón textual, donde cada vocablo significativo de un pasaje se transforma en un punto central de la exposición?",
+      "chunk_index": 6,
+      "char_mid": 6499,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera este enfoque de sermón permite que la enseñanza espiritual surja de forma interna en el oyente, en lugar de ser impuesta externamente?",
+      "chunk_index": 32,
+      "char_mid": 27580,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué consideraciones son importantes al decidir qué facetas de la vida de un personaje bíblico se deben enfatizar en una exposición, y cuál es el propósito de seleccionar un texto escritural principal para guiar dicha enseñanza?",
+      "chunk_index": 26,
+      "char_mid": 22807,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué cualidades distinguen la convocatoria divina a la interacción y la certidumbre de su contestación, incluso si no se alinea con nuestras anticipaciones?",
+      "chunk_index": 14,
+      "char_mid": 14245,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la característica fundamental que distingue a una homilía que busca revelar el sentido intrínseco de un pasaje bíblico, en oposición a otras modalidades de predicación?",
+      "chunk_index": 35,
+      "char_mid": 29712,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "Según un ejemplo de sermón, ¿qué momentos iniciales de la vida de David se destacan para ilustrar cómo Dios elige y prepara a las personas, y cómo la fe permite superar grandes obstáculos?",
+      "chunk_index": 23,
+      "char_mid": 19769,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el propósito fundamental de una predicación que examina las trayectorias de personajes bíblicos para la reflexión personal del oyente?",
+      "chunk_index": 25,
+      "char_mid": 21778,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué métodos se sugieren para asegurar la comprensión profunda de un pasaje bíblico antes de su desarrollo, y qué versículo se cita como ejemplo para un mensaje?",
+      "chunk_index": 5,
+      "char_mid": 5473,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué cualidad esencial de David, aparte de la perfección, lo hizo ser considerado un individuo afín a la voluntad divina?",
+      "chunk_index": 24,
+      "char_mid": 20743,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la tercera estrategia para organizar un sermón basado en el texto y cómo se distingue de un examen meramente gramatical o literario?",
+      "chunk_index": 8,
+      "char_mid": 8683,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál método de predicación se caracteriza por desarrollar su mensaje central y puntos principales a partir de un segmento bíblico muy conciso, como uno o dos versículos, sin incorporar textos adicionales?",
+      "chunk_index": 2,
+      "char_mid": 2611,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el papel del Espíritu Santo en la revelación de verdades y la provisión de dirección durante la oración, según lo expuesto en el pasaje?",
+      "chunk_index": 15,
+      "char_mid": 15343,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo de exposición religiosa tiene como fin lograr una comprensión exhaustiva de una doctrina, enlazando preceptos bíblicos desde el inicio hasta el final de las escrituras, y se imparte frecuentemente en varias sesiones?",
+      "chunk_index": 11,
+      "char_mid": 11573,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué enfoque se debe adoptar para organizar el contenido de un sermón biográfico en secciones, y qué propósito debe cumplir cada una de esas partes?",
+      "chunk_index": 27,
+      "char_mid": 23433,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo de estructura de predicación podría derivarse de este pasaje para fomentar una práctica de oración más intencionada y segura en la congregación?",
+      "chunk_index": 16,
+      "char_mid": 16036,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué orientaciones se brindan para elegir un texto bíblico destinado a la predicación, y cómo se sugiere cultivar la capacidad de discernimiento espiritual?",
+      "chunk_index": 4,
+      "char_mid": 4535,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué métodos de investigación profunda se sugieren para asegurar una comprensión cabal de los pasajes bíblicos y evitar interpretaciones descontextualizadas al preparar un mensaje?",
+      "chunk_index": 12,
+      "char_mid": 12444,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué estilo de predicación se basa en la trayectoria de una figura bíblica, incluyendo sus fortalezas y debilidades, para ofrecer principios que inspiren y permitan a los oyentes identificarse con situaciones de la vida real?",
+      "chunk_index": 1,
+      "char_mid": 1609,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué proceso y elementos debe considerar un orador para interpretar el significado original de un texto sagrado y aplicarlo pertinentemente a la realidad actual?",
+      "chunk_index": 36,
+      "char_mid": 30681,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué solicitud poco convencional le hizo el profeta a la mujer que se preparaba para su última comida en un momento de gran necesidad?",
+      "chunk_index": 30,
+      "char_mid": 25599,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "Al elaborar un mensaje religioso enfocado en un asunto particular, ¿cuál es la consideración inicial más importante y qué categorías de enseñanzas se pueden seleccionar?",
+      "chunk_index": 19,
+      "char_mid": 17080,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la implicación de que la persona de Jesús no sea el eje central de las elecciones y del progreso espiritual?",
+      "chunk_index": 40,
+      "char_mid": 33626,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué interrogantes se pueden plantear a la congregación para que reflexionen sobre la calidad y la actitud de su comunicación con lo divino?",
+      "chunk_index": 17,
+      "char_mid": 16346,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué busca provocar en la audiencia un mensaje basado en una historia en términos de reflexión individual y acciones concretas?",
+      "chunk_index": 34,
+      "char_mid": 29076,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué parábolas o narraciones bíblicas se citan como ejemplos de cómo la audiencia puede vivenciar las lecciones y cuestionar su propia conducta al verse reflejados en los personajes?",
+      "chunk_index": 31,
+      "char_mid": 26610,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué aspectos son fundamentales en la parte final de un sermón para fomentar una modificación en la conducta del público?",
+      "chunk_index": 21,
+      "char_mid": 17995,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la finalidad de un mensaje biográfico para la reflexión personal de los oyentes y qué tipo de cierre se considera esencial para lograr ese impacto?",
+      "chunk_index": 28,
+      "char_mid": 23821,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo de impacto positivo puede generar un mensaje religioso bien elaborado que se enfoca en un tema específico dentro de una comunidad creyente?",
+      "chunk_index": 18,
+      "char_mid": 16690,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera una exposición religiosa consigue que los oyentes se sientan partícipes de los sucesos de un pasaje sagrado, experimentando lo mismo que sus protagonistas, y qué función desempeña el orador para lograr esta conexión?",
+      "chunk_index": 29,
+      "char_mid": 24529,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la finalidad de una homilía donde cada punto se deriva directamente de un fragmento escritural, y qué herramientas debe emplear el orador para asegurar la exactitud de su interpretación?",
+      "chunk_index": 3,
+      "char_mid": 3557,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuáles son algunas expresiones que se pueden emplear para organizar una homilía que se base en conceptos completos, en contraste con el uso de términos individuales?",
+      "chunk_index": 7,
+      "char_mid": 7669,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué objetivo primordial busca alcanzar una disertación religiosa que se enfoca en un fragmento bíblico particular para la audiencia?",
+      "chunk_index": 10,
+      "char_mid": 10596,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué pasaje de las escrituras se presenta como modelo para la elaboración de un sermón expositivo y qué aspectos de la supremacía de Cristo se destacan en su análisis?",
+      "chunk_index": 37,
+      "char_mid": 31707,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el remedio escritural para la preocupación en la vida de un creyente, y qué otras funciones cumple esta práctica espiritual en su desarrollo personal?",
+      "chunk_index": 9,
+      "char_mid": 9608,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera la enseñanza que desglosa los textos sagrados impacta positivamente a quien la imparte y a quienes la escuchan?",
+      "chunk_index": 41,
+      "char_mid": 34237,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué método de predicación se fundamenta en la interpretación minuciosa de uno o dos pasajes bíblicos concretos, extrayendo sus ideas principales directamente de la composición original del texto?",
+      "chunk_index": 0,
+      "char_mid": 536,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el procedimiento para seleccionar el pasaje escritural central que guiará el mensaje y cómo se articulan los puntos clave para su desarrollo?",
+      "chunk_index": 20,
+      "char_mid": 17565,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué aspectos fundamentales debe considerar un orador al examinar detalladamente un relato para convertir una narración sencilla en una comunicación que conmueva profundamente?",
+      "chunk_index": 33,
+      "char_mid": 28503,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la esencia de un método de predicación que prioriza la voz del texto bíblico y qué elementos fundamentales se proclaman como suficientes en la figura de Cristo?",
+      "chunk_index": 39,
+      "char_mid": 33281,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué función primordial se le asigna a Cristo en la formación y el soporte de todo lo existente?",
+      "chunk_index": 38,
+      "char_mid": 32675,
+      "cell_ref": "",
+      "breadcrumb": ""
+    }
+  ],
+  "learned_from": "libros/CLASE 4. Clases de sermones..pdf",
+  "learned_at": 1785540742.9246986,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^TIPOS\\\\s+DE\\\\s+SERMON$' matches 'TIPOS DE SERMON' on 12 pages, no body hits",
+    "FAIL heading_guards: l1_max=200 admits no level-1 headings at all",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

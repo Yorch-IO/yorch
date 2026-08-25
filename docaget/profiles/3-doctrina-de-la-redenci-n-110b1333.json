@@ -1,0 +1,286 @@
+{
+  "fingerprint": "110b133388662111",
+  "slug": "3-doctrina-de-la-redenci-n-110b1333",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.7353,
+    "recall_at_5": 0.9118,
+    "mrr_at_10": 0.8298,
+    "recall_at_5_dense_only": 0.9706,
+    "noise_floor": 0.5772,
+    "chunks": 34,
+    "eval_questions": 34
+  },
+  "evalset": [
+    {
+      "question": "¿Qué sufrimientos y degradaciones experimentaban las personas esclavizadas al ser ofrecidas para su compra, según la representación de la esclavitud africana?",
+      "chunk_index": 3,
+      "char_mid": 4468,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Qué diversas funciones o deberes desempeñaba la figura del redentor familiar según las antiguas leyes hebreas?",
+      "chunk_index": 13,
+      "char_mid": 15403,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.3. El pariente redentor"
+    },
+    {
+      "question": "¿Cómo se caracteriza la vida de los creyentes una vez que han sido rescatados del dominio del pecado, y qué papel desempeñan en el enfrentamiento espiritual que todavía continúa?",
+      "chunk_index": 24,
+      "char_mid": 26943,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención > 3.5.2. Redención presente"
+    },
+    {
+      "question": "¿Qué cualidad intrínseca, según la postura de R. C. Sproul, afecta incluso a las acciones más loables de una persona que no ha sido redimida?",
+      "chunk_index": 11,
+      "char_mid": 13874,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Qué cualidad fundamental se atribuye a la liberación divina, según los textos bíblicos, en cuanto a su estado de finalización y la ausencia de necesidad de aportación humana?",
+      "chunk_index": 22,
+      "char_mid": 25048,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención"
+    },
+    {
+      "question": "¿Qué figura literaria francesa es citada para argumentar que la única fuerza reside en la moralidad dedicada a la equidad?",
+      "chunk_index": 7,
+      "char_mid": 9133,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Qué aspecto distintivo de la esperanza cristiana la diferencia de las creencias antiguas sobre la inmortalidad del alma, y cuál es su máxima expresión?",
+      "chunk_index": 27,
+      "char_mid": 29952,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención > 3.5.3. Redención futura"
+    },
+    {
+      "question": "¿Qué tipo de esfuerzo constante se requiere para la alimentación diaria a lo largo de la existencia?",
+      "chunk_index": 29,
+      "char_mid": 32454,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención > 3.5.3. Redención futura"
+    },
+    {
+      "question": "¿Qué emociones experimentó el profeta Oseas ante la deslealtad de su pareja y cuál fue la instrucción divina precisa que recibió para con ella, incluyendo las acciones de afecto, cuidado y amparo?",
+      "chunk_index": 5,
+      "char_mid": 6257,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Qué facultad de decisión persiste en el individuo tras la corrupción de su autonomía primigenia, aunque no sea la libertad en su sentido original?",
+      "chunk_index": 8,
+      "char_mid": 10283,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Qué conceptos lingüísticos del griego se utilizan para explicar la idea de liberación y cuál es el sentido particular de cada uno?",
+      "chunk_index": 2,
+      "char_mid": 3107,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Qué característica esencial debe poseer una liberación para ser catalogada como redención, a diferencia de una liberación forzosa?",
+      "chunk_index": 16,
+      "char_mid": 18189,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.4. El precio de la redención"
+    },
+    {
+      "question": "¿Cómo se describe la influencia del pecado, tanto de seres celestiales como humanos, en la totalidad de la creación, incluyendo la explicación de fenómenos como la entropía y las catástrofes naturales?",
+      "chunk_index": 28,
+      "char_mid": 31449,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención > 3.5.3. Redención futura"
+    },
+    {
+      "question": "¿Qué suceso, descrito en el pasaje, otorgaba la libertad a un individuo que había causado una muerte accidental, permitiéndole dejar su santuario sin riesgo de venganza?",
+      "chunk_index": 14,
+      "char_mid": 16360,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.3. El pariente redentor"
+    },
+    {
+      "question": "¿Qué principio describe la inclinación ineludible de todo lo existente hacia la desorganización y el deterioro progresivo?",
+      "chunk_index": 30,
+      "char_mid": 32592,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención > 3.5.3. Redención futura"
+    },
+    {
+      "question": "¿Cuál es la razón por la que el adversario carece de la potestad para reclamar una compensación por la liberación de los individuos?",
+      "chunk_index": 19,
+      "char_mid": 21580,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.4. El precio de la redención"
+    },
+    {
+      "question": "¿Cuáles son los puntos clave de la doctrina de la redención que se someten a examen en este material?",
+      "chunk_index": 33,
+      "char_mid": 36075,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Qué características definen la existencia futura para los creyentes, según la promesa, y qué aflicciones ya no estarán presentes en ese nuevo estado?",
+      "chunk_index": 32,
+      "char_mid": 35044,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención > 3.5.3. Redención futura"
+    },
+    {
+      "question": "¿Según Malcolm Smith, cuál fue el propósito divino al elegir a Oseas para manifestar una forma de afecto que no se puede describir con palabras, y cómo era visto este profeta por la comunidad de Israel?",
+      "chunk_index": 4,
+      "char_mid": 5257,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Qué pasaje bíblico describe la expectativa de la creación de ser liberada de su estado de esclavitud y corrupción, extendiendo la redención más allá de la humanidad?",
+      "chunk_index": 31,
+      "char_mid": 33604,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención > 3.5.3. Redención futura"
+    },
+    {
+      "question": "¿Cuál es la finalidad de la existencia de obstáculos constantes en la vida de los creyentes, según la analogía con la experiencia de Israel en su asentamiento?",
+      "chunk_index": 26,
+      "char_mid": 28928,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención > 3.5.2. Redención presente"
+    },
+    {
+      "question": "¿Qué doctrina se considera la más crucial para desentrañar la noción bíblica de salvación y cuál es su esencia fundamental?",
+      "chunk_index": 0,
+      "char_mid": 1001,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿De qué manera se caracterizaba la situación anterior de los creyentes, donde eran compelidos a servir a sus adversarios debido al engaño y la tiranía?",
+      "chunk_index": 25,
+      "char_mid": 27988,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención > 3.5.2. Redención presente"
+    },
+    {
+      "question": "¿Por qué los seguidores de la fe no experimentan completamente todos los resultados de su salvación, a pesar de que esta ya se ha concretado?",
+      "chunk_index": 21,
+      "char_mid": 24190,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención"
+    },
+    {
+      "question": "¿Cuál es la enseñanza principal sobre el amor de Dios y la liberación humana del pecado, ilustrada mediante la historia del profeta Oseas y su cónyuge?",
+      "chunk_index": 6,
+      "char_mid": 7978,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Qué pasaje de la Biblia se menciona para describir la situación de la humanidad como cautiva del pecado sin la presencia de Cristo?",
+      "chunk_index": 1,
+      "char_mid": 2143,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Por qué se considera que la libertad que la humanidad cree poseer es engañosa y quién es presentado como el único capaz de redimir verdaderamente a las personas del control del pecado?",
+      "chunk_index": 12,
+      "char_mid": 14590,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Cuáles son las influencias internas y externas que, de acuerdo con las escrituras y la vivencia humana, restringen la capacidad del ser humano para ejercer su libre albedrío tal como fue concebido originalmente?",
+      "chunk_index": 9,
+      "char_mid": 11391,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿Qué efectos perjudiciales genera la continua presencia de la transgresión en la comunidad de creyentes, tanto en su relación con lo divino como frente al escrutinio público?",
+      "chunk_index": 23,
+      "char_mid": 26090,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.5. Los tiempos de la redención > 3.5.2. Redención presente"
+    },
+    {
+      "question": "¿Qué práctica ancestral tenía como objetivo asegurar la perpetuación del nombre de un hombre que moría sin herederos, y a quién se le asignaba inicialmente esta responsabilidad?",
+      "chunk_index": 17,
+      "char_mid": 18795,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.4. El precio de la redención"
+    },
+    {
+      "question": "¿Cuál fue el impulso primordial detrás del plan divino para la salvación humana, que implicó un sacrificio tan grande?",
+      "chunk_index": 20,
+      "char_mid": 23103,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.4. El precio de la redención"
+    },
+    {
+      "question": "¿Qué figura teológica de la antigüedad, conocida por su interpretación especulativa, propuso erróneamente que el pago de la redención se realizó a Satanás, y por qué fue rechazada esta noción?",
+      "chunk_index": 18,
+      "char_mid": 20088,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.4. El precio de la redención"
+    },
+    {
+      "question": "¿Qué distinción se establece entre el concepto de ser libre de impedimentos y el de ser libre para actuar, y cuál de estas condiciones se considera prioritaria?",
+      "chunk_index": 10,
+      "char_mid": 12518,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención"
+    },
+    {
+      "question": "¿De qué manera la narrativa de Booz y Rut sirve como anticipación de la labor de rescate espiritual realizada por Jesús en beneficio de su congregación?",
+      "chunk_index": 15,
+      "char_mid": 17391,
+      "cell_ref": "",
+      "breadcrumb": "3. Doctrina de la redención > 3.3. El pariente redentor"
+    }
+  ],
+  "learned_from": "libros/done/3.-Doctrina-de-la-Redención.pdf",
+  "learned_at": 1785535779.9952579,
+  "revisions": 6,
+  "validation_notes": [
+    "OK  header_patterns: none proposed; nothing to strip",
+    "FAIL heading_guards: level-1 numbering is [2, 5, 6, 7], which is not contiguous",
+    "OK  question_pattern: 2/165 paragraphs, 100% confirmed by an independent signal",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

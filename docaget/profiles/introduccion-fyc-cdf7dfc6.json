@@ -1,0 +1,167 @@
+{
+  "fingerprint": "cdf7dfc60cb06404",
+  "slug": "introduccion-fyc-cdf7dfc6",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 1,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.7647,
+    "recall_at_5": 1.0,
+    "mrr_at_10": 0.8627,
+    "recall_at_5_dense_only": 1.0,
+    "noise_floor": 0.5708,
+    "chunks": 17,
+    "eval_questions": 17
+  },
+  "evalset": [
+    {
+      "question": "¿Cómo influyó el contexto histórico en la visión de una figura religiosa prominente respecto a la reflexión filosófica, y qué efecto tuvo esto en la reintroducción de antiguas doctrinas en la formación académica protestante?",
+      "chunk_index": 3,
+      "char_mid": 3203,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Por qué se afirma que la humanidad no tiene justificación para desconocer ciertos atributos divinos?",
+      "chunk_index": 6,
+      "char_mid": 6089,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué principio, atribuido a un obispo de Milán y posteriormente reafirmado por un prominente pensador medieval, establece la validez de la filosofía dentro del ámbito de la teología cristiana?",
+      "chunk_index": 12,
+      "char_mid": 10752,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo de entendimiento inherente a la humanidad, disponible para todos sin importar sus creencias, se desprende del relato donde se le confía al hombre la tarea de identificar a las criaturas?",
+      "chunk_index": 5,
+      "char_mid": 5094,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera se caracteriza la falta de independencia de la filosofía cristiana en relación con los principios divinos comunicados?",
+      "chunk_index": 11,
+      "char_mid": 9772,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera el razonamiento filosófico contribuyó a la formulación de ideas teológicas esenciales, como la naturaleza divina y la composición de Dios, empleando vocabulario que no se encuentra directamente en los textos bíblicos?",
+      "chunk_index": 16,
+      "char_mid": 14361,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué campos principales de la filosofía se mencionan y qué concepto central explora cada uno?",
+      "chunk_index": 2,
+      "char_mid": 2343,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué distinción se establece en el texto sobre la crítica a la filosofía mencionada en un versículo bíblico específico?",
+      "chunk_index": 4,
+      "char_mid": 4052,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué atributos supremos de la divinidad fundamentan la continua relevancia y autonomía de la filosofía, incluso ante la revelación teológica?",
+      "chunk_index": 1,
+      "char_mid": 1312,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "Según el Dr. Alfonso Ropero, ¿cuál fue el alcance del impacto de la filosofía helénica en la teología cristiana y cómo se aseguró que no se desvirtuara la esencia de la fe?",
+      "chunk_index": 14,
+      "char_mid": 12297,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cómo se clasifica la esencia del cristianismo, distinguiéndola de una disciplina intelectual, según las ideas expuestas por Alfonso Ropero?",
+      "chunk_index": 10,
+      "char_mid": 9008,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué utilidad primordial se le atribuye a la filosofía en este contexto de estudios teológicos para la comprensión de la existencia divina?",
+      "chunk_index": 0,
+      "char_mid": 394,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué pensador de origen alemán sostiene que la filosofía se encarga de formular los interrogantes esenciales, mientras que la teología ofrece las respuestas basándose en la revelación?",
+      "chunk_index": 8,
+      "char_mid": 7425,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera se describe la relación del cristianismo con las corrientes filosóficas, permitiendo su incorporación sin comprometer su naturaleza fundamental?",
+      "chunk_index": 15,
+      "char_mid": 13444,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué pensadores cristianos son citados como ejemplos de quienes descubrieron que la indagación filosófica puede llevar a la veneración, a veces con mayor persuasión que la propia observancia religiosa?",
+      "chunk_index": 9,
+      "char_mid": 8272,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "De qué manera el Imperio Romano incorporó las tradiciones culturales griegas difundidas por Alejandro Magno y qué impacto tuvo esto en el desarrollo de su propia corriente filosófica?",
+      "chunk_index": 13,
+      "char_mid": 11441,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué disciplina del conocimiento se encarga de explicar el modo en que ocurren las cosas, y cuáles se dedican a indagar su causa y finalidad?",
+      "chunk_index": 7,
+      "char_mid": 6828,
+      "cell_ref": "",
+      "breadcrumb": ""
+    }
+  ],
+  "learned_from": "libros/INTRODUCCION FYC.pdf",
+  "learned_at": 1785541525.1518407,
+  "revisions": 2,
+  "validation_notes": [
+    "OK  header_patterns: none proposed; nothing to strip",
+    "FAIL heading_guards: l1_max=250 admits no level-1 headings at all",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

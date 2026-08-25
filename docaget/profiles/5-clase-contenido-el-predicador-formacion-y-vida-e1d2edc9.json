@@ -1,0 +1,139 @@
+{
+  "fingerprint": "e1d2edc9af64ab9b",
+  "slug": "5-clase-contenido-el-predicador-formacion-y-vida-e1d2edc9",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.7692,
+    "recall_at_5": 1.0,
+    "mrr_at_10": 0.8397,
+    "recall_at_5_dense_only": 1.0,
+    "noise_floor": 0.6017,
+    "chunks": 13,
+    "eval_questions": 13
+  },
+  "evalset": [
+    {
+      "question": "¿Qué figura central debe ser el mensaje principal de aquellos que anuncian la palabra y cuál es su papel fundamental en relación con los oyentes, según un versículo bíblico clave?",
+      "chunk_index": 1,
+      "char_mid": 1217,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el afecto que se menciona como impulsor de la devoción por los principios divinos y el anhelo de asistencia al prójimo?",
+      "chunk_index": 6,
+      "char_mid": 4407,
+      "cell_ref": "",
+      "breadcrumb": "4. CIENCIA y PASIÓN"
+    },
+    {
+      "question": "¿Qué se considera la verdad fundamental en el contexto del fragmento y cómo debería el entendimiento personal armonizarse con ella?",
+      "chunk_index": 5,
+      "char_mid": 3770,
+      "cell_ref": "",
+      "breadcrumb": "3. SABER OBJETIVO Y SUBJETIVO"
+    },
+    {
+      "question": "¿Qué opinión expresó un individuo prominente sobre el acto de abandonar sus bienes por la difusión del mensaje divino, y cómo calificó esta vocación?",
+      "chunk_index": 3,
+      "char_mid": 2427,
+      "cell_ref": "",
+      "breadcrumb": "1. DIGNIDAD MINISTERIAL Y PERSONAL."
+    },
+    {
+      "question": "¿Qué condiciones ideológicas y morales de la sociedad actual hacen crucial la difusión de los principios bíblicos y la proclamación de un mensaje de esperanza?",
+      "chunk_index": 2,
+      "char_mid": 1822,
+      "cell_ref": "",
+      "breadcrumb": "1. DIGNIDAD MINISTERIAL Y PERSONAL."
+    },
+    {
+      "question": "¿Cuál es la única vía para que los creyentes adopten la forma de pensar y actuar de Jesús?",
+      "chunk_index": 4,
+      "char_mid": 3002,
+      "cell_ref": "",
+      "breadcrumb": "2. LA MENTE DE CRISTO."
+    },
+    {
+      "question": "¿Cuáles son las distintas denominaciones que se le atribuyen al encargado de difundir el mensaje divino en el contexto eclesiástico y qué papel fundamental ejerce en el esquema de la comunicación?",
+      "chunk_index": 0,
+      "char_mid": 565,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "Según el texto, ¿qué aspecto central define la trayectoria de un predicador en cuanto a su transformación interna y su efecto en el mundo?",
+      "chunk_index": 9,
+      "char_mid": 7114,
+      "cell_ref": "",
+      "breadcrumb": "1. ESPIRITUALIDAD Y PRAXIS"
+    },
+    {
+      "question": "¿Qué cualidad es indispensable en la conducta de un orador para que su mensaje tenga peso y sea digno de confianza?",
+      "chunk_index": 8,
+      "char_mid": 6302,
+      "cell_ref": "",
+      "breadcrumb": "4. CIENCIA y PASIÓN"
+    },
+    {
+      "question": "¿Qué cualidad fundamental, opuesta a la altivez, se considera indispensable para un orador religioso, y qué efecto tiene su ausencia en la transmisión del mensaje divino?",
+      "chunk_index": 11,
+      "char_mid": 8507,
+      "cell_ref": "",
+      "breadcrumb": "1. ESPIRITUALIDAD Y PRAXIS"
+    },
+    {
+      "question": "¿Cuál es el propósito fundamental de un portavoz religioso en la transmisión de las enseñanzas divinas, dado que las escrituras están ampliamente disponibles para el estudio individual?",
+      "chunk_index": 7,
+      "char_mid": 5269,
+      "cell_ref": "",
+      "breadcrumb": "4. CIENCIA y PASIÓN"
+    },
+    {
+      "question": "¿Qué texto bíblico aconseja presentar solicitudes a Dios con gratitud para que la paz divina proteja los pensamientos y sentimientos?",
+      "chunk_index": 10,
+      "char_mid": 7747,
+      "cell_ref": "",
+      "breadcrumb": "1. ESPIRITUALIDAD Y PRAXIS"
+    },
+    {
+      "question": "¿Qué recomendación específica ofreció Spurgeon a sus discípulos acerca de cómo perfeccionar su oratoria al estudiar a otros oradores?",
+      "chunk_index": 12,
+      "char_mid": 9247,
+      "cell_ref": "",
+      "breadcrumb": "1. ESPIRITUALIDAD Y PRAXIS"
+    }
+  ],
+  "learned_from": "libros/(5 Clase) contenido EL PREDICADOR, FORMACION Y VIDA..pdf",
+  "learned_at": 1785539554.8507261,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: none proposed; nothing to strip",
+    "FAIL heading_guards: l1_max=15 admits no level-1 headings at all",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

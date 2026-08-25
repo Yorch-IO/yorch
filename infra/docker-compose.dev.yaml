@@ -1,0 +1,19 @@
+# Dev overlay: build the worker image from the local source tree instead of
+# pulling a published one.
+#
+#     docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d --build
+#
+# The build context is the repo root because the image needs both `docaget/`
+# (the docagent engine, installed as a path dependency) and `worker/`.
+#
+# A packaged app never uses this file — it pulls the pinned image named by
+# BRAIN_WORKER_IMAGE, because an installed app has no source tree to build from.
+
+services:
+  api: &build
+    build:
+      context: ..
+      dockerfile: worker/Dockerfile
+    image: ${BRAIN_WORKER_IMAGE:-company-brain-worker:dev}
+
+  worker: *build

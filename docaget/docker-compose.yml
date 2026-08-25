@@ -1,0 +1,14 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    container_name: sociologia-qdrant
+    restart: unless-stopped
+    ports:
+      # bound to loopback on purpose: no API key is configured, so the
+      # instance must not be reachable from the network
+      - "127.0.0.1:6333:6333" # REST
+      - "127.0.0.1:6334:6334" # gRPC
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+    # no healthcheck: the qdrant image ships neither curl nor wget.
+    # `indexer` polls GET /healthz itself before doing any work.

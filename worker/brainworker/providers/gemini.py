@@ -1,0 +1,412 @@
+"""Vertex AI access for the whole pipeline: correction, extraction, planning, embedding.
+
+**No API keys.** Authentication is Application Default Credentials, which is the
+one decision this module exists to enforce. A key is a bearer secret that has to
+be stored, mounted, rotated and kept out of logs, out of the catalog and out of
+Temporal history; ADC is resolved by the Google auth library from a mounted
+credential file locally and from the runtime service account in a managed
+deployment, and there is nothing left for this codebase to leak. Workflows pass
+a model name and a project id, both of which are safe in a payload that persists
+to Postgres for the namespace's whole retention period.
+
+Everything that talks to Vertex goes through one client so that four things have
+exactly one implementation: ADC resolution and the error message when it fails,
+retry with backoff, the distinction between a quota problem and a permission
+problem, and token accounting. The engine's own `docagent.vertex` module still
+speaks raw REST with an `x-goog-api-key` header; migrating it to call this is
+the next step, and until then the two must not both be used in one run.
+"""
+
+from __future__ import annotations
+
+import concurrent.futures as cf
+import logging
+import random
+import time
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Sequence
+
+from google import genai
+from google.genai import errors, types
+
+from ..config import Gemini
+
+log = logging.getLogger(__name__)
+
+#: Three attempts, matching the engine's `MAX_ATTEMPTS`. Beyond that a retry is
+#: no longer riding out a blip; it is queueing behind a sustained outage while
+#: the user watches a spinner.
+MAX_ATTEMPTS = 3
+
+#: Base for exponential backoff, in seconds. Jitter is added because every
+#: activity in a batch fails at the same instant when a quota is exhausted, and
+#: un-jittered backoff makes them all retry at the same instant too.
+BACKOFF_BASE = 1.5
+
+RETRIEVAL_DOCUMENT = "RETRIEVAL_DOCUMENT"
+RETRIEVAL_QUERY = "RETRIEVAL_QUERY"
+
+#: Concurrent embedding requests. Matches the engine's default, which was chosen
+#: against the same per-request quota this shares.
+EMBED_WORKERS = 6
+
+
+class ProviderError(RuntimeError):
+    """A Vertex failure, classified so the UI can offer a fix rather than a message.
+
+    `kind` is the machine-readable half. The app's GUIDANCE map keys on exactly
+    these strings, so adding one here means adding advice there.
+    """
+
+    def __init__(self, message: str, *, kind: str, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.retryable = retryable
+
+
+@dataclass
+class Usage:
+    """Measured token counts. Deliberately not dollars.
+
+    Prices are a third-party multiplier that goes stale; token counts are what
+    the API actually reported. The catalog stores both in separate columns for
+    the same reason, and any surface showing a dollar figure has to say so.
+    """
+
+    input_tokens: int = 0
+    #: Everything billed at the output rate, **including thinking tokens**.
+    output_tokens: int = 0
+    #: The reasoning half of `output_tokens`, broken out so a bill can be
+    #: explained. Not additional to it — a subset of it.
+    thinking_tokens: int = 0
+    calls: int = 0
+
+    def add(self, other: "Usage") -> None:
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.thinking_tokens += other.thinking_tokens
+        self.calls += other.calls
+
+
+@dataclass
+class Generation:
+    text: str
+    usage: Usage
+
+
+@dataclass
+class Embedding:
+    values: list[float]
+    usage: Usage = field(default_factory=Usage)
+
+
+def _classify(e: errors.APIError) -> ProviderError:
+    """Turn a Vertex error into something the UI can act on.
+
+    The three cases below are separated because their fixes are unrelated: a
+    quota problem is waited out, a permission problem needs a role granted, and
+    a bad-argument problem is a defect in this repository. Collapsing them into
+    "the API failed" sends the user to the wrong one.
+    """
+    status = getattr(e, "code", None) or 0
+    message = str(e)
+
+    if status == 429 or "RESOURCE_EXHAUSTED" in message:
+        return ProviderError(
+            f"Vertex AI quota exhausted: {message}", kind="provider_quota", retryable=True
+        )
+    if status in (401, 403) or "PERMISSION_DENIED" in message:
+        return ProviderError(
+            "Vertex AI refused the credentials. The account needs "
+            f"roles/aiplatform.user on the billing project. ({message})",
+            kind="provider_forbidden",
+        )
+    if status == 404:
+        return ProviderError(
+            f"Vertex AI has no such model in this location: {message}",
+            kind="provider_model_missing",
+        )
+    if status >= 500:
+        return ProviderError(
+            f"Vertex AI is unavailable: {message}", kind="provider_unavailable",
+            retryable=True,
+        )
+    return ProviderError(f"Vertex AI rejected the request: {message}", kind="provider_refused")
+
+
+class Provider:
+    """One Vertex client, shared by every activity in a worker process."""
+
+    def __init__(self, settings: Gemini) -> None:
+        if not settings.configured:
+            raise ProviderError(
+                "No Gemini project configured. Set BRAIN_GEMINI_PROJECT_ID to the "
+                "project that will be billed.",
+                kind="provider_unconfigured",
+            )
+        self.settings = settings
+        self._client: genai.Client | None = None
+
+    @property
+    def client(self) -> genai.Client:
+        """Built on first use so that constructing a Provider cannot fail on ADC.
+
+        The distinction matters: a worker must start and report itself healthy
+        on a machine where the user has not yet run `gcloud auth
+        application-default login`, and tell them so — not crash at import.
+        """
+        if self._client is None:
+            try:
+                self._client = genai.Client(
+                    vertexai=True,
+                    project=self.settings.project_id,
+                    location=self.settings.location,
+                )
+            except Exception as e:
+                raise ProviderError(
+                    "Could not resolve Application Default Credentials. Run "
+                    "`gcloud auth application-default login`, or give the "
+                    f"runtime a service account with roles/aiplatform.user. ({e})",
+                    kind="provider_no_credentials",
+                ) from e
+        return self._client
+
+    # -- retry -------------------------------------------------------------
+
+    def _call(self, what: str, fn):
+        last: ProviderError | None = None
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                return fn()
+            except errors.APIError as e:
+                last = _classify(e)
+                if not last.retryable or attempt == MAX_ATTEMPTS:
+                    raise last from e
+                delay = BACKOFF_BASE ** attempt + random.uniform(0, 0.5)
+                log.warning(
+                    "%s failed (%s), retrying in %.1fs [%d/%d]",
+                    what, last.kind, delay, attempt, MAX_ATTEMPTS,
+                )
+                time.sleep(delay)
+            except ProviderError:
+                raise
+            except Exception as e:
+                # Transport-level failures never reach `APIError`. They are
+                # retryable for the same reason a 503 is.
+                last = ProviderError(
+                    f"{what} failed: {type(e).__name__}: {e}",
+                    kind="provider_unavailable",
+                    retryable=True,
+                )
+                if attempt == MAX_ATTEMPTS:
+                    raise last from e
+                time.sleep(BACKOFF_BASE ** attempt + random.uniform(0, 0.5))
+        raise last or ProviderError(f"{what} failed", kind="provider_refused")
+
+    # -- generation --------------------------------------------------------
+
+    def generate(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        temperature: float = 0.0,
+        max_output_tokens: int | None = None,
+        response_schema: Any | None = None,
+        model: str | None = None,
+        stage: str | None = None,
+        history: Sequence[tuple[str, str]] | None = None,
+    ) -> Generation:
+        """One completion, with usage attached.
+
+        `history` is a list of prior `(sent, received)` exchanges, prepended as
+        alternating user/model turns. Only semantic extraction's gleaning pass
+        uses it: asking the same model to add what it missed *in the same
+        conversation* is what makes the second pass cheaper than a second
+        independent extraction, since it does not have to be told not to repeat
+        itself.
+
+        `response_schema` switches the call to JSON mode. Semantic extraction
+        uses it rather than asking for JSON in the prompt and parsing whatever
+        comes back: a schema violation then surfaces as an API error on the call
+        that caused it, instead of as a parse failure three stages later with no
+        indication of which chunk produced it.
+
+        **`max_output_tokens` is measured against thinking too.** A budget that
+        looks generous for the answer can be consumed entirely by reasoning,
+        returning `finish_reason=MAX_TOKENS` and *no text at all* — observed at
+        16 tokens on `gemini-3.6-flash`. Leave it unset unless there is a reason,
+        and never set it near the expected answer length.
+        """
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            system_instruction=system,
+        )
+        # Per stage, not per product: the planner classifies, correction is
+        # mechanical and separately verified, and answering is the one genuine
+        # judgement call. `thinking_for` resolves the engine's own stage names
+        # too, so `stage="correct"` does not quietly miss.
+        budget = self.settings.thinking_for(stage)
+        if budget is not None:
+            config.thinking_config = types.ThinkingConfig(thinking_budget=budget)
+        if response_schema is not None:
+            config.response_mime_type = "application/json"
+            config.response_schema = response_schema
+
+        contents: Any = prompt
+        if history:
+            contents = []
+            for sent, received in history:
+                contents.append(
+                    types.Content(role="user", parts=[types.Part(text=sent)])
+                )
+                contents.append(
+                    types.Content(role="model", parts=[types.Part(text=received)])
+                )
+            contents.append(
+                types.Content(role="user", parts=[types.Part(text=prompt)])
+            )
+
+        def run():
+            return self.client.models.generate_content(
+                model=model or self.settings.model, contents=contents, config=config
+            )
+
+        response = self._call("generate", run)
+        return Generation(text=response.text or "", usage=_usage_of(response))
+
+    # -- embeddings --------------------------------------------------------
+
+    def embed(
+        self,
+        texts: Sequence[str],
+        *,
+        task: str = RETRIEVAL_DOCUMENT,
+        workers: int = EMBED_WORKERS,
+    ) -> list[Embedding]:
+        """Embed many texts — one API request each, run concurrently.
+
+        **One instance per request is not a style choice.** Measured against
+        `gemini-embedding-2` on 2026-08-19: a request carrying four texts returns
+        *one* embedding and no error. That is the engine's inherited invariant #6
+        ("batching silently fails"), established for `gemini-embedding-001` and
+        still true for its replacement. Batching here would have paired chunk 0's
+        vector with chunk 0 and left every other chunk unembedded, or — with a
+        looser length check — silently shifted every vector by one.
+
+        Throughput therefore comes from concurrency, not from batching.
+
+        `task` is asymmetric on purpose and inherited from invariant #5:
+        `RETRIEVAL_DOCUMENT` when indexing, `RETRIEVAL_QUERY` when answering. The
+        model embeds the two differently and using one for both measurably
+        degrades retrieval.
+        """
+        if task not in (RETRIEVAL_DOCUMENT, RETRIEVAL_QUERY):
+            raise ValueError(f"unknown embedding task {task!r}")
+        if not texts:
+            return []
+        if len(texts) == 1:
+            return [self._embed_one(texts[0], task)]
+
+        with cf.ThreadPoolExecutor(max_workers=min(workers, len(texts))) as pool:
+            return list(pool.map(lambda t: self._embed_one(t, task), texts))
+
+    def _embed_one(self, text: str, task: str) -> Embedding:
+        def run():
+            return self.client.models.embed_content(
+                model=self.settings.embedding_model,
+                contents=text,
+                config=types.EmbedContentConfig(
+                    task_type=task,
+                    output_dimensionality=self.settings.embedding_dimensions,
+                ),
+            )
+
+        response = self._call("embed", run)
+        embeddings = list(response.embeddings or [])
+        if len(embeddings) != 1:
+            raise ProviderError(
+                f"asked for one embedding and got {len(embeddings)}",
+                kind="provider_refused",
+            )
+
+        values = list(embeddings[0].values or [])
+        if len(values) != self.settings.embedding_dimensions:
+            raise ProviderError(
+                f"embedding has {len(values)} dimensions, expected "
+                f"{self.settings.embedding_dimensions} — a Qdrant collection's "
+                "vector size is fixed at creation, so this cannot be written",
+                kind="provider_refused",
+            )
+        return Embedding(values=values, usage=_embedding_usage(response))
+
+    # -- health ------------------------------------------------------------
+
+    def probe(self) -> str:
+        """Cheapest call that proves credentials, project and model all work.
+
+        One short embedding rather than a generation: it is the least expensive
+        request Vertex bills for, and a health check that costs real money is
+        one people disable.
+        """
+        self.embed(["ping"], task=RETRIEVAL_QUERY)
+        return (
+            f"{self.settings.model} / {self.settings.embedding_model} "
+            f"@ {self.settings.location}"
+        )
+
+
+def _usage_of(response: Any) -> Usage:
+    """Read whatever the response carries, tolerating its absence.
+
+    **Thinking tokens count as output, and they dominate short calls.** Gemini
+    3.x reasons before answering and reports that separately as
+    `thoughts_token_count`, which `candidates_token_count` excludes — but which
+    is billed at the output rate. Measured 2026-08-20 on a trivial prompt:
+    `gemini-3.6-flash` produced 2 visible output tokens and **125 thinking
+    tokens**. Reading only the visible half under-reported that call by 60x.
+
+    Reporting zero when `usage_metadata` is absent is wrong but recoverable;
+    raising would fail a run that actually succeeded.
+    """
+    meta = getattr(response, "usage_metadata", None)
+    if meta is None:
+        return Usage(calls=1)
+
+    prompt = getattr(meta, "prompt_token_count", 0) or 0
+    visible = getattr(meta, "candidates_token_count", 0) or 0
+    thoughts = getattr(meta, "thoughts_token_count", 0) or 0
+    if not visible and not thoughts:
+        # Fall back to the total, which includes both, rather than to zero.
+        total = getattr(meta, "total_token_count", 0) or 0
+        visible = max(0, total - prompt)
+
+    return Usage(
+        input_tokens=prompt,
+        output_tokens=visible + thoughts,
+        thinking_tokens=thoughts,
+        calls=1,
+    )
+
+
+def _embedding_usage(response: Any) -> Usage:
+    """Token counts for an embedding batch.
+
+    **Not** on `usage_metadata`, which is `None` for embeddings — measured
+    against `gemini-embedding-2` on 2026-08-19. They live per embedding, on
+    `statistics.token_count`, which is the engine's inherited invariant #7
+    ("cost is taken from statistics.token_count / usageMetadata") and the reason
+    that invariant names two places instead of one. Reading only the response
+    level silently reports every embedding as free.
+    """
+    total = 0
+    for item in getattr(response, "embeddings", None) or []:
+        stats = getattr(item, "statistics", None)
+        if stats is None:
+            continue
+        count = getattr(stats, "token_count", None)
+        if count is None and isinstance(stats, dict):
+            count = stats.get("token_count")
+        total += int(count or 0)
+    return Usage(input_tokens=total, output_tokens=0, calls=1)

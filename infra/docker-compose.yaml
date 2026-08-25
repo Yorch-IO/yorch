@@ -1,0 +1,272 @@
+# Company Brain — backing services.
+#
+# Every port is bound to 127.0.0.1 on purpose: none of Qdrant, Memgraph or
+# Temporal has authentication configured here, so the stack must not be
+# reachable from the network. The defaults deliberately avoid the upstream ports
+# (6333, 5432, 7233, 7687, 8080) so this stack never collides with another
+# Qdrant, Postgres or Memgraph already running on the workstation — including
+# the `sociologia-qdrant` container that docaget/docker-compose.yml starts.
+#
+# Values come from a `.env` file written beside this one by the app (see
+# src-tauri/src/ports.rs). The defaults below are what dev mode uses.
+#
+# This file pulls a pre-built worker image. To build it from the local source
+# tree instead, overlay docker-compose.dev.yaml:
+#     docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d
+
+name: ${BRAIN_PROJECT:-company-brain}
+
+# The four stores nothing in this stack can do useful work without. Named once
+# because `api` and `worker` wait for exactly the same set, and a fifth store
+# added to one list and forgotten in the other is a race that only shows up on a
+# cold start.
+x-stores: &stores
+  temporal:
+    condition: service_healthy
+  qdrant:
+    condition: service_healthy
+  memgraph:
+    condition: service_healthy
+  postgres:
+    condition: service_healthy
+
+# Unbounded json-file logs on a stack meant to run for days. The API alone logs
+# a line per health probe every 10s — about 8.6k lines a day before anything is
+# indexed — and this repository has already lost a disk once, to cargo's
+# `target/`. Docker's default is no limit at all.
+x-logs: &logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  qdrant:
+    logging: *logs
+    image: qdrant/qdrant:v1.19.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BRAIN_QDRANT_HTTP_PORT:-6433}:6333"
+      - "127.0.0.1:${BRAIN_QDRANT_GRPC_PORT:-6434}:6334"
+    volumes:
+      - qdrant-storage:/qdrant/storage
+      - ${BRAIN_WORKSPACE:-./workspace}/snapshots:/qdrant/snapshots
+    environment:
+      QDRANT__STORAGE__SNAPSHOTS_PATH: /qdrant/snapshots
+    # The qdrant image ships neither curl nor wget, so it cannot healthcheck
+    # itself over HTTP. Probing the TCP port from the shell it does have is
+    # enough to gate dependents; the API layer polls /readyz itself.
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  memgraph:
+    logging: *logs
+    # Pinned to an exact patch for the same reason Temporal is: the graph is a
+    # queryable projection, and a moving tag would let two machines disagree
+    # about which Cypher features exist.
+    image: memgraph/memgraph:3.12.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BRAIN_MEMGRAPH_PORT:-7788}:7687"
+    command:
+      # Off by default in this image already; stated explicitly because the
+      # whole application is local-first and a silent phone-home would
+      # contradict that. --memory-limit is in MiB; 0 means "90% of physical
+      # memory", which is the wrong default for a graph sharing a workstation
+      # with the user's editor and browser.
+      - "--telemetry-enabled=false"
+      - "--memory-limit=${BRAIN_MEMGRAPH_MEMORY_MB:-2048}"
+      - "--log-level=WARNING"
+      # Memgraph keeps 3 snapshots by default, and `backup.sh` asks for a new
+      # one every run — so three backups evict every snapshot older than the
+      # first of them. That is the opposite of what a backup is for: it cost a
+      # pre-deletion snapshot on 2026-08-21, taken 24 minutes before the run
+      # that rotated it out. Ten of them is ~140 MB against a volume already
+      # holding 289 MB, which is a cheap price for keeping yesterday.
+      - "--storage-snapshot-retention-count=${BRAIN_MEMGRAPH_SNAPSHOTS:-10}"
+    volumes:
+      - memgraph-data:/var/lib/memgraph
+      - memgraph-log:/var/log/memgraph
+    healthcheck:
+      # The image ships neither bash nor nc, so the /dev/tcp trick used for
+      # Qdrant is unavailable — but it does ship mgconsole, which is a better
+      # probe anyway: it proves Bolt completes a handshake and executes a query,
+      # not merely that something accepted a TCP connection.
+      test: ["CMD-SHELL", "echo 'RETURN 1;' | mgconsole --host 127.0.0.1 --port 7687 --output-format csv"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  postgres:
+    logging: *logs
+    image: postgres:17-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BRAIN_POSTGRES_PORT:-5532}:5432"
+    environment:
+      POSTGRES_USER: ${BRAIN_PG_USER:-brain}
+      POSTGRES_PASSWORD: ${BRAIN_PG_PASSWORD:-brain}
+      # auto-setup creates `temporal` and `temporal_visibility` itself; the
+      # init script adds the app catalog database alongside them.
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BRAIN_PG_USER:-brain} -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  temporal:
+    logging: *logs
+    # Pinned to an exact patch: the stack must come up identically on every
+    # machine, and a moving tag turns "works here" into a version question.
+    image: temporalio/auto-setup:1.29.7
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BRAIN_TEMPORAL_PORT:-7333}:7233"
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: ${BRAIN_PG_USER:-brain}
+      POSTGRES_PWD: ${BRAIN_PG_PASSWORD:-brain}
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+      DEFAULT_NAMESPACE: default
+      DEFAULT_NAMESPACE_RETENTION: 72h
+    healthcheck:
+      # Addressed by service name, not 127.0.0.1: the frontend binds to the
+      # container's own IP rather than loopback, so a localhost probe is
+      # refused even when the server is fully up and serving.
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  temporal-ui:
+    logging: *logs
+    # No `2` tag is published for this image — only full semver and `latest`.
+    image: temporalio/ui:2.53.1
+    restart: unless-stopped
+    depends_on:
+      # `service_healthy`, not `service_started`: the frontend accepts a
+      # connection well before it can serve one, and the UI's own reaction to
+      # that is an error page rather than a retry.
+      temporal:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BRAIN_TEMPORAL_UI_PORT:-8380}:8080"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_UI_PUBLIC_PATH: ""
+
+  api:
+    logging: *logs
+    image: ${BRAIN_WORKER_IMAGE:-company-brain-worker:dev}
+    restart: unless-stopped
+    command: ["api"]
+    depends_on: *stores
+    ports:
+      # Host port on the left, in-container port on the right. These are named
+      # differently on purpose: BRAIN_API_PORT is what uvicorn binds *inside*
+      # the container (it defaults to 8000 and is deliberately not passed in via
+      # `environment` below). Reusing one name for both would mean that setting
+      # it once moved the internal bind, broke this mapping, and broke the
+      # healthcheck's 8000 probe simultaneously.
+      - "127.0.0.1:${BRAIN_API_HOST_PORT:-8787}:8000"
+    environment: &worker-env
+      BRAIN_WORKSPACE_DIR: /workspace
+      # Inside the container this must bind all interfaces, because Docker's
+      # published port forwards the host's 127.0.0.1 to the container's own
+      # address. The code defaults to loopback so that running it directly on a
+      # host never exposes an unauthenticated control plane by accident.
+      BRAIN_API_HOST: 0.0.0.0
+      BRAIN_TEMPORAL_TARGET: temporal:7233
+      BRAIN_TEMPORAL_NAMESPACE: default
+      BRAIN_QDRANT_URL: http://qdrant:6333
+      BRAIN_MEMGRAPH_URL: bolt://memgraph:7687
+      BRAIN_DATABASE_URL: postgresql://${BRAIN_PG_USER:-brain}:${BRAIN_PG_PASSWORD:-brain}@postgres:5432/brain
+      BRAIN_TASK_QUEUE: brain-ingest
+      BRAIN_LOG_LEVEL: ${BRAIN_LOG_LEVEL:-INFO}
+      # The Vertex AI billing project. **Not a credential**: a workflow carries
+      # only a project id and a model name, and both are safe in a payload that
+      # persists to Postgres for the whole retention period — so this travels in
+      # `.env` rather than through the secrets mount.
+      #
+      # Empty by default, and the empty value is meaningful: `Gemini.configured`
+      # is `bool(project_id)`, so an unset project makes `/ask` answer
+      # `provider_unconfigured` instead of failing three stages into a paid run.
+      #
+      # Every other Gemini setting is deliberately absent. `brainworker/config.py`
+      # owns those defaults, and repeating them here as `${X:-default}` would put
+      # the same constant in two files — which has already drifted once in this
+      # repository, in `_stage_thinking`.
+      BRAIN_GEMINI_PROJECT_ID: ${BRAIN_GEMINI_PROJECT_ID:-}
+      # Extra extraction passes per chunk. Forwarded with **no default here** on
+      # purpose, obeying the rule stated just above: an empty value reaches
+      # `_env`, which falls through to the default `config.py` owns. Writing
+      # `${BRAIN_MAX_GLEANING:-0}` would put the same zero in two files.
+      #
+      # It is passed at all because the worker runs in a container, so without
+      # this line the setting is unreachable in the only place it would run —
+      # and it exists to be measured. Compose interpolates at `up` time, so
+      # changing it needs the service recreated.
+      BRAIN_MAX_GLEANING: ${BRAIN_MAX_GLEANING:-}
+    volumes:
+      - ${BRAIN_WORKSPACE:-./workspace}:/workspace
+      # Provider API keys. Written 0600 by the app from the OS keychain and
+      # mounted read-only; they are never passed through Temporal, whose
+      # history is persisted to Postgres forever.
+      - ${BRAIN_SECRETS_FILE:-./secrets.env}:/run/secrets/providers.env:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2).status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  worker:
+    logging: *logs
+    image: ${BRAIN_WORKER_IMAGE:-company-brain-worker:dev}
+    restart: unless-stopped
+    command: ["worker"]
+    depends_on:
+      <<: *stores
+      # The one dependency that was missing. `api` applies the catalog
+      # migrations in its lifespan, before it serves — that is what keeps the
+      # schema and the code that reads it from ever disagreeing. The worker
+      # writes artifacts and costs to that same catalog and migrates nothing, so
+      # starting the two in parallel let a worker reach an unmigrated schema.
+      #
+      # The coupling is startup-only, which is the right amount: `depends_on`
+      # says nothing about a later outage, and bookkeeping writes are
+      # best-effort by design, so an API that dies afterwards must not and does
+      # not stop the worker.
+      api:
+        condition: service_healthy
+    environment: *worker-env
+    # Correction and embedding activities run for minutes. Docker's default
+    # SIGKILL at 10s turns a stack restart into an abandoned activity that
+    # Temporal has to time out and retry, paying for the work twice.
+    stop_grace_period: 60s
+    volumes:
+      - ${BRAIN_WORKSPACE:-./workspace}:/workspace
+      - ${BRAIN_SECRETS_FILE:-./secrets.env}:/run/secrets/providers.env:ro
+
+volumes:
+  qdrant-storage:
+  memgraph-data:
+  memgraph-log:
+  postgres-data:

@@ -1,0 +1,251 @@
+{
+  "fingerprint": "960bd42dde74f464",
+  "slug": "clase-6-estructura-bosquejo-del-serm-n-960bd42d",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.4828,
+    "recall_at_5": 0.9655,
+    "mrr_at_10": 0.6911,
+    "recall_at_5_dense_only": 0.931,
+    "noise_floor": 0.5785,
+    "chunks": 29,
+    "eval_questions": 29
+  },
+  "evalset": [
+    {
+      "question": "¿Qué beneficio fundamental aporta la planificación estructurada a la claridad y coherencia de un discurso religioso?",
+      "chunk_index": 3,
+      "char_mid": 3891,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué diferencia a una idea pasajera de un mensaje que perdura en la predicación y de dónde emana la verdadera fuerza de un sermón?",
+      "chunk_index": 13,
+      "char_mid": 13500,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué cualidades deben poseer los segmentos de una exposición para ser útiles y cuál es su número ideal?",
+      "chunk_index": 22,
+      "char_mid": 22235,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuáles son las diversas formas en que un expositor de la fe puede hallar el fragmento escritural que fundamentará su mensaje?",
+      "chunk_index": 11,
+      "char_mid": 11563,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué aspectos individuales del predicador puede mitigar una sección inicial bien elaborada de su exposición?",
+      "chunk_index": 20,
+      "char_mid": 20479,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué partes fundamentales componen el esquema de predicación que se presenta para honrar el mensaje divino?",
+      "chunk_index": 7,
+      "char_mid": 7863,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el objetivo principal de la parte final de un discurso, y qué tipo de elementos o ideas no deben introducirse en ese segmento?",
+      "chunk_index": 25,
+      "char_mid": 24400,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué secciones de inicio y cierre se recomienda incluir en la estructura de un bosquejo y cuál es la finalidad de esta inclusión?",
+      "chunk_index": 5,
+      "char_mid": 5623,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la distinción entre la idea principal que se desea comunicar y la frase breve que la sintetiza para el oyente?",
+      "chunk_index": 8,
+      "char_mid": 8965,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué funciones específicas desempeñan las secciones inicial, central y final de un mensaje para conectar con la audiencia, desarrollar el tema y provocar una reacción?",
+      "chunk_index": 2,
+      "char_mid": 2829,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la naturaleza fundamental del mensaje principal de un sermón y cómo se define el papel del predicador en su identificación?",
+      "chunk_index": 15,
+      "char_mid": 15282,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "Más allá del estilo, ¿qué características esenciales deben tener las secciones principales de un sermón para instruir y conmover a la audiencia?",
+      "chunk_index": 24,
+      "char_mid": 23578,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué funciones cruciales cumple el encabezado de un discurso y qué cualidades esenciales debe manifestar para ser efectivo?",
+      "chunk_index": 1,
+      "char_mid": 1691,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué importancia tiene la claridad del concepto central de un sermón para su desarrollo y efectividad, y cuál es el enfoque recomendado para su hallazgo?",
+      "chunk_index": 18,
+      "char_mid": 18390,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cómo se distingue la manera de obtener el mensaje central para una homilía que se basa en la exégesis de un pasaje, frente a otra que se enfoca en una narración o la trayectoria de una persona?",
+      "chunk_index": 17,
+      "char_mid": 17403,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué dificultades enfrentan los oradores que no organizan previamente su discurso y cómo se define la utilidad de esa preparación?",
+      "chunk_index": 6,
+      "char_mid": 6760,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cómo se determina la formulación de un encabezado para una prédica, dependiendo de si su naturaleza es temática, expositiva o narrativa?",
+      "chunk_index": 9,
+      "char_mid": 9913,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué importancia tiene la disposición de un sermón para la credibilidad del predicador y la comprensión de la audiencia?",
+      "chunk_index": 0,
+      "char_mid": 564,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera se describe la intervención del Espíritu Santo para impactar a quienes escuchan, sin depender únicamente de la argumentación racional?",
+      "chunk_index": 27,
+      "char_mid": 25560,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué consideraciones fundamentales deben preceder la selección de un texto para un sermón y cuál es la principal responsabilidad del predicador para que su mensaje sea fiel al pasaje original?",
+      "chunk_index": 14,
+      "char_mid": 14371,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué diferentes maneras existen para organizar las partes de un mensaje, incluyendo la progresión de ideas, el uso de interrogantes o la secuencia de eventos?",
+      "chunk_index": 23,
+      "char_mid": 22819,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué formas específicas puede adoptar una conclusión bien elaborada?",
+      "chunk_index": 26,
+      "char_mid": 24935,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿En la preparación de un discurso religioso, qué elemento determina la organización de las ideas cuando se compara un sermón centrado en un tema con uno que se deriva directamente de un escrito sagrado?",
+      "chunk_index": 4,
+      "char_mid": 4717,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué características esenciales debe poseer el encabezado de una prédica para ser efectivo y reflejar fielmente su contenido?",
+      "chunk_index": 10,
+      "char_mid": 10818,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué principio fundamental debe orientar la totalidad del contenido expuesto en la sección principal de un discurso religioso?",
+      "chunk_index": 21,
+      "char_mid": 21487,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿En qué momento de la creación de un discurso se recomienda redactar la sección inicial, a pesar de ser lo primero que se expone al público?",
+      "chunk_index": 19,
+      "char_mid": 19417,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De acuerdo con el texto, qué suceso protagonizado por Jesús en una sinagoga demuestra la relevancia de la palabra escrita para su propósito, y qué afirmó sobre su cumplimiento?",
+      "chunk_index": 12,
+      "char_mid": 12367,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cómo se define la predicación más allá de un mero intercambio de información, y qué representa el momento conclusivo de un sermón para que las personas accedan al Reino de los Cielos?",
+      "chunk_index": 28,
+      "char_mid": 26552,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué proceso detallado se sugiere para que un predicador identifique la esencia de un pasaje bíblico, incluyendo las actitudes internas y el uso de herramientas?",
+      "chunk_index": 16,
+      "char_mid": 16369,
+      "cell_ref": "",
+      "breadcrumb": ""
+    }
+  ],
+  "learned_from": "libros/CLASE 6. Estructura - bosquejo del Sermón..pdf",
+  "learned_at": 1785541183.612428,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^ESTRUCTURA\\\\s+DE\\\\s+UN\\\\s+SERMON$' matches 'ESTRUCTURA DE UN SERMON' on 9 pages, no body hits",
+    "FAIL heading_guards: l1_max=200 admits no level-1 headings at all",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

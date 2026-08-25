@@ -1,0 +1,449 @@
+{
+  "fingerprint": "cc7db18c6ae54774",
+  "slug": "3-carlomagno-y-el-sacro-imperio-romano-cisma-de--cc7db18c",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.0,
+    "recall_at_5": 0.05,
+    "mrr_at_10": 0.0251,
+    "recall_at_5_dense_only": 0.025,
+    "noise_floor": 0.5793,
+    "chunks": 62,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Qué figura eclesiástica romana, activa a mediados del siglo IV, marcó el inicio de la ambición de su sede por una autoridad de alcance mundial, y quiénes fueron algunos de los prelados que le siguieron en esta dirección?",
+      "chunk_index": 15,
+      "char_mid": 13126,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO > 5.1. El período del Prepapado (366-440):"
+    },
+    {
+      "question": "¿A qué otra orden monástica suplantaron los cistercienses en la Curia romana y en diversas responsabilidades eclesiásticas durante el siglo XII?",
+      "chunk_index": 58,
+      "char_mid": 51883,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.2. La orden de los Cistercienses:"
+    },
+    {
+      "question": "¿Por qué razón fue Mahoma invitado a residir en Medina y cómo se conformó inicialmente la comunidad que lideró en esa ciudad?",
+      "chunk_index": 92,
+      "char_mid": 87213,
+      "cell_ref": "",
+      "breadcrumb": "7. EL SURGIMIENTO DEL PODERÍO MUSULMÁN > 7.1. Mahoma (570-632 d. C.)"
+    },
+    {
+      "question": "Cómo se abordó la problemática de los monjes que se trasladaban constantemente de un monasterio a otro dentro de la orden benedictina?",
+      "chunk_index": 49,
+      "char_mid": 43383,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.1. La orden de los benedictinos:"
+    },
+    {
+      "question": "¿Qué roles cumplieron los conventos medievales en la salvaguarda del conocimiento ancestral y en el impulso de la formación educativa?",
+      "chunk_index": 84,
+      "char_mid": 81020,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.4. Elementos Positivos y Negativos del Monaquismo:"
+    },
+    {
+      "question": "¿Qué medidas concretas implementó Inocencio III, tras el deceso del emperador Enrique VI, para ejercer la prerrogativa papal en la selección de candidatos al trono y en la resolución de disputas entre ellos?",
+      "chunk_index": 31,
+      "char_mid": 28211,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO > 5.3. El período de Crecimiento (590-1.073): > 5.4.3. Inocencio III (1.198-1.216):"
+    },
+    {
+      "question": "¿Qué facción dentro de la orden franciscana se veía a sí misma como la manifestación de una era espiritual superior, considerando a la jerarquía eclesiástica y a otros miembros como adherentes de una etapa religiosa menos avanzada?",
+      "chunk_index": 83,
+      "char_mid": 79533,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.5. La orden de los Valdenses."
+    },
+    {
+      "question": "¿Qué convicción fundamental inculcó Mahoma a los árabes respecto a su misión divina y su lugar en el mundo?",
+      "chunk_index": 93,
+      "char_mid": 88409,
+      "cell_ref": "",
+      "breadcrumb": "7. EL SURGIMIENTO DEL PODERÍO MUSULMÁN > 7.1. Mahoma (570-632 d. C.)"
+    },
+    {
+      "question": "¿Qué conjunto de tierras, aparte de Roma, poseía el papado y cómo su administración llevó a que los líderes eclesiásticos asumieran el poder civil en la capital?",
+      "chunk_index": 26,
+      "char_mid": 23408,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO > 5.3. El período de Crecimiento (590-1.073): > 5.3.1. Gregorio I El Grande (590-604 d.C.)"
+    },
+    {
+      "question": "¿Qué mensaje específico le fue transmitido a Mahoma durante su primera revelación en la cueva, según la tradición más aceptada?",
+      "chunk_index": 89,
+      "char_mid": 84181,
+      "cell_ref": "",
+      "breadcrumb": "7. EL SURGIMIENTO DEL PODERÍO MUSULMÁN > 7.1. Mahoma (570-632 d. C.)"
+    },
+    {
+      "question": "¿Cuál es la denominación para el estilo de vida de quienes se apartan del mundo por motivos religiosos en busca de la perfección espiritual, y qué grupo judío preexistente compartía características similares?",
+      "chunk_index": 37,
+      "char_mid": 33114,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO."
+    },
+    {
+      "question": "¿Qué medios y capacidades de gestión poseían los líderes eclesiásticos de la capital que les permitieron suplir la ausencia de gobierno efectivo tras la disolución del poder imperial en Occidente?",
+      "chunk_index": 11,
+      "char_mid": 9668,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO"
+    },
+    {
+      "question": "¿Qué pontífice del siglo XVI fue responsable de la primera división de la orden franciscana y en qué grupos los separó?",
+      "chunk_index": 63,
+      "char_mid": 56946,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.3. La orden de los Franciscanos:"
+    },
+    {
+      "question": "¿Cuál fue la tonalidad original de la vestimenta de los primeros monjes benedictinos y qué color se volvió predominante, dándoles un apodo distintivo?",
+      "chunk_index": 48,
+      "char_mid": 42752,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.1. La orden de los benedictinos:"
+    },
+    {
+      "question": "¿Podrías detallar las diferentes fases históricas que caracterizaron el desarrollo de la influencia pontificia, incluyendo sus rangos de tiempo?",
+      "chunk_index": 14,
+      "char_mid": 12767,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO"
+    },
+    {
+      "question": "¿Qué motivó la creación de la orden dominica y cuál fue su método principal de acción inicial?",
+      "chunk_index": 67,
+      "char_mid": 59955,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.4. La Orden de los Dominicos:"
+    },
+    {
+      "question": "¿Cuál era la justificación principal que León I el Grande ofrecía para la preeminencia del obispo de Roma, que trascendía las razones políticas o la ubicación de la ciudad?",
+      "chunk_index": 19,
+      "char_mid": 17253,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO > 5.2. El período del Surgimiento (440-590): > 5.2.1. León I El Grande (440-461 d.C.)"
+    },
+    {
+      "question": "¿Qué actividad principal adoptaron los cluniacenses para los monjes en lugar del esfuerzo manual, y cuál era su razón de ser para esta nueva función?",
+      "chunk_index": 54,
+      "char_mid": 48097,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.1. La orden de los benedictinos:"
+    },
+    {
+      "question": "¿De qué manera cambió la identidad religiosa de los valdenses durante el siglo dieciséis y cuál fue el motivo principal de esa transformación?",
+      "chunk_index": 75,
+      "char_mid": 68195,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.5. La orden de los Valdenses."
+    },
+    {
+      "question": "¿Qué título honorífico se les concedía a los líderes eclesiásticos de Roma y otras ciudades importantes antes de que el obispo romano obtuviera una autoridad singular?",
+      "chunk_index": 9,
+      "char_mid": 7589,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO"
+    },
+    {
+      "question": "¿Qué interrogante se plantea sobre el resultado fundamental de la propagación musulmana en el continente europeo?",
+      "chunk_index": 103,
+      "char_mid": 97718,
+      "cell_ref": "",
+      "breadcrumb": "7. EL SURGIMIENTO DEL PODERÍO MUSULMÁN"
+    },
+    {
+      "question": "¿Cuáles son los tres grandes elementos históricos que se agrupan en este apartado?",
+      "chunk_index": 0,
+      "char_mid": 21,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué concepto se solicita explicar en la primera de las cuestiones de repaso expuestas?",
+      "chunk_index": 102,
+      "char_mid": 96971,
+      "cell_ref": "",
+      "breadcrumb": "7. EL SURGIMIENTO DEL PODERÍO MUSULMÁN"
+    },
+    {
+      "question": "¿Qué elementos clave se abordan en relación con la aparición del dominio islámico?",
+      "chunk_index": 7,
+      "char_mid": 5974,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué divisiones temporales se establecen para describir la evolución de la máxima autoridad eclesiástica romana?",
+      "chunk_index": 6,
+      "char_mid": 4242,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué disposiciones concretas estableció el pontífice Gregorio VII para afianzar la autonomía eclesiástica y limitar la intervención de los gobernantes civiles en la designación de cargos religiosos?",
+      "chunk_index": 29,
+      "char_mid": 26563,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO > 5.3. El período de Crecimiento (590-1.073): > 5.4.2. Gregorio VII (1.073-1.085):"
+    },
+    {
+      "question": "¿Cuántos preceptos y normas eclesiásticas fueron ratificados por el Concilio de Letrán en un solo día durante su mandato?",
+      "chunk_index": 30,
+      "char_mid": 27438,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO > 5.3. El período de Crecimiento (590-1.073): > 5.4.3. Inocencio III (1.198-1.216):"
+    },
+    {
+      "question": "¿Qué incidente específico, que involucró al Papa Bonifacio VIII y un rey, señaló el inicio de la fase de declive papal que precedió a la Reforma Protestante?",
+      "chunk_index": 35,
+      "char_mid": 31634,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO > 5.3. El período de Crecimiento (590-1.073): > 5.4.3. Inocencio III (1.198-1.216):"
+    },
+    {
+      "question": "¿Qué elementos contribuyeron a la prominencia de León I, considerando tanto sus cualidades personales como el entorno político de su tiempo?",
+      "chunk_index": 20,
+      "char_mid": 18171,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO > 5.2. El período del Surgimiento (440-590): > 5.2.1. León I El Grande (440-461 d.C.)"
+    },
+    {
+      "question": "¿Qué figuras destacadas en el ámbito académico y en la jerarquía eclesiástica mayor se originaron o estuvieron vinculadas a la orden de los franciscanos?",
+      "chunk_index": 64,
+      "char_mid": 57722,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.3. La orden de los Franciscanos:"
+    },
+    {
+      "question": "¿Cuál era la situación de los principales centros de la Iglesia Cristiana en sus primeros siglos con respecto a su importancia y qué suceso clave al inicio del siglo IV comenzó a transformar la jerarquía, impulsando una disputa por el liderazgo universal entre patriarcados?",
+      "chunk_index": 13,
+      "char_mid": 11966,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO"
+    },
+    {
+      "question": "¿Qué editorial fue la encargada de publicar la obra 'Creer y Comprender' en Barcelona, España?",
+      "chunk_index": 105,
+      "char_mid": 99159,
+      "cell_ref": "",
+      "breadcrumb": "7. EL SURGIMIENTO DEL PODERÍO MUSULMÁN"
+    },
+    {
+      "question": "¿Qué particularidades regían la forma en que los monjes debían acatar las instrucciones de sus superiores, y cómo se estructuraba la potestad disciplinaria del abad para considerar la imperfección inherente a las personas?",
+      "chunk_index": 50,
+      "char_mid": 44385,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.1. La orden de los benedictinos:"
+    },
+    {
+      "question": "¿Cuál fue el impacto de las diversas agrupaciones religiosas monásticas en el desarrollo del continente europeo?",
+      "chunk_index": 106,
+      "char_mid": 100069,
+      "cell_ref": "",
+      "breadcrumb": "7. EL SURGIMIENTO DEL PODERÍO MUSULMÁN"
+    },
+    {
+      "question": "¿Qué doctrina filosófica influyó en la percepción negativa del cuerpo dentro de la manifestación inicial del rigorismo ascético que surgió en la Iglesia de Oriente?",
+      "chunk_index": 38,
+      "char_mid": 34028,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO."
+    },
+    {
+      "question": "¿Qué denominaciones se asignaron a las comunidades religiosas femeninas y a las asociaciones de laicos que se vincularon a la Orden de Predicadores en sus etapas fundacionales, y en qué secuencia temporal surgieron?",
+      "chunk_index": 71,
+      "char_mid": 64366,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.4. La Orden de los Dominicos:"
+    },
+    {
+      "question": "¿Dónde se encontraba la principal guía teológica y espiritual del cristianismo en la parte occidental de habla latina durante sus primeros siglos?",
+      "chunk_index": 10,
+      "char_mid": 8520,
+      "cell_ref": "",
+      "breadcrumb": "5. EL PAPADO"
+    },
+    {
+      "question": "¿Qué postura adoptó el gobierno europeo en el siglo IV, bajo el emperador Constantino, respecto a las diversas vertientes del cristianismo, y qué organización religiosa incrementó su influencia durante ese período?",
+      "chunk_index": 3,
+      "char_mid": 1451,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué eventos políticos y conflictos religiosos definieron el período de formación de Benito de Nursia?",
+      "chunk_index": 45,
+      "char_mid": 39873,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.1. La orden de los benedictinos:"
+    },
+    {
+      "question": "¿Qué determinaciones de los pontífices permitieron a la orden franciscana poseer bienes, a pesar de su regla inicial de pobreza, y cómo se implementaron?",
+      "chunk_index": 81,
+      "char_mid": 76948,
+      "cell_ref": "",
+      "breadcrumb": "6. EL DESARROLLO DEL MONACATO. > 6.2. Principales órdenes monásticas > 6.2.5. La orden de los Valdenses."
+    }
+  ],
+  "learned_from": "libros/done/3. CARLOMAGNO Y EL SACRO IMPERIO ROMANO, CISMA DE ORIENTE, CRUZADAS, INQUISICIÓN Y DESARROLLO TEOLÓGICO MEDIEVAL..pdf",
+  "learned_at": 1785527725.5508468,
+  "revisions": 3,
+  "validation_notes": [
+    "OK  header_patterns: none proposed; nothing to strip",
+    "FAIL heading_guards: level-1 numbering is [3, 9, 10, 11, 12, 13], which is not contiguous",
+    "OK  question_pattern: 1/120 paragraphs, 100% confirmed by an independent signal",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": [
+    {
+      "round": 1,
+      "candidate": "per_section=1",
+      "mrr_at_10": 0.0234,
+      "recall_at_5": 0.025,
+      "accepted": false,
+      "why": "MRR@10 -0.002 (recall@5 -0.025) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "per_section=3",
+      "mrr_at_10": 0.0247,
+      "recall_at_5": 0.05,
+      "accepted": false,
+      "why": "MRR@10 -0.000 (recall@5 +0.000) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "min_score=0.55",
+      "mrr_at_10": 0.0247,
+      "recall_at_5": 0.05,
+      "accepted": false,
+      "why": "MRR@10 -0.000 (recall@5 +0.000) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "min_score=0.65",
+      "mrr_at_10": 0.0153,
+      "recall_at_5": 0.025,
+      "accepted": false,
+      "why": "MRR@10 -0.010 (recall@5 -0.025) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "target=900",
+      "mrr_at_10": 0.0175,
+      "recall_at_5": 0.025,
+      "accepted": false,
+      "why": "MRR@10 -0.008 is within the 0.014 noise margin"
+    },
+    {
+      "round": 2,
+      "candidate": "per_section=1",
+      "mrr_at_10": 0.0234,
+      "recall_at_5": 0.025,
+      "accepted": false,
+      "why": "MRR@10 -0.002 (recall@5 -0.025) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "per_section=3",
+      "mrr_at_10": 0.0247,
+      "recall_at_5": 0.05,
+      "accepted": false,
+      "why": "MRR@10 -0.000 (recall@5 +0.000) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "min_score=0.55",
+      "mrr_at_10": 0.0247,
+      "recall_at_5": 0.05,
+      "accepted": false,
+      "why": "MRR@10 -0.000 (recall@5 +0.000) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "min_score=0.65",
+      "mrr_at_10": 0.0125,
+      "recall_at_5": 0.025,
+      "accepted": false,
+      "why": "MRR@10 -0.013 (recall@5 -0.025) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "target=1600",
+      "mrr_at_10": 0.0199,
+      "recall_at_5": 0.025,
+      "accepted": false,
+      "why": "MRR@10 -0.005 is within the 0.014 noise margin"
+    },
+    {
+      "round": 3,
+      "candidate": "per_section=1",
+      "mrr_at_10": 0.0234,
+      "recall_at_5": 0.025,
+      "accepted": false,
+      "why": "MRR@10 -0.002 (recall@5 -0.025) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "per_section=3",
+      "mrr_at_10": 0.0247,
+      "recall_at_5": 0.05,
+      "accepted": false,
+      "why": "MRR@10 -0.000 (recall@5 +0.000) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "min_score=0.55",
+      "mrr_at_10": 0.0247,
+      "recall_at_5": 0.05,
+      "accepted": false,
+      "why": "MRR@10 -0.000 (recall@5 +0.000) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "min_score=0.65",
+      "mrr_at_10": 0.0125,
+      "recall_at_5": 0.025,
+      "accepted": false,
+      "why": "MRR@10 -0.013 (recall@5 -0.025) is within the 0.014 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "overlap=300",
+      "mrr_at_10": 0.0251,
+      "recall_at_5": 0.05,
+      "accepted": false,
+      "why": "MRR@10 +0.000 is within the 0.014 noise margin"
+    }
+  ]
+}

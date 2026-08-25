@@ -1,0 +1,328 @@
+{
+  "fingerprint": "110b133388662111",
+  "slug": "hermeneutica-capitulo-1-110b1333",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.425,
+    "recall_at_5": 0.85,
+    "mrr_at_10": 0.6015,
+    "recall_at_5_dense_only": 0.9,
+    "noise_floor": 0.5865,
+    "chunks": 63,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Qué cualidad del contenido bíblico manifiesta la esencia divina, revelando su deseo de ser comprendido y amado por sus creaciones?",
+      "chunk_index": 6,
+      "char_mid": 6199,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.1 La Biblia es difícil de entender."
+    },
+    {
+      "question": "¿De qué manera la lectura de los textos sagrados influye positivamente en el bienestar psicológico de las personas, según lo expuesto?",
+      "chunk_index": 28,
+      "char_mid": 23838,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.3.1 La Biblia es un regalo de Dios. > 1.3.3 La Biblia es útil"
+    },
+    {
+      "question": "¿Qué número de capítulo y página se indican para el material de hermenéutica de la Unidad Educativa IBLI FACTER?",
+      "chunk_index": 45,
+      "char_mid": 39429,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.5 Principios de Interpretación Bíblica > 1.5.5 La relación del intérprete con el objeto de su estudio"
+    },
+    {
+      "question": "¿Cuáles son los tres motivos principales que justifican el estudio de las Sagradas Escrituras?",
+      "chunk_index": 24,
+      "char_mid": 21197,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos"
+    },
+    {
+      "question": "¿Qué cualidades específicas se atribuyen a la manera de escribir de los textos sagrados, y cómo se manifiestan en su contenido?",
+      "chunk_index": 41,
+      "char_mid": 35298,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.5 Principios de Interpretación Bíblica > 1.5.4 El estilo de las Escrituras"
+    },
+    {
+      "question": "¿Cómo se justifica que los escritos bíblicos mantengan su relevancia para las inquietudes y situaciones actuales, considerando su origen en épocas pasadas?",
+      "chunk_index": 14,
+      "char_mid": 13597,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.3 La Biblia es anticuada"
+    },
+    {
+      "question": "¿Cuál es la tendencia inherente de la mente humana que dificulta la aceptación de la verdad, y qué tipo de esfuerzo volitivo se requiere para superarla, según lo respaldado por las escrituras?",
+      "chunk_index": 58,
+      "char_mid": 49042,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.8 Actitudes del estudiante > 1.8.1 Tener disposición para el encuentro con Dios"
+    },
+    {
+      "question": "¿Cuál es la finalidad primordial de la asimilación de los textos sagrados y en qué se distingue de una nueva manifestación divina?",
+      "chunk_index": 46,
+      "char_mid": 39690,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.7 De la lectura a la Iluminación"
+    },
+    {
+      "question": "¿Qué factor esencial convierte la lectura de las escrituras de una obligación percibida en una fuente de gozo y enriquecimiento personal?",
+      "chunk_index": 11,
+      "char_mid": 11097,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.2 La Biblia es aburrida"
+    },
+    {
+      "question": "¿Cuál fue la confusión inicial sobre las características lingüísticas de los textos del Nuevo Testamento y cómo se solucionó?",
+      "chunk_index": 44,
+      "char_mid": 38408,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.5 Principios de Interpretación Bíblica > 1.5.5 La relación del intérprete con el objeto de su estudio"
+    },
+    {
+      "question": "¿Qué beneficio personal se obtiene al interpretar la Biblia más allá de sus detalles culturales antiguos y aceptar su carácter imperecedero?",
+      "chunk_index": 17,
+      "char_mid": 16380,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.3 La Biblia es anticuada"
+    },
+    {
+      "question": "¿Qué factor interno, más allá de la capacidad intelectual, influye en la percepción de la complejidad de los textos bíblicos?",
+      "chunk_index": 4,
+      "char_mid": 4338,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.1 La Biblia es difícil de entender."
+    },
+    {
+      "question": "¿Qué comparaciones se emplean para distinguir entre la extracción genuina del sentido de un escrito antiguo y la imposición de nociones personales sobre este?",
+      "chunk_index": 31,
+      "char_mid": 26076,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.4 El arte de traducir la historia"
+    },
+    {
+      "question": "Según un autor citado, ¿cuál es la principal justificación para el estudio de las escrituras, incluso si no resultan atractivas?",
+      "chunk_index": 23,
+      "char_mid": 20522,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos"
+    },
+    {
+      "question": "¿Cómo la diversidad de formas de expresión textual presentes en la Biblia ayuda a que su contenido sea más accesible y menos distante para quienes lo leen?",
+      "chunk_index": 5,
+      "char_mid": 5424,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.1 La Biblia es difícil de entender."
+    },
+    {
+      "question": "¿Qué categorías de ideas previas influyen en la interpretación de un texto y cómo un método de ciclo continuo, basado en el contexto, se convierte en una herramienta exacta para la comprensión bíblica?",
+      "chunk_index": 33,
+      "char_mid": 28010,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.5 Principios de Interpretación Bíblica"
+    },
+    {
+      "question": "¿De qué manera una perspectiva diferente puede hacer que secciones aparentemente monótonas de la Biblia, como los registros genealógicos, revelen la fidelidad de Dios a lo largo del tiempo?",
+      "chunk_index": 8,
+      "char_mid": 8117,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.2 La Biblia es aburrida"
+    },
+    {
+      "question": "¿Qué analogía se emplea para explicar que las instrucciones divinas sobre el estudio de los escritos sagrados no son reglas arbitrarias, sino una respuesta a una necesidad vital?",
+      "chunk_index": 26,
+      "char_mid": 22213,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.3.1 La Biblia es un regalo de Dios. > 1.3.2 Es MANDATO de Dios leer y estudiar la Biblia"
+    },
+    {
+      "question": "¿Qué metáfora se utiliza para ilustrar la manera en que la Biblia se formó y mantiene su coherencia, en contraste con una creación mecánica o un diseño preestablecido?",
+      "chunk_index": 37,
+      "char_mid": 31521,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.5 Principios de Interpretación Bíblica > 1.5.2 Unidad y diversidad en la Biblia"
+    },
+    {
+      "question": "¿Qué implicaría sobre la naturaleza de la revelación divina si su mensaje solo fuera comprensible para una minoría privilegiada?",
+      "chunk_index": 3,
+      "char_mid": 3229,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.1 La Biblia es difícil de entender."
+    },
+    {
+      "question": "¿Cuál es el propósito o la justificación para la lectura y el análisis de los escritos sagrados?",
+      "chunk_index": 22,
+      "char_mid": 19904,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos"
+    },
+    {
+      "question": "¿Qué cualidad específica le permite a la Biblia entender las ideas y propósitos que las personas tienen en el momento actual?",
+      "chunk_index": 16,
+      "char_mid": 15632,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.3 La Biblia es anticuada"
+    },
+    {
+      "question": "¿Qué detalles se conocen sobre la procedencia de la Nueva Versión Internacional y la composición del equipo de especialistas que la elaboró?",
+      "chunk_index": 19,
+      "char_mid": 18148,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.3 La Biblia es anticuada > 1.1.3.1 Importancia de las versiones actualizadas de las Escrituras. La NVI."
+    },
+    {
+      "question": "¿Qué resultado produce una expectativa previa de tedio al iniciar el estudio de la Biblia?",
+      "chunk_index": 7,
+      "char_mid": 7020,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.2 La Biblia es aburrida"
+    },
+    {
+      "question": "¿Según las afirmaciones de M.S. Terry citadas en el texto, qué finalidad principal tiene un autor al escribir y cómo se describe la naturaleza de los escritos bíblicos en relación con la comprensión de los lectores?",
+      "chunk_index": 18,
+      "char_mid": 17216,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.3 La Biblia es anticuada > 1.1.3.1 Importancia de las versiones actualizadas de las Escrituras. La NVI."
+    },
+    {
+      "question": "¿Qué método de estudio se aconseja para las escrituras que implica concentrarse en un único pasaje hasta su total asimilación antes de proceder con otros temas?",
+      "chunk_index": 59,
+      "char_mid": 50273,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.8 Actitudes del estudiante > 1.8.1 Tener disposición para el encuentro con Dios"
+    },
+    {
+      "question": "¿Qué fenómeno se observa en la comunidad de creyentes, donde la facilidad de acceso a los textos sagrados a través de múltiples medios no se traduce en una mayor lectura y puesta en práctica de sus enseñanzas?",
+      "chunk_index": 20,
+      "char_mid": 19160,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.2 La autosuficiencia intelectual"
+    },
+    {
+      "question": "¿Qué cualidades se le atribuyen al mensaje divino que le permiten examinar las profundidades del ser y las motivaciones internas de una persona?",
+      "chunk_index": 12,
+      "char_mid": 11789,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.2 La Biblia es aburrida"
+    },
+    {
+      "question": "¿Qué principio esencial sobre la comprensión de los textos sagrados facilita un estudio metódico y previene interpretaciones caprichosas?",
+      "chunk_index": 40,
+      "char_mid": 34329,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.5 Principios de Interpretación Bíblica > 1.5.3 La unidad del significado de las Escrituras"
+    },
+    {
+      "question": "¿Qué creencia social obstaculiza la valoración de textos antiguos y cómo se puede superar para revelar su riqueza psicológica y espiritual?",
+      "chunk_index": 9,
+      "char_mid": 9162,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.2 La Biblia es aburrida"
+    },
+    {
+      "question": "¿Cuál es la diferencia fundamental entre la interpretación bíblica vista como un ejercicio puramente filológico y como una experiencia transformadora, y qué actitud interna se requiere para una comprensión espiritual genuina de los textos sagrados?",
+      "chunk_index": 57,
+      "char_mid": 47884,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.8 Actitudes del estudiante > 1.8.1 Tener disposición para el encuentro con Dios"
+    },
+    {
+      "question": "¿Qué dificultad principal se presenta al inicio de la interpretación de un texto bíblico para quien lo analiza?",
+      "chunk_index": 32,
+      "char_mid": 27130,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.5 Principios de Interpretación Bíblica"
+    },
+    {
+      "question": "¿Qué idiomas principales se utilizaron para escribir el Antiguo y el Nuevo Testamento, y qué excepciones se mencionan para el primero?",
+      "chunk_index": 38,
+      "char_mid": 32442,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.5 Principios de Interpretación Bíblica > 1.5.2 Unidad y diversidad en la Biblia"
+    },
+    {
+      "question": "¿Cómo se describe la influencia sobrenatural que, según se afirma, guio a los escritores bíblicos, y qué consecuencia tiene esta intervención en la autoridad de sus textos para la fe y la conducta?",
+      "chunk_index": 36,
+      "char_mid": 30540,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.5 Principios de Interpretación Bíblica > 1.5.1 La inspiración de la Biblia"
+    },
+    {
+      "question": "¿Qué propósito oculto puede tener la declaración de que un fragmento de las escrituras es monótono, y qué sucede al superar esa percepción?",
+      "chunk_index": 10,
+      "char_mid": 10129,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia > 1.1.2 La Biblia es aburrida"
+    },
+    {
+      "question": "¿Qué disposición de carácter se considera la más impactante para la metamorfosis individual al interactuar con las escrituras?",
+      "chunk_index": 55,
+      "char_mid": 45686,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.8 Actitudes del estudiante"
+    },
+    {
+      "question": "¿Qué se considera esencial para que la institución eclesiástica retome sus fundamentos originales?",
+      "chunk_index": 21,
+      "char_mid": 19801,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.2 La autosuficiencia intelectual"
+    },
+    {
+      "question": "¿Qué justificaciones incorrectas se presentan para la renuencia a examinar las Sagradas Escrituras?",
+      "chunk_index": 1,
+      "char_mid": 1417,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.1 Mitos acerca de la Biblia"
+    },
+    {
+      "question": "¿Qué disciplina se encarga de establecer una conexión entre el lector actual y los autores originales de los escritos bíblicos, a pesar de las diferencias de época y contexto cultural?",
+      "chunk_index": 0,
+      "char_mid": 628,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos"
+    },
+    {
+      "question": "¿De qué manera las particularidades de los autores bíblicos y la inclusión de relatos históricos contribuyen a la singularidad de cada escrito sagrado?",
+      "chunk_index": 39,
+      "char_mid": 33316,
+      "cell_ref": "",
+      "breadcrumb": "1. Suposiciones y Fundamentos > 1.5 Principios de Interpretación Bíblica > 1.5.2 Unidad y diversidad en la Biblia"
+    }
+  ],
+  "learned_from": "libros/done/Hermeneutica Capitulo 1.pdf",
+  "learned_at": 1785537775.8000057,
+  "revisions": 7,
+  "validation_notes": [
+    "OK  header_patterns: none proposed; nothing to strip",
+    "FAIL heading_guards: level-1 numbering is [2, 5, 6, 7], which is not contiguous",
+    "OK  question_pattern: 2/165 paragraphs, 100% confirmed by an independent signal",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

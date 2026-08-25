@@ -1,0 +1,451 @@
+{
+  "fingerprint": "91d23efbc9a8003b",
+  "slug": "clase-2-91d23efb",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [
+      "^INTRODUCCION\\s+A\\s+LA\\s+HOMILETICA$"
+    ],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 80,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": "^\\d+\\s",
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.475,
+    "recall_at_5": 0.75,
+    "mrr_at_10": 0.6224,
+    "recall_at_5_dense_only": 0.875,
+    "noise_floor": 0.6045,
+    "chunks": 85,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Qué actividad intelectual se pone en práctica al reflexionar sobre el sentido y la pertinencia personal de un vocablo?",
+      "chunk_index": 15,
+      "char_mid": 11922,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué papel crucial se le atribuye al Espíritu Santo en el proceso de preparar el corazón de quien escucha la predicación y generar una respuesta espiritual?",
+      "chunk_index": 72,
+      "char_mid": 53466,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Cuáles son las diversas acepciones y el trasfondo etimológico del término hebreo 'qara', y qué aspecto particular de la comunicación subraya este vocablo en comparación con otros?",
+      "chunk_index": 60,
+      "char_mid": 43339,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Cuál es la esencia del mensaje que se conoce como Evangelio?",
+      "chunk_index": 37,
+      "char_mid": 26766,
+      "cell_ref": "",
+      "breadcrumb": "14 Ropero, A. (2020). Homilética Bíblica. (p. 125). Editorial Clie."
+    },
+    {
+      "question": "¿Cuál es la diferencia en el inicio del cambio espiritual que promueve la difusión del mensaje de Cristo y la evolución constante que fomenta la enseñanza bíblica?",
+      "chunk_index": 32,
+      "char_mid": 21859,
+      "cell_ref": "",
+      "breadcrumb": "14 Ropero, A. (2020). Homilética Bíblica. (p. 125). Editorial Clie."
+    },
+    {
+      "question": "¿Qué palabras hebreas, que no eran un término directo para la predicación en el Antiguo Testamento, obtuvieron significados relacionados con la transmisión de mensajes divinos y cómo su traducción al griego en la Septuaginta impactó la terminología del Nuevo Testamento y la cultura cristiana?",
+      "chunk_index": 56,
+      "char_mid": 40598,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Qué cualidades específicas adquieren los mensajes religiosos al ser preparados mediante un análisis profundo de las escrituras?",
+      "chunk_index": 24,
+      "char_mid": 16507,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cómo describe John Stott la función esencial de la homilética en relación con la manifestación divina a través de las escrituras?",
+      "chunk_index": 4,
+      "char_mid": 4380,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué conjunto de citas bíblicas se presenta para evidenciar que la muerte de Jesús sirvió como sacrificio expiatorio por las faltas de la humanidad?",
+      "chunk_index": 40,
+      "char_mid": 28099,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Qué distinción se establece entre la audiencia a la que se dirige la proclamación inicial de la fe y la congregación a la que se destina la explicación de un sermón?",
+      "chunk_index": 31,
+      "char_mid": 20754,
+      "cell_ref": "",
+      "breadcrumb": "14 Ropero, A. (2020). Homilética Bíblica. (p. 125). Editorial Clie."
+    },
+    {
+      "question": "¿Qué aspectos conforman la disciplina teológica enfocada en la predicación para fortalecer la fe, y qué implica cada uno en su metodología, práctica y resultado en los oyentes?",
+      "chunk_index": 5,
+      "char_mid": 5246,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué grupos de personas atestiguaron la resurrección de Cristo, según el pasaje de Corintios, y cuál era el estado de la mayoría de esos observadores en el momento de la redacción?",
+      "chunk_index": 42,
+      "char_mid": 29964,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Cuál es la finalidad esencial de la homilética y sobre qué fundamento debe construirse la exposición de sermones para prevenir errores en los tiempos venideros, según lo expuesto en el fragmento?",
+      "chunk_index": 10,
+      "char_mid": 8189,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la publicación o sitio web que se cita como fuente para la entrada del término hebreo Strong 1319?",
+      "chunk_index": 58,
+      "char_mid": 41570,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿En qué año la Real Academia Española actualizó su definición de homilética en su diccionario?",
+      "chunk_index": 6,
+      "char_mid": 5820,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el nombre de la publicación de referencia teológica escrita por F. Lacueva, editada por Clie en 2001, que se menciona en la página 274?",
+      "chunk_index": 26,
+      "char_mid": 18025,
+      "cell_ref": "",
+      "breadcrumb": "14 Ropero, A. (2020). Homilética Bíblica. (p. 125). Editorial Clie."
+    },
+    {
+      "question": "¿Qué término griego, según un diccionario expositivo, se refiere al contenido de un mensaje divulgado, diferenciándolo de la acción de su divulgación?",
+      "chunk_index": 62,
+      "char_mid": 44961,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Qué autores y títulos de obras se citan en este segmento como material de consulta?",
+      "chunk_index": 11,
+      "char_mid": 8877,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué publicaciones y autores específicos se mencionan como fuentes en este pasaje?",
+      "chunk_index": 66,
+      "char_mid": 48609,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Cuál es la editorial de la obra de consulta sobre catequesis y pedagogía religiosa citada en este texto?",
+      "chunk_index": 47,
+      "char_mid": 32672,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Qué concepto se describe como la actitud de quienes desean que sus afirmaciones sean consideradas verdades inquebrantables?",
+      "chunk_index": 16,
+      "char_mid": 12245,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué editorial fue la encargada de publicar el 'Diccionario de Catequesis y Pedagogía Religiosa'?",
+      "chunk_index": 21,
+      "char_mid": 15057,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué interrogante específica se formula acerca de los vínculos y las divergencias entre la tarea de evangelizar y la práctica de la homilía?",
+      "chunk_index": 30,
+      "char_mid": 20121,
+      "cell_ref": "",
+      "breadcrumb": "14 Ropero, A. (2020). Homilética Bíblica. (p. 125). Editorial Clie."
+    },
+    {
+      "question": "¿Qué interrogante se formula acerca de la relevancia de las estrategias ideadas por pensadores helénicos para la oratoria religiosa?",
+      "chunk_index": 48,
+      "char_mid": 32854,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Qué acción específica prometió Jesús realizar antes de su regreso para que sus discípulos pudieran estar con él?",
+      "chunk_index": 44,
+      "char_mid": 30973,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Cuál es la interrogante central acerca de la ubicación de la predicación sagrada como disciplina dentro de los estudios divinos?",
+      "chunk_index": 9,
+      "char_mid": 7697,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la función primordial de la difusión de la palabra divina dentro del objetivo central de la comunidad creyente, y qué disyuntiva fundamental presenta a los oyentes?",
+      "chunk_index": 70,
+      "char_mid": 51523,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Qué interrogante principal se formula sobre la contribución del análisis de textos sagrados a la preparación de sermones?",
+      "chunk_index": 23,
+      "char_mid": 15914,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué papel esencial desempeña el mensaje de las buenas nuevas en la exposición de sermones?",
+      "chunk_index": 38,
+      "char_mid": 26829,
+      "cell_ref": "",
+      "breadcrumb": "14 Ropero, A. (2020). Homilética Bíblica. (p. 125). Editorial Clie."
+    },
+    {
+      "question": "Cuál es la interrogante principal que se plantea sobre la contribución de la exégesis en la preparación de sermones?",
+      "chunk_index": 17,
+      "char_mid": 12544,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el objetivo principal de la difusión del mensaje de salvación y cómo se ilustra su impacto en las personas?",
+      "chunk_index": 34,
+      "char_mid": 24067,
+      "cell_ref": "",
+      "breadcrumb": "14 Ropero, A. (2020). Homilética Bíblica. (p. 125). Editorial Clie."
+    },
+    {
+      "question": "¿Cómo se describe la manifestación de Dios en forma humana, incluyendo el sacrificio de su naturaleza divina para compartir la condición humana?",
+      "chunk_index": 75,
+      "char_mid": 56704,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Qué responsabilidades específicas se atribuyen tanto al orador como al oyente en el contexto de la proclamación de un mensaje espiritual?",
+      "chunk_index": 73,
+      "char_mid": 54518,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿De qué manera la interpretación contextual de un sermón contribuye a evitar la imposición de una única perspectiva, promoviendo en su lugar la reflexión espiritual en la congregación?",
+      "chunk_index": 19,
+      "char_mid": 14128,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué aspectos fundamentales debe considerar un mensajero del evangelio respecto a su testimonio personal, el sacrificio del seguimiento y la integración de los nuevos adeptos?",
+      "chunk_index": 25,
+      "char_mid": 17490,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera el maestro Jesús, siguiendo una tradición antigua, presentaba ideas espirituales profundas de forma accesible a sus seguidores, utilizando ejemplos concretos?",
+      "chunk_index": 50,
+      "char_mid": 34328,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Qué elementos conceptuales fundamentales se deben establecer antes de profundizar en el estudio de la homilética y cuál es el propósito de dicha clarificación?",
+      "chunk_index": 3,
+      "char_mid": 3345,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué implica ser un representante de Cristo en todo momento, y de forma particular al hablarle a la comunidad, según lo expresado por el pastor Darío Silva-Silva?",
+      "chunk_index": 1,
+      "char_mid": 1537,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué pasajes bíblicos del Antiguo y Nuevo Testamento se mencionan para ilustrar la declaración de Jesús sobre su propósito de llevar buenas nuevas a los desfavorecidos y liberar a los oprimidos?",
+      "chunk_index": 65,
+      "char_mid": 47948,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    },
+    {
+      "question": "¿Qué funciones específicas cumplen dos vocablos hebreos al unirse en un pasaje bíblico concreto para comunicar tanto la esencia esperanzadora como la acción enérgica de difundir un mensaje?",
+      "chunk_index": 61,
+      "char_mid": 44187,
+      "cell_ref": "",
+      "breadcrumb": "16 Lacueva, F. (2001). Diccionario Teológico Ilustrado. (p. 274). Editorial Clie"
+    }
+  ],
+  "learned_from": "libros/CLASE 2.pdf",
+  "learned_at": 1785539355.6811264,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^INTRODUCCION\\\\s+A\\\\s+LA\\\\s+HOMILETICA$' matches 'INTRODUCCION A LA HOMILETICA' on 22 pages, no body hits",
+    "OK  heading_guards: 3 chapters numbered [14, 15, 16], 0 subsections",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: 11/257 paragraphs, 91% confirmed by an independent signal"
+  ],
+  "tuning_history": [
+    {
+      "round": 1,
+      "candidate": "per_section=1",
+      "mrr_at_10": 0.6111,
+      "recall_at_5": 0.8,
+      "accepted": false,
+      "why": "MRR@10 -0.009 (recall@5 +0.075) is within the 0.062 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "per_section=3",
+      "mrr_at_10": 0.645,
+      "recall_at_5": 0.8,
+      "accepted": false,
+      "why": "MRR@10 +0.025 (recall@5 +0.075) is within the 0.062 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "min_score=0.55",
+      "mrr_at_10": 0.6194,
+      "recall_at_5": 0.725,
+      "accepted": false,
+      "why": "MRR@10 -0.000 (recall@5 +0.000) is within the 0.062 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "min_score=0.65",
+      "mrr_at_10": 0.6583,
+      "recall_at_5": 0.725,
+      "accepted": false,
+      "why": "MRR@10 +0.039 (recall@5 +0.000) is within the 0.062 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "target=900",
+      "mrr_at_10": 0.5158,
+      "recall_at_5": 0.675,
+      "accepted": false,
+      "why": "MRR@10 -0.104 is within the 0.062 noise margin"
+    },
+    {
+      "round": 2,
+      "candidate": "per_section=1",
+      "mrr_at_10": 0.6019,
+      "recall_at_5": 0.8,
+      "accepted": false,
+      "why": "MRR@10 -0.011 (recall@5 +0.075) is within the 0.063 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "per_section=3",
+      "mrr_at_10": 0.6328,
+      "recall_at_5": 0.8,
+      "accepted": false,
+      "why": "MRR@10 +0.020 (recall@5 +0.075) is within the 0.063 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "min_score=0.55",
+      "mrr_at_10": 0.6171,
+      "recall_at_5": 0.7,
+      "accepted": false,
+      "why": "MRR@10 +0.004 (recall@5 -0.025) is within the 0.063 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "min_score=0.65",
+      "mrr_at_10": 0.6541,
+      "recall_at_5": 0.725,
+      "accepted": false,
+      "why": "MRR@10 +0.041 (recall@5 +0.000) is within the 0.063 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 2,
+      "candidate": "target=1600",
+      "mrr_at_10": 0.6047,
+      "recall_at_5": 0.725,
+      "accepted": false,
+      "why": "MRR@10 -0.009 is within the 0.063 noise margin"
+    },
+    {
+      "round": 3,
+      "candidate": "per_section=1",
+      "mrr_at_10": 0.5836,
+      "recall_at_5": 0.8,
+      "accepted": false,
+      "why": "MRR@10 -0.025 (recall@5 +0.100) is within the 0.065 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "per_section=3",
+      "mrr_at_10": 0.6415,
+      "recall_at_5": 0.8,
+      "accepted": false,
+      "why": "MRR@10 +0.033 (recall@5 +0.100) is within the 0.065 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "min_score=0.55",
+      "mrr_at_10": 0.6141,
+      "recall_at_5": 0.75,
+      "accepted": false,
+      "why": "MRR@10 +0.005 (recall@5 +0.050) is within the 0.065 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "min_score=0.65",
+      "mrr_at_10": 0.6413,
+      "recall_at_5": 0.725,
+      "accepted": false,
+      "why": "MRR@10 +0.033 (recall@5 +0.025) is within the 0.065 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 3,
+      "candidate": "overlap=300",
+      "mrr_at_10": 0.6243,
+      "recall_at_5": 0.725,
+      "accepted": false,
+      "why": "MRR@10 +0.016 is within the 0.065 noise margin"
+    }
+  ]
+}

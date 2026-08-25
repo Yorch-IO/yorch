@@ -1,0 +1,237 @@
+{
+  "fingerprint": "cdf7dfc60cb06404",
+  "slug": "escuelas-moralistas-2-cdf7dfc6",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 1,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.7037,
+    "recall_at_5": 1.0,
+    "mrr_at_10": 0.816,
+    "recall_at_5_dense_only": 1.0,
+    "noise_floor": 0.5909,
+    "chunks": 27,
+    "eval_questions": 27
+  },
+  "evalset": [
+    {
+      "question": "¿Cuál se convirtió en el principal punto de referencia para la comprensión del ser humano una vez que la ciudad-estado perdió su predominio?",
+      "chunk_index": 4,
+      "char_mid": 2568,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué principio estoico esencial fue integrado por el cristianismo y posteriormente moldeó el derecho romano y las normativas occidentales?",
+      "chunk_index": 17,
+      "char_mid": 10942,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué dos estados mentales, uno referido a la liberación de las pasiones y otro al dominio personal, son el resultado de la filosofía estoica de vivir conforme a la razón y la naturaleza, y cuál es la diferencia entre el primero y la ausencia de anhelos?",
+      "chunk_index": 15,
+      "char_mid": 8690,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo de satisfacción consideraba la escuela de Epicuro como la auténtica fuente de bienestar?",
+      "chunk_index": 11,
+      "char_mid": 4628,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué característica primordial, aparte de la acumulación de información, define a un individuo con verdadera sabiduría?",
+      "chunk_index": 8,
+      "char_mid": 3163,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "Desde una perspectiva cristiana, ¿qué defectos se le atribuyen al pensamiento epicúreo que también se encuentran en la ética budista?",
+      "chunk_index": 12,
+      "char_mid": 5735,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera la filosofía se volvió más accesible al público general y qué religiones encontraron un ambiente propicio para su desarrollo durante este período de incertidumbre?",
+      "chunk_index": 2,
+      "char_mid": 1974,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera el concepto cristiano de la divinidad se opone a la imperturbabilidad estoica, particularmente en cuanto a la capacidad de experimentar emociones y compasión por la humanidad?",
+      "chunk_index": 19,
+      "char_mid": 12696,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la procedencia del apelativo de la corriente filosófica cínica y quiénes son considerados sus precursores?",
+      "chunk_index": 22,
+      "char_mid": 15612,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué circunstancias históricas propiciaron el cambio del enfoque colectivo al individual en el pensamiento filosófico griego y cómo se compara esto con fenómenos contemporáneos?",
+      "chunk_index": 1,
+      "char_mid": 933,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cómo se describe la naturaleza del pensamiento ecléctico y qué desventajas inherentes se le atribuyen como enfoque filosófico?",
+      "chunk_index": 21,
+      "char_mid": 14524,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué provocó el malestar de un forastero al observar las costumbres religiosas en Atenas, y cuál fue la reacción inicial de algunos pensadores locales ante sus ideas?",
+      "chunk_index": 20,
+      "char_mid": 13504,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué dos disciplinas se erigieron como pilares de apoyo en un momento de gran adversidad?",
+      "chunk_index": 10,
+      "char_mid": 3620,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera la postura cristiana frente al sufrimiento y la interacción comunitaria influyó en la desaprobación de las ideas epicúreas?",
+      "chunk_index": 13,
+      "char_mid": 6541,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Por qué es fundamental situar en su momento histórico las corrientes de pensamiento que abordan la moral?",
+      "chunk_index": 0,
+      "char_mid": 145,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuáles son las fases del proceso de ascenso espiritual propuesto por el neoplatonismo para alcanzar la unión con lo divino?",
+      "chunk_index": 25,
+      "char_mid": 18606,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué objeción se plantea a la expresión cínica desde un punto de vista cristiano, y qué pensador contemporáneo articula esta idea con una cita específica?",
+      "chunk_index": 23,
+      "char_mid": 16555,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el origen etimológico del término que designa a la filosofía fundada por Zenón de Citio?",
+      "chunk_index": 14,
+      "char_mid": 7634,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo de conexiones se le adjudicaron a Séneca con el cristianismo emergente, y cómo lo percibieron algunos de los primeros líderes cristianos?",
+      "chunk_index": 16,
+      "char_mid": 9791,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué doctrina sobre la procedencia del espíritu humano adoptó Tertuliano, según Justo L. González, debido a una concepción materialista de la existencia?",
+      "chunk_index": 18,
+      "char_mid": 11954,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuáles fueron los deseos más importantes que surgieron en la gente a causa de la inestabilidad de ese periodo?",
+      "chunk_index": 5,
+      "char_mid": 2790,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué término empleaba Aristóteles para describir al ser humano?",
+      "chunk_index": 3,
+      "char_mid": 2414,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué proceso fundamental llevan a cabo las filosofías estoica y epicúrea de esa era?",
+      "chunk_index": 7,
+      "char_mid": 3054,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cómo se organiza el conocimiento filosófico y cuál es su meta principal, descartando el pensamiento puramente teórico?",
+      "chunk_index": 9,
+      "char_mid": 3365,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué pensadores fueron influenciados en sus ideas sobre la naturaleza del mal y la doctrina de la teología que describe a Dios por lo que no es?",
+      "chunk_index": 26,
+      "char_mid": 19269,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo de estudio de la moral y el mundo material se establece con una orientación universal y natural?",
+      "chunk_index": 6,
+      "char_mid": 2957,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "De acuerdo con la filosofía de Plotino, ¿qué entidad representa el principio absoluto e inefable del cual emana toda la realidad?",
+      "chunk_index": 24,
+      "char_mid": 17486,
+      "cell_ref": "",
+      "breadcrumb": ""
+    }
+  ],
+  "learned_from": "libros/ESCUELAS MORALISTAS (2).pdf",
+  "learned_at": 1785542837.7159536,
+  "revisions": 5,
+  "validation_notes": [
+    "OK  header_patterns: none proposed; nothing to strip",
+    "FAIL heading_guards: l1_max=250 admits no level-1 headings at all",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

@@ -1,0 +1,328 @@
+{
+  "fingerprint": "50f958b765c5415b",
+  "slug": "clase-3-holiletica-a-traves-de-la-historia-bibl--50f958b7",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.575,
+    "recall_at_5": 1.0,
+    "mrr_at_10": 0.7537,
+    "recall_at_5_dense_only": 0.95,
+    "noise_floor": 0.6007,
+    "chunks": 89,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Qué opción trascendental se presentó a los israelitas en el tercer discurso de Moisés, enfatizando su responsabilidad individual sobre su futuro?",
+      "chunk_index": 14,
+      "char_mid": 11590,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo de narraciones breves, que utilizaban situaciones diarias para comunicar lecciones morales y espirituales complejas de manera accesible, empleaba Jesús en su ministerio?",
+      "chunk_index": 61,
+      "char_mid": 52611,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué sanciones se implementaron para aquellos que desobedecieran los preceptos divinos y las directrices reales, según la autoridad delegada a Esdras?",
+      "chunk_index": 52,
+      "char_mid": 43951,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuáles fueron los principales motores que propiciaron el auge económico y la refinación cultural de la nación hebrea durante su era de reyes?",
+      "chunk_index": 33,
+      "char_mid": 26499,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué equilibrio fundamental presentaba la comunicación profética sobre la naturaleza divina y cuál era su objetivo final para la humanidad?",
+      "chunk_index": 27,
+      "char_mid": 22092,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuáles fueron los dos métodos principales de comunicación religiosa durante el periodo monárquico?",
+      "chunk_index": 39,
+      "char_mid": 32360,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el objetivo principal de los sermones que buscan reactivar la conciencia colectiva de un pueblo y exigir su lealtad a los mandatos divinos?",
+      "chunk_index": 9,
+      "char_mid": 7908,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué distinción fundamental existía entre los fundamentos de la enseñanza de Jesús y los preceptos de los fariseos?",
+      "chunk_index": 67,
+      "char_mid": 57317,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué sugerencia concreta le hizo un líder del pueblo a Esdras para corregir la deslealtad de los israelitas, durante un momento de gran lamento colectivo frente al Templo?",
+      "chunk_index": 51,
+      "char_mid": 42928,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué declaración fundamental sobre la unicidad divina y el afecto hacia ella se incluye en la segunda parte de las exhortaciones de Moisés, junto con preceptos para el culto y la convivencia?",
+      "chunk_index": 13,
+      "char_mid": 10754,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué características resaltaron los apóstoles acerca de la continuidad y el avance del reinado de Dios después de la partida de Jesús?",
+      "chunk_index": 71,
+      "char_mid": 61264,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál fue la reacción del pueblo israelita cuando Josué les propuso decidir a qué divinidad dedicarían su servicio?",
+      "chunk_index": 18,
+      "char_mid": 15653,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué aspectos fundamentales de la identidad y destino del Mesías argumentaba Pablo en la sinagoga, apoyándose en los escritos sagrados?",
+      "chunk_index": 57,
+      "char_mid": 48847,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué casa editorial publicó la obra de A. Ropero sobre homilética en el año 2020?",
+      "chunk_index": 45,
+      "char_mid": 37814,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué editorial fue la responsable de publicar el 'Diccionario Teológico Ilustrado'?",
+      "chunk_index": 7,
+      "char_mid": 6481,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué persona escribió la publicación denominada 'Diccionario Teológico Ilustrado'?",
+      "chunk_index": 22,
+      "char_mid": 18790,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué editorial publicó la obra 'Autoridad Espiritual' de W. Nee en el año 2006?",
+      "chunk_index": 31,
+      "char_mid": 24813,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué figura bíblica, anterior a Moisés, es designada como vidente en el libro de Génesis, y cuál es el pasaje específico que lo confirma?",
+      "chunk_index": 10,
+      "char_mid": 8388,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué afirmación divina desmiente el agrado por la desaparición de los pecadores, prefiriendo su cambio de vida?",
+      "chunk_index": 26,
+      "char_mid": 21740,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué suceso, donde Jesús liberó a personas de influencias malignas mediante una orden verbal, provocó asombro entre los testigos según el relato bíblico?",
+      "chunk_index": 64,
+      "char_mid": 54568,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué acontecimiento marcó el establecimiento oficial de la monarquía en Israel y qué líder fue el primero en ser designado para unificar a las tribus?",
+      "chunk_index": 29,
+      "char_mid": 23567,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué evolución experimenta la función de los profetas en la estructura de liderazgo descrita?",
+      "chunk_index": 30,
+      "char_mid": 24379,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo y volumen de víveres eran necesarios para el consumo diario del monarca Salomón y su corte?",
+      "chunk_index": 36,
+      "char_mid": 29810,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "Además de proporcionar datos, ¿cuál era la meta principal de la oratoria de Josué en la mente de sus oyentes?",
+      "chunk_index": 17,
+      "char_mid": 14526,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál era la trascendencia de los actos sobrenaturales realizados por Jesús, más allá de simplemente aliviar padecimientos inmediatos?",
+      "chunk_index": 66,
+      "char_mid": 56296,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué ejemplos de individuos que agradaron a Dios mediante su convicción y recibieron una advertencia divina se mencionan, y cuáles fueron las consecuencias de su obediencia?",
+      "chunk_index": 11,
+      "char_mid": 9021,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué actos significativos realizó Moisés antes de su fallecimiento, según los relatos finales del Deuteronomio, incluyendo la designación de su sucesor y la bendición de las tribus?",
+      "chunk_index": 15,
+      "char_mid": 12527,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué mensaje de alivio se le comunica a Jerusalén, señalando que su tiempo de penitencia ha concluido y su transgresión ha sido perdonada?",
+      "chunk_index": 25,
+      "char_mid": 21251,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué efecto produjo la forma de instruir de Jesús en las muchedumbres, en contraste con los guías espirituales de su tiempo?",
+      "chunk_index": 62,
+      "char_mid": 53569,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué comparaciones y advertencias específicas empleó Juan el Bautista para enfatizar la urgencia de una transformación personal y las repercusiones de no producir acciones que demuestren un verdadero arrepentimiento, incluyendo la desestimación de la ascendencia como garantía?",
+      "chunk_index": 59,
+      "char_mid": 50489,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el significado etimológico del concepto central de la predicación cristiana, y de qué idioma proviene?",
+      "chunk_index": 82,
+      "char_mid": 72125,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué acto ceremonial llevó a cabo Josué en Siquén para renovar el compromiso del pueblo con las directrices divinas?",
+      "chunk_index": 19,
+      "char_mid": 16668,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo de exacciones y servicios forzados, según la predicción de Samuel, exigiría un monarca a sus súbditos?",
+      "chunk_index": 38,
+      "char_mid": 31519,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la raíz lingüística y el significado fundamental del concepto de pacto en la relación divina con la humanidad, según el texto?",
+      "chunk_index": 3,
+      "char_mid": 3591,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué figuras destacadas, después del exilio, fueron instrumentales en orientar al pueblo hacia las escrituras y la obediencia para una etapa de renovación?",
+      "chunk_index": 1,
+      "char_mid": 1512,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué recursos estilísticos empleaba Jesús para clarificar ideas espirituales, citando ejemplos de la naturaleza?",
+      "chunk_index": 65,
+      "char_mid": 55246,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo de injusticias económicas buscó corregir Nehemías entre la población?",
+      "chunk_index": 53,
+      "char_mid": 45079,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué acción concreta realizó Jesús para evidenciar que poseía la potestad de remitir las culpas de las personas?",
+      "chunk_index": 63,
+      "char_mid": 54238,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuáles fueron las actividades principales que realizó la comunidad israelita durante una asamblea específica dedicada a la lectura de las escrituras y a la confesión de sus transgresiones?",
+      "chunk_index": 48,
+      "char_mid": 40494,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál fue la constante disposición divina que, a pesar de las advertencias de consecuencias, mantuvo disponible un camino para que las personas volvieran a una relación de fidelidad?",
+      "chunk_index": 24,
+      "char_mid": 20311,
+      "cell_ref": "",
+      "breadcrumb": ""
+    }
+  ],
+  "learned_from": "libros/CLASE 3 Holiletica a traves de la historia biblíca..pdf",
+  "learned_at": 1785540167.734156,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^PREDICACIÓN\\\\s+A\\\\s+TRAVÉS\\\\s+DE\\\\s+LA\\\\s+HISTORIA\\\\s+BÍBLICA$' matches 'PREDICACIÓN A TRAVÉS DE LA HISTORIA BÍBLICA' on 26 pages, no body hits",
+    "FAIL heading_guards: level-1 numbering is [1, 3, 4, 5], which is not contiguous",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: 5/285 paragraphs, 100% confirmed by an independent signal"
+  ],
+  "tuning_history": []
+}

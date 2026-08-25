@@ -1,0 +1,328 @@
+{
+  "fingerprint": "41e148996d0cadc6",
+  "slug": "7-doctrina-de-la-santificaci-n-41e14899",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 60
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.65,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.775,
+    "recall_at_5": 0.95,
+    "mrr_at_10": 0.85,
+    "recall_at_5_dense_only": 0.95,
+    "noise_floor": 0.5752,
+    "chunks": 48,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Qué pasaje bíblico se utiliza para ilustrar que los creyentes, a pesar de sus imperfecciones en la conducta, son considerados apartados y santos ante Dios en su estado inicial?",
+      "chunk_index": 6,
+      "char_mid": 8298,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.1. Santificar o “poner aparte”"
+    },
+    {
+      "question": "¿Cuál es la caracterización de la santificación según Lloyd-Jones, y cómo la distingue de las vivencias subjetivas y los sentimientos fluctuantes?",
+      "chunk_index": 29,
+      "char_mid": 32206,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.3. Distorsiones de la santificación > 7.3.3. La santificación como experiencia"
+    },
+    {
+      "question": "¿Qué expresión se propone como sustituto de 'santificación experimental' para referirse al aspecto de la santificación relacionado con la vivencia personal?",
+      "chunk_index": 25,
+      "char_mid": 27970,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.3. Distorsiones de la santificación > 7.3.3. La santificación como experiencia"
+    },
+    {
+      "question": "¿Qué práctica espiritual es presentada como una defensa anticipada contra la incitación al pecado, según las enseñanzas bíblicas?",
+      "chunk_index": 42,
+      "char_mid": 45622,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación > 7.4.5. La oración en la santificación"
+    },
+    {
+      "question": "¿Qué enfoque se propone para entender mejor la purificación espiritual vivencial y cuántas desviaciones principales se señalan en ella?",
+      "chunk_index": 14,
+      "char_mid": 17165,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.2. Santificación como proceso de mejoramiento"
+    },
+    {
+      "question": "¿Qué condición previa se establece como necesaria para que un individuo empiece a exhibir una conducta cada vez más recta, según la perspectiva presentada?",
+      "chunk_index": 11,
+      "char_mid": 13811,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.2. Santificación como proceso de mejoramiento"
+    },
+    {
+      "question": "¿Qué figuras y movimientos religiosos de la era moderna fueron cruciales en la formación de la perspectiva que considera la santificación como un camino hacia la perfección total?",
+      "chunk_index": 17,
+      "char_mid": 20262,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.3. Distorsiones de la santificación > 7.3.2. Perfeccionismo"
+    },
+    {
+      "question": "¿Cómo describe un teólogo citado la condición de santidad de una persona al momento de su salvación en relación con su desarrollo posterior?",
+      "chunk_index": 4,
+      "char_mid": 5842,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.1. Santificar o “poner aparte”"
+    },
+    {
+      "question": "¿De qué manera interviene Dios Padre, según se describe en 1 Tesalonicenses 5:23, para la completa consagración y preservación del creyente hasta el regreso de Jesucristo?",
+      "chunk_index": 32,
+      "char_mid": 36018,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación"
+    },
+    {
+      "question": "¿Cuál es la razón por la que el vocablo 'experiencia' genera inconvenientes al referirse a la santificación dentro del contexto evangélico hispano, según el pasaje?",
+      "chunk_index": 24,
+      "char_mid": 26759,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.3. Distorsiones de la santificación > 7.3.3. La santificación como experiencia"
+    },
+    {
+      "question": "¿Cuáles son las dos implicaciones principales que se atribuyen al acto inicial de apartar algo o a alguien?",
+      "chunk_index": 5,
+      "char_mid": 7040,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.1. Santificar o “poner aparte”"
+    },
+    {
+      "question": "¿Qué miembro de la Santísima Trinidad se considera el principal agente de la santificación, y cómo se entrelaza esta obra divina con la responsabilidad del creyente?",
+      "chunk_index": 34,
+      "char_mid": 38730,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación"
+    },
+    {
+      "question": "¿Por qué se considera reprochable la limitación del término 'santo' a un grupo selecto de creyentes y qué efecto negativo tuvo esta interpretación en la motivación para una vida piadosa?",
+      "chunk_index": 8,
+      "char_mid": 10378,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.1. Santificar o “poner aparte”"
+    },
+    {
+      "question": "¿A quién se dirigió Jesús con una aparente condescendencia, a pesar de que el interlocutor presumía de su impecable obediencia a los preceptos?",
+      "chunk_index": 22,
+      "char_mid": 24605,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.3. Distorsiones de la santificación > 7.3.3. La santificación como experiencia"
+    },
+    {
+      "question": "¿Qué aclaración proporciona la nota del glosario de la Biblia Nueva Versión Internacional sobre el significado de la palabra 'perfecto' en griego y su posible aplicación a los creyentes?",
+      "chunk_index": 19,
+      "char_mid": 22650,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.3. Distorsiones de la santificación > 7.3.2. Perfeccionismo"
+    },
+    {
+      "question": "¿Qué tipo de herramienta educativa se ofrece para repasar los conceptos relacionados con la santificación?",
+      "chunk_index": 47,
+      "char_mid": 50845,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación"
+    },
+    {
+      "question": "¿Qué pensadores históricos, según el texto, impulsaron la moralidad sin vincularla a lo divino o al cristianismo, y con qué propósito en relación con la fe?",
+      "chunk_index": 15,
+      "char_mid": 18248,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.3. Distorsiones de la santificación > 7.3.1. Moralidad"
+    },
+    {
+      "question": "¿Qué características de mejora moral y objetivos de obediencia a la voluntad divina definen el avance espiritual continuo de un creyente, que comienza con su conversión?",
+      "chunk_index": 9,
+      "char_mid": 11483,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.2. Santificación como proceso de mejoramiento"
+    },
+    {
+      "question": "¿Qué clase de súplica se presenta como ejemplo para aquellos que cometen errores en su progreso hacia la santidad?",
+      "chunk_index": 43,
+      "char_mid": 46453,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación > 7.4.5. La oración en la santificación"
+    },
+    {
+      "question": "¿Qué variedad de expresiones lingüísticas posee el griego para referirse a la pureza o consagración, y qué complicación puede generar esta abundancia para quienes estudian los textos?",
+      "chunk_index": 1,
+      "char_mid": 2361,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación"
+    },
+    {
+      "question": "¿Después de que una persona es declarada justa, cuál es el principal obstáculo persistente relacionado con las faltas y cómo afecta su vínculo con lo sagrado?",
+      "chunk_index": 45,
+      "char_mid": 48038,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación > 7.4.6. La esperanza en la santificación"
+    },
+    {
+      "question": "¿Cuál es la raíz lingüística del concepto de 'asamblea de creyentes' y qué implicación tiene para la separación o consagración de sus miembros?",
+      "chunk_index": 41,
+      "char_mid": 44387,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación > 7.4.4. La comunión en la santificación."
+    },
+    {
+      "question": "¿Cómo describe Martyn Lloyd-Jones la acción continua del Espíritu Santo para liberar al creyente justificado de la impureza y renovar su ser, permitiéndole realizar buenas acciones?",
+      "chunk_index": 10,
+      "char_mid": 12633,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.2. Santificación como proceso de mejoramiento"
+    },
+    {
+      "question": "¿Cuáles son los tres indicadores principales que marcan el progreso en la santificación de un creyente?",
+      "chunk_index": 36,
+      "char_mid": 40707,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación"
+    },
+    {
+      "question": "¿Cuál es la acepción original del verbo 'santificar' y qué tipo de estado o acción describe en su sentido más estricto, diferenciándolo de una mejora moral intrínseca?",
+      "chunk_index": 3,
+      "char_mid": 4160,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.1. Santificar o “poner aparte”"
+    },
+    {
+      "question": "¿Por qué la afirmación de no tener faltas se considera una desviación en el camino de la santificación?",
+      "chunk_index": 20,
+      "char_mid": 23468,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.3. Distorsiones de la santificación > 7.3.2. Perfeccionismo"
+    },
+    {
+      "question": "¿De qué manera se ha logrado precisar la comprensión de la santificación, distinguiéndola de concepciones erróneas y enfatizando su fuente primordial?",
+      "chunk_index": 31,
+      "char_mid": 35293,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación"
+    },
+    {
+      "question": "¿Qué particularidad de traducción se destaca en Levítico 21:8 para un término hebreo, y cuántas interpretaciones fundamentales se asocian a las formas españolas derivadas?",
+      "chunk_index": 2,
+      "char_mid": 3065,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación"
+    },
+    {
+      "question": "¿De qué manera la convicción en aquello que aún no se manifiesta visiblemente fomenta el avance personal hacia la plenitud espiritual, proporcionando seguridad sobre su realización futura y presente?",
+      "chunk_index": 40,
+      "char_mid": 43515,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación > 7.4.3. La fe en la santificación"
+    },
+    {
+      "question": "¿Cuáles son los componentes o actos que constituyen la provisión divina para la purificación de la impureza que el pecado produce en el creyente, de acuerdo con la explicación detallada?",
+      "chunk_index": 46,
+      "char_mid": 49691,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación > 7.4.6. La esperanza en la santificación"
+    },
+    {
+      "question": "¿De qué manera se espera que el creyente participe activamente en su propia transformación continua, y qué tipo de factores influyen en este proceso de santificación práctica?",
+      "chunk_index": 35,
+      "char_mid": 39927,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación"
+    },
+    {
+      "question": "¿Qué actividades cotidianas, según los evangelios de Juan, son un camino para la purificación y la consagración personal?",
+      "chunk_index": 39,
+      "char_mid": 42875,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación > 7.4.2. La Palabra de Dios en la santificación"
+    },
+    {
+      "question": "¿Cuál es la idea errónea que concibe la santificación como un suceso espiritual fugaz y poderoso que, de forma pasiva, otorga al creyente la capacidad de superar el pecado para siempre?",
+      "chunk_index": 21,
+      "char_mid": 24290,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.3. Distorsiones de la santificación > 7.3.3. La santificación como experiencia"
+    },
+    {
+      "question": "¿Cuál es la justificación para emplear el concepto de 'santificación' en lugar de 'santidad' al referirse al proceso espiritual de las personas?",
+      "chunk_index": 0,
+      "char_mid": 1001,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación"
+    },
+    {
+      "question": "¿Qué objeciones principales plantea Chafer a la idea de que la santificación se defina por la vivencia personal o las emociones?",
+      "chunk_index": 23,
+      "char_mid": 25595,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.3. Distorsiones de la santificación > 7.3.3. La santificación como experiencia"
+    },
+    {
+      "question": "¿Qué interpretaciones equivocadas sobre la ausencia total de pecado en la vida de un creyente pueden distorsionar la doctrina de la santificación?",
+      "chunk_index": 18,
+      "char_mid": 21564,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.3. Distorsiones de la santificación > 7.3.2. Perfeccionismo"
+    },
+    {
+      "question": "¿Qué objeción se plantea a la idea de que la santificación es una vivencia meramente pasiva, y cómo esta concepción, según G. Walters, despoja al individuo de su capacidad moral, generando una contradicción en el proceso?",
+      "chunk_index": 30,
+      "char_mid": 34113,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.4. Responsabilidad del creyente en la santificación"
+    },
+    {
+      "question": "¿Por qué la expresión 'santificación experimental' es percibida como no idónea en el contexto del idioma español para aludir a esta faceta de la santificación?",
+      "chunk_index": 13,
+      "char_mid": 16226,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.2. Santificación como proceso de mejoramiento"
+    },
+    {
+      "question": "¿Qué erudito detalla cómo se denominaba a los creyentes en el Nuevo Testamento y por cuánto tiempo se mantuvo esa designación universal antes de transformarse en un título eclesiástico?",
+      "chunk_index": 7,
+      "char_mid": 9473,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.1. Santificar o “poner aparte”"
+    },
+    {
+      "question": "¿Qué condiciones internas deben manifestarse en la solicitud de perdón para que esta acción se considere el inicio del proceso de purificación espiritual?",
+      "chunk_index": 12,
+      "char_mid": 14995,
+      "cell_ref": "",
+      "breadcrumb": "7. Doctrina de la santificación > 7.2. Santificación como proceso de mejoramiento"
+    }
+  ],
+  "learned_from": "libros/done/7.-Doctrina-de-la-Santificación.pdf",
+  "learned_at": 1785536753.0285246,
+  "revisions": 2,
+  "validation_notes": [
+    "OK  header_patterns: none proposed; nothing to strip",
+    "OK  heading_guards: 1 chapters numbered [7], 13 subsections",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

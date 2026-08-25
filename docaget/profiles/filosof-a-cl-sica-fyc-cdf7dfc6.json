@@ -1,0 +1,328 @@
+{
+  "fingerprint": "cdf7dfc60cb06404",
+  "slug": "filosof-a-cl-sica-fyc-cdf7dfc6",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 1,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.85,
+    "recall_at_5": 1.0,
+    "mrr_at_10": 0.9146,
+    "recall_at_5_dense_only": 1.0,
+    "noise_floor": 0.588,
+    "chunks": 58,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Según un psiquiatra, cuál es la contradicción en la situación del hombre contemporáneo respecto a su control del mundo exterior y su manejo interno?",
+      "chunk_index": 6,
+      "char_mid": 6705,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuáles son los componentes de la mente humana según Platón y qué facultad debería dirigir la existencia, y cómo se compara esto con la estructura integral del ser humano en el cristianismo y su guía espiritual?",
+      "chunk_index": 27,
+      "char_mid": 25574,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué campo del saber, según Aristóteles, halla su propósito esencial al dedicarse al estudio de las causas últimas y los primeros fundamentos de todo lo que existe?",
+      "chunk_index": 46,
+      "char_mid": 39734,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué sistema de pensamiento filosófico fue adoptado por la teología cristiana para su desarrollo doctrinal, desde la época de Agustín y a lo largo de la mayor parte del medievo, dada su correspondencia con las creencias bíblicas?",
+      "chunk_index": 23,
+      "char_mid": 22539,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué impacto tuvo la corriente filosófica del nominalismo en el declive de la escolástica y en la formación de ideas clave para la Reforma Protestante?",
+      "chunk_index": 42,
+      "char_mid": 36824,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué riesgo espiritual se advierte para los cristianos si el conocimiento intelectual sobre Cristo suplanta la conexión personal y vital con Él?",
+      "chunk_index": 14,
+      "char_mid": 14467,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál fue el principal estímulo para que los primeros pensadores cristianos se dedicaran a la investigación de las normas que rigen el universo?",
+      "chunk_index": 53,
+      "char_mid": 46511,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera la perspectiva filosófica de Aristóteles contribuyó a que el cristianismo reafirmara la validez del mundo material y evitara interpretaciones etéreas de doctrinas como la encarnación?",
+      "chunk_index": 47,
+      "char_mid": 40812,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera la divinidad utiliza interrogantes en los textos sagrados para revelarse a las personas, y cómo se distinguen estas de las cuestiones habituales de la ciencia o la filosofía?",
+      "chunk_index": 11,
+      "char_mid": 11698,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cómo se refiere Aristóteles al origen inicial del saber que nos permite aprehender la realidad, pero que aún no nos revela las razones de lo que percibimos?",
+      "chunk_index": 45,
+      "char_mid": 38959,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Por qué Sócrates aceptó su condena a muerte en lugar de retractarse de sus ideas?",
+      "chunk_index": 17,
+      "char_mid": 16990,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué principio filosófico fundamental promovía Protágoras al expresar que la humanidad es el criterio para juzgar la existencia y no existencia de las cosas?",
+      "chunk_index": 4,
+      "char_mid": 3879,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la explicación bíblica sobre la verdadera naturaleza de los impulsos pecaminosos y cómo esta concepción hace posible la venida de Jesús al mundo en forma humana?",
+      "chunk_index": 30,
+      "char_mid": 28654,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué similitud se establece entre la propuesta de Platón sobre la existencia de dos planos de la realidad y la creencia cristiana respecto a la interacción entre lo tangible y lo intangible, incluyendo la residencia de la deidad?",
+      "chunk_index": 22,
+      "char_mid": 21496,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "Según la perspectiva cristiana, ¿de qué manera el hombre recupera la facultad de ser el estándar de todas las cosas tras la desobediencia inicial, y quién es clave en este proceso?",
+      "chunk_index": 5,
+      "char_mid": 5249,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cómo se diferencia la visión cristiana de la salvación, que culmina en la resurrección corporal, de la noción puramente griega de la permanencia del espíritu?",
+      "chunk_index": 33,
+      "char_mid": 30088,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué limitación en la perspectiva de Sócrates sobre la práctica de lo bueno es destacada por la doctrina cristiana, a pesar de la compatibilidad moral general?",
+      "chunk_index": 8,
+      "char_mid": 9089,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la forma de entender las verdades que no se perciben con los sentidos y qué metáfora se utiliza para advertir sobre el riesgo de ignorar su presencia?",
+      "chunk_index": 25,
+      "char_mid": 24244,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál fue el sobrenombre de la escuela fundada por Aristóteles y qué costumbre pedagógica lo originó?",
+      "chunk_index": 38,
+      "char_mid": 33444,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué aspecto de la participación política consideraban los sofistas como lo más relevante, por encima de la indagación de la verdad o la edificación de una sociedad equitativa?",
+      "chunk_index": 3,
+      "char_mid": 2832,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el concepto filosófico que se presenta inicialmente acerca de la envoltura física como una prisión para el espíritu?",
+      "chunk_index": 31,
+      "char_mid": 29073,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cómo se denomina la teoría platónica que aborda la existencia del alma antes de la vida terrenal?",
+      "chunk_index": 34,
+      "char_mid": 30424,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la representación que hace Platón de la humanidad, en su alegoría más famosa, en cuanto a su posición y lo que perciben como la realidad antes de cualquier cambio?",
+      "chunk_index": 19,
+      "char_mid": 19403,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué pensador nórdico desarrolló la idea de que reconocer la propia imperfección interna es fundamental para acercarse a la divinidad, desplegar el auténtico ser y superar la angustia existencial?",
+      "chunk_index": 7,
+      "char_mid": 7919,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué pensador antiguo facilitó una conexión fundamental entre la tradición filosófica griega y las ideas del cristianismo, influyendo significativamente en la teología medieval?",
+      "chunk_index": 18,
+      "char_mid": 18278,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Según qué autor la filosofía dejó de ser un objetivo en sí misma para convertirse en un camino hacia la felicidad, y qué tipo de doctrinas éticas predominaron en el ámbito grecorromano con la aparición del cristianismo debido a esta visión?",
+      "chunk_index": 55,
+      "char_mid": 48503,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera se diferencian las percepciones obtenidas a través de los sentidos de la auténtica esencia de las cosas, según lo expuesto en este texto?",
+      "chunk_index": 20,
+      "char_mid": 20058,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "Según la filosofía aristotélica, ¿qué característica esencial debía poseer la causa primordial del movimiento en el universo para asegurar la perpetuidad del cosmos, y por qué su composición no podía ser material?",
+      "chunk_index": 49,
+      "char_mid": 42918,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál era la postura de Aristóteles respecto a la conexión entre los conceptos mentales y la realidad material, diferenciándose de la idea platónica de mundos separados?",
+      "chunk_index": 44,
+      "char_mid": 38231,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué corriente de pensamiento, que perdura hasta el presente, surgió de la asimilación profunda de escritos aristotélicos previamente desconocidos en Occidente, gracias al trabajo de un célebre teólogo?",
+      "chunk_index": 39,
+      "char_mid": 34577,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cómo se distingue la visión aristotélica del conocimiento de la platónica, según lo expuesto, en cuanto a su naturaleza objetiva y su división en campos especializados?",
+      "chunk_index": 56,
+      "char_mid": 49172,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué adhesión filosófica previa del pensamiento cristiano medieval obstaculizó su capacidad para apreciar y reincorporar ciertos elementos de su propia tradición, requiriendo la aportación de las ideas aristotélicas?",
+      "chunk_index": 52,
+      "char_mid": 45479,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la diferencia fundamental entre la concepción platónica de la caída del espíritu y la doctrina cristiana sobre el pecado original en cuanto a la responsabilidad del individuo?",
+      "chunk_index": 35,
+      "char_mid": 30976,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué pensadores de la filosofía clásica fueron fundamentales para organizar el pensamiento filosófico y qué motivó el cambio hacia una mayor atención en la dimensión humana y moral?",
+      "chunk_index": 2,
+      "char_mid": 1770,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el objetivo principal de la ironía socrática al interactuar con individuos que presumen de gran conocimiento?",
+      "chunk_index": 10,
+      "char_mid": 10520,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera ciertos grupos religiosos desestiman las enseñanzas de Sócrates, confundiéndolas con prácticas malignas?",
+      "chunk_index": 16,
+      "char_mid": 16071,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué figura filosófica buscó remediar las diferencias conceptuales entre Aristóteles y Platón, y qué consecuencias tuvo su intervención?",
+      "chunk_index": 37,
+      "char_mid": 32746,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál era la cuestión fundamental que se planteaba en la Edad Media sobre la autonomía de los términos generales en relación con los objetos individuales?",
+      "chunk_index": 40,
+      "char_mid": 35513,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué idea expresó Nicolás de Cusa acerca de cómo se alcanza la sabiduría más perfecta, relacionándola con la conciencia de la propia ignorancia?",
+      "chunk_index": 12,
+      "char_mid": 12752,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "Según Javier Mahillo, ¿qué debate persistente en la historia del pensamiento se originó con los presocráticos sobre la capacidad de los sentidos para revelar o distorsionar el conocimiento auténtico del mundo, diferenciando las posturas de Aristóteles y Platón?",
+      "chunk_index": 21,
+      "char_mid": 20694,
+      "cell_ref": "",
+      "breadcrumb": ""
+    }
+  ],
+  "learned_from": "libros/FILOSOFÍA CLÁSICA FYC.pdf",
+  "learned_at": 1785542541.1655996,
+  "revisions": 4,
+  "validation_notes": [
+    "OK  header_patterns: none proposed; nothing to strip",
+    "FAIL heading_guards: l1_max=250 admits no level-1 headings at all",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

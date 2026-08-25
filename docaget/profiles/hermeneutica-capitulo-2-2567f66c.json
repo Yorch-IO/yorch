@@ -1,0 +1,328 @@
+{
+  "fingerprint": "2567f66c4ffeb1f9",
+  "slug": "hermeneutica-capitulo-2-2567f66c",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.6,
+    "recall_at_5": 0.95,
+    "mrr_at_10": 0.7562,
+    "recall_at_5_dense_only": 0.975,
+    "noise_floor": 0.5861,
+    "chunks": 71,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Cuáles son las repercusiones de no considerar los acuerdos literarios implícitos entre el autor y el lector al interpretar los textos sagrados?",
+      "chunk_index": 12,
+      "char_mid": 10558,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.2 Taxonomía de géneros"
+    },
+    {
+      "question": "¿Qué consecuencia negativa se deriva de otorgar mayor importancia a algunos fragmentos de las escrituras en detrimento de otros para una comprensión total?",
+      "chunk_index": 57,
+      "char_mid": 49263,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.6.5 Ubique el objetivo"
+    },
+    {
+      "question": "¿De qué manera las contestaciones divinas otorgadas en el pasado, dirigidas a individuos específicos, conservan su pertinencia para los creyentes en la época actual?",
+      "chunk_index": 48,
+      "char_mid": 41801,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje"
+    },
+    {
+      "question": "¿Qué cualidad de carácter se asocia con la frase 'si tus ojos son buenos' en Mateo 6:22, según la explicación proporcionada, y cuál es su antónimo en este contexto?",
+      "chunk_index": 28,
+      "char_mid": 24173,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.4 Historia y cultura"
+    },
+    {
+      "question": "¿Cuál es la importancia de considerar el propósito y la manera de escribir de un autor bíblico al interpretar frases que resultan confusas?",
+      "chunk_index": 60,
+      "char_mid": 52253,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.6.5 Ubique el objetivo"
+    },
+    {
+      "question": "¿En qué situaciones se justifica buscar un significado alternativo a la lectura inicial y evidente de un pasaje bíblico?",
+      "chunk_index": 40,
+      "char_mid": 36749,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.5 El Método Literal de Interpretación Bíblica"
+    },
+    {
+      "question": "¿Qué revelación nos proporciona el contexto histórico-geográfico acerca de la validez de los textos en diferentes épocas y lugares?",
+      "chunk_index": 46,
+      "char_mid": 40674,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje"
+    },
+    {
+      "question": "¿Cómo se distingue el objetivo principal de los relatos sobre la vida de Jesús de las cartas apostólicas, y qué función esencial cumple esta diferenciación para la tarea de un apóstol?",
+      "chunk_index": 62,
+      "char_mid": 53565,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.6.11 En los evangelios también hay doctrina"
+    },
+    {
+      "question": "¿Qué componentes de la oratoria clásica eran utilizados por los autores bíblicos, como Pablo, para persuadir a sus comunidades, y de qué manera se aplicaban para generar credibilidad, provocar emociones y construir razonamientos?",
+      "chunk_index": 11,
+      "char_mid": 9636,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.1.1 Morfología > 2.1.4 Retórica > 2.1.4.1 La intención persuasiva"
+    },
+    {
+      "question": "¿Cómo se describe la naturaleza de un texto que, por su claridad, no permite interpretaciones diversas dentro del sentido contextual?",
+      "chunk_index": 43,
+      "char_mid": 39026,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.5 El Método Literal de Interpretación Bíblica > 2.6.4 Armonice con el contexto"
+    },
+    {
+      "question": "¿Qué problemas de comprensión surgen cuando no se distingue la naturaleza literaria de un escrito, llevando a interpretaciones demasiado literales o excesivamente alegóricas?",
+      "chunk_index": 17,
+      "char_mid": 14697,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.2 Taxonomía de géneros > 2.2.1 Narrativa Histórica"
+    },
+    {
+      "question": "¿Qué área de la lingüística examina la forma en que las palabras se organizan y relacionan para construir enunciados con significado?",
+      "chunk_index": 4,
+      "char_mid": 3804,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.1.1 Morfología > 2.1.2 Sintaxis"
+    },
+    {
+      "question": "Según un autor, ¿cuáles son las dos maneras en que un intérprete puede abordar el estudio de un texto, ya sea comenzando por la idea general o por los detalles específicos?",
+      "chunk_index": 30,
+      "char_mid": 26411,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.5 El Método Literal de Interpretación Bíblica"
+    },
+    {
+      "question": "¿Qué símil se emplea para ilustrar la falta de comprensión profunda que ocurre al analizar las escrituras sin tener en cuenta su entorno temporal y cultural?",
+      "chunk_index": 22,
+      "char_mid": 19161,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.4 Historia y cultura"
+    },
+    {
+      "question": "Considerando las frases 'El presidente dio un discurso' y 'El perro duerme en la cucha', ¿cómo se desglosan sus partes principales y los elementos que las acompañan?",
+      "chunk_index": 5,
+      "char_mid": 4630,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.1.1 Morfología > 2.1.2 Sintaxis"
+    },
+    {
+      "question": "¿Qué pasajes de las escrituras antiguas son citados en los evangelios para demostrar el cumplimiento de profecías divinas, según los ejemplos presentados?",
+      "chunk_index": 32,
+      "char_mid": 28408,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.5 El Método Literal de Interpretación Bíblica"
+    },
+    {
+      "question": "¿Qué ejemplos se pueden dar para ilustrar cómo una misma expresión puede tener un sentido literal y otro figurado?",
+      "chunk_index": 8,
+      "char_mid": 7218,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.1.1 Morfología > 2.1.3 Semántica"
+    },
+    {
+      "question": "¿Cómo redefinió Jesús el concepto de liderazgo al asumir una labor considerada de ínfimo valor en la estructura social de su época?",
+      "chunk_index": 25,
+      "char_mid": 21443,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.4 Historia y cultura"
+    },
+    {
+      "question": "¿Qué peligros se presentan al no adherirse a los principios de interpretación de los textos sagrados?",
+      "chunk_index": 36,
+      "char_mid": 32622,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.5 El Método Literal de Interpretación Bíblica"
+    },
+    {
+      "question": "¿Qué rama de la lingüística se encarga de analizar la composición interna de las unidades léxicas, sus procesos de formación y las alteraciones gramaticales que experimentan?",
+      "chunk_index": 3,
+      "char_mid": 2730,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.1.1 Morfología"
+    },
+    {
+      "question": "¿Por qué se considera que el precepto bíblico de Éxodo 20:13, que prohíbe el homicidio, es inalterable en su significado?",
+      "chunk_index": 44,
+      "char_mid": 39317,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje"
+    },
+    {
+      "question": "¿Cuál es la complejidad inherente a la comprensión y exposición de las narrativas parabólicas?",
+      "chunk_index": 67,
+      "char_mid": 57583,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje"
+    },
+    {
+      "question": "¿Cuáles son los factores biográficos y las interrogantes personales que deben considerarse para entender cómo la experiencia individual de un autor da forma a su comunicación?",
+      "chunk_index": 61,
+      "char_mid": 52732,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje"
+    },
+    {
+      "question": "¿Cuáles son las interrogantes clave que permiten establecer el marco interpretativo esencial de un texto y su relevancia personal?",
+      "chunk_index": 47,
+      "char_mid": 41064,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje"
+    },
+    {
+      "question": "¿Qué principio de interpretación es fundamental aplicar al analizar documentos escritos para iglesias o individuos específicos?",
+      "chunk_index": 16,
+      "char_mid": 14095,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.2 Taxonomía de géneros > 2.2.1 Narrativa Histórica"
+    },
+    {
+      "question": "¿Cuál es la perspectiva de ciertos eruditos conservadores sobre la materialización de las profecías sagradas, excluyendo cualquier interpretación alegórica?",
+      "chunk_index": 70,
+      "char_mid": 60121,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.6.13.3 A las Profecías"
+    },
+    {
+      "question": "¿Qué figura de dicción se caracteriza por la reiteración de nexos gramaticales para producir un efecto de pausa o formalidad, y cómo influye esta técnica en la interpretación de un pasaje sagrado?",
+      "chunk_index": 19,
+      "char_mid": 16467,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.3 Figuras de dicción"
+    },
+    {
+      "question": "¿Qué clase de exageración didáctica empleaba Jesús para inculcar verdades y qué consecuencia tiene no entenderla desde un punto de vista retórico?",
+      "chunk_index": 10,
+      "char_mid": 8779,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.1.1 Morfología > 2.1.4 Retórica"
+    },
+    {
+      "question": "¿Qué principio hermenéutico es considerado la pauta principal para la exégesis bíblica, afirmando que las Escrituras se autointerpretan y que cualquier entendimiento que las contradiga es inválido?",
+      "chunk_index": 37,
+      "char_mid": 33680,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.5 El Método Literal de Interpretación Bíblica"
+    },
+    {
+      "question": "¿Qué implicación tiene la instrucción bíblica de priorizar la devoción a Jesús por encima de los lazos familiares, y cómo debe interpretarse para evitar malentendidos?",
+      "chunk_index": 58,
+      "char_mid": 50400,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.6.5 Ubique el objetivo"
+    },
+    {
+      "question": "¿Qué roles desempeñan la semántica y la sintaxis en la interpretación del lenguaje y por qué es importante que trabajen en conjunto para evitar confusiones?",
+      "chunk_index": 7,
+      "char_mid": 6487,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.1.1 Morfología > 2.1.3 Semántica"
+    },
+    {
+      "question": "¿Qué premisa fundamental utilizan ciertas corrientes de crítica textual para cuestionar la autenticidad de las predicciones cumplidas en los escritos sagrados?",
+      "chunk_index": 69,
+      "char_mid": 59072,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.6.13.3 A las Profecías"
+    },
+    {
+      "question": "¿Qué simbolismo tenía el acto de cargar carbones encendidos sobre la cabeza en rituales de arrepentimiento de culturas antiguas?",
+      "chunk_index": 27,
+      "char_mid": 23316,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.4 Historia y cultura"
+    },
+    {
+      "question": "¿Qué tipo de cualidad personal se atribuye a individuos mediante expresiones como 'hijos de desobediencia' en el contexto bíblico?",
+      "chunk_index": 59,
+      "char_mid": 51534,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.6.5 Ubique el objetivo"
+    },
+    {
+      "question": "¿Cuál es la figura retórica que se define por la reiteración de una palabra o frase al inicio de versículos o cláusulas consecutivas, y cómo se interpreta su función para fijar una idea principal en la mente del lector?",
+      "chunk_index": 20,
+      "char_mid": 17471,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.3 Figuras de dicción"
+    },
+    {
+      "question": "¿Cuál es la justificación para preferir una interpretación sencilla de las escrituras, considerando la manera en que la divinidad se ha manifestado y los beneficios de evitar conjeturas para una comprensión bíblica coherente?",
+      "chunk_index": 41,
+      "char_mid": 37480,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.5 El Método Literal de Interpretación Bíblica"
+    },
+    {
+      "question": "¿Qué ilustraciones se pueden citar para mostrar cómo una frase puede estar bien estructurada pero no tener un significado lógico, o cómo una frase con errores de construcción puede aun así comunicar una idea de forma inteligible?",
+      "chunk_index": 6,
+      "char_mid": 5429,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.1.1 Morfología > 2.1.3 Semántica"
+    },
+    {
+      "question": "¿Cuál es la importancia de reconocer las distintas modalidades de escritura presentes en un compendio como la Biblia para su adecuada interpretación?",
+      "chunk_index": 1,
+      "char_mid": 1481,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje"
+    },
+    {
+      "question": "¿Cuál es la interpretación correcta de la instrucción bíblica sobre la eliminación de un órgano corporal para evitar el pecado, considerando el uso de la exageración en la retórica de la época?",
+      "chunk_index": 26,
+      "char_mid": 22453,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.4 Historia y cultura"
+    },
+    {
+      "question": "¿Dentro del estudio de la interpretación textual, cuál es una fase crucial para asegurar que el significado de un escrito no se altere, evitando aplicar enseñanzas a situaciones para las que no fueron pensadas?",
+      "chunk_index": 50,
+      "char_mid": 42851,
+      "cell_ref": "",
+      "breadcrumb": "2 La Decodificación del Mensaje > 2.6.5 Ubique el objetivo"
+    }
+  ],
+  "learned_from": "libros/done/Hermeneutica Capitulo 2.pdf",
+  "learned_at": 1785537812.1098578,
+  "revisions": 4,
+  "validation_notes": [
+    "FAIL header_patterns: '^Unidad\\\\s+Educativa\\\\s+IBLI\\\\s+FACTER\\\\s+-\\\\s+Hermenéutica\\\\s+Capitulo\\\\s+2\\\\s+Página\\\\s+\\\\d+\\\\s+\\\\|\\\\s+\\\\d+$' matches none of the lines that actually repeat across pages (candidates: [])",
+    "OK  heading_guards: 1 chapters numbered [2], 17 subsections",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

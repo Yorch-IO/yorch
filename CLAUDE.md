@@ -44,8 +44,8 @@ uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # 347 passed, 59 skipped
-# 406 passed and nothing skipped with the stack up — and the Bolt port must come
+cd worker && uv sync && uv run pytest -q           # 379 passed, 70 skipped
+# 449 passed and nothing skipped with the stack up — and the Bolt port must come
 # from `docker`, not `infra/.env`: BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789
 # graph/ and catalog/ are integration tests: they skip, naming the URL they
 # tried, when Memgraph or Postgres is down, and neither fixture wipes anything.
@@ -53,12 +53,17 @@ uv run pytest tests/unit/test_artifacts.py -k rewritten -q
 
 # Desktop app
 cd app && npm install
-npm run typecheck && npx vitest run && npm run build
+npm run typecheck && npx vitest run && npm run build   # 170 passed
 npx vitest run -t "define no key"                  # single test by name
 COMPANY_BRAIN_REPO_ROOT=/home/jjimenez/yorch npm run tauri dev
 
 # Rust — needs the Linux system libraries (see doc/COMPANY_BRAIN.md, Blocked)
-cd app/src-tauri && cargo test --release
+cd app/src-tauri && cargo test --release           # 52 passed
+
+# Rebuild the image the API and worker actually run. The dev overlay is not
+# optional: without it `--build` recreates the containers and changes nothing.
+cd infra && docker compose -f docker-compose.yaml -f docker-compose.dev.yaml \
+  up -d --build api worker
 ```
 
 **Verify with real exit codes.** `npm run typecheck | tail -6 && echo CLEAN`
@@ -144,8 +149,13 @@ driver, so there is one owner of the schema and one set of models.
   constant to have kept up.
 - **The gate's numbers come from the image, not from the repository.** The worker
   and the API run `company-brain-worker:dev`, with the code baked in. A constant
-  corrected in `activities/ingest.py` changes nothing at a real gate until
-  `docker compose … up -d --build api worker` runs. This is not hypothetical: a
+  corrected in `activities/ingest.py` changes nothing at a real gate until the
+  image is rebuilt — and **`--build` is a silent no-op without the dev overlay**,
+  because the base compose file names an `image:` and the `build:` section lives
+  only in `docker-compose.dev.yaml`. The whole command is
+  `docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d --build api worker`;
+  drop the second `-f` and compose recreates the containers, reports success, and
+  leaves the old code serving. This is not hypothetical: a
   2026-08-22 batch billed 8 of 34 documents above the range's high end and the
   audit first read that as the spread being too small — the deployed image was
   still on `OUTPUT_SPREAD = 1.27` while the repository had 1.86. Before drawing a
@@ -217,6 +227,72 @@ driver, so there is one owner of the schema and one set of models.
   `shared_concepts` still the true count so a shorter list reads as truncated
   rather than as fewer. **This is the one template whose payload grows with the
   product of two documents' concept sets**; anything similar needs a cap too.
+- **In the Graph tab's *document* view, a click on an outer document *compares*,
+  it does not re-centre.** Re-centring moved to an explicit button in the pane,
+  because the question people arrive with is "*which* concepts do these two
+  share" and the
+  click should answer it. Selecting lights the shared concepts, fades the rest —
+  fades, never hides: dimming them away would delete half the comparison — and
+  the pane lists all of them by name. The two "only in" lists it shows beside
+  them are **sound but not exhaustive**: each version returns its top concepts,
+  so what is listed really is unique to that side, but there may be more neither
+  response mentioned. The pane says so.
+- **The library graph's volume control is degree, and confidence is not.**
+  Measured on the real corpus 2026-08-25 (67 books, `lib_teologia`): raising
+  `confidence_floor` from 0.6 to 0.9 removes **3%** of the `MENTIONS` edges — the
+  extractor is confident about nearly everything it proposes — while
+  `min_documents = 2` removes **84%**, taking 10,835 concepts to 1,719 and 15,367
+  edges to 6,251. Everything degree removes is a concept only one book mentions,
+  which cannot join two books, which is the one thing an overview is for. So
+  `library_mentions` filters on the concept's degree and the floor is kept only
+  because the badge promises one. The planning assumption was "hundreds of
+  concepts"; it was wrong by twenty times, and nothing but running the query
+  would have said so.
+- **`library_mentions` aggregates twice, and its `ORDER BY` names the returned
+  aliases.** The first `WITH` collapses chunks into one weight per (book,
+  concept); the second counts books per concept so the degree filter can apply to
+  the *concept* while the per-book weights survive in a `collect`. A single pass
+  would have to choose between the two. And ordering by `k.id` fails at *query*
+  time with `Unbound variable: k` — the RETURN aggregates, so the pattern
+  variables are out of scope by then. **The validator does not catch this**: it
+  reads labels and keywords, not scope. Only a test against a real Memgraph does,
+  which is what `tests/graph/test_library_overview.py` is for.
+- **A template may raise its own row ceiling only if the planner cannot name
+  it.** `MAX_LIMIT = 200` exists because unbounded traversal on a dense concept
+  graph takes the desktop app down. A whole-library canvas needs 20,000 rows, so
+  `Param.cap` overrides the ceiling per parameter and `Template.planner_visible`
+  keeps those templates out of `catalogue()` — out of a model's reach, and out of
+  the planning prompt's token budget. The two are one decision, and
+  `test_every_template_that_raises_its_ceiling_is_hidden_from_the_planner` is
+  what keeps them from being separated. `get()` and `bind()` are untouched, so
+  the API still calls them by id exactly as it calls any other.
+- **`/project-summary` degrades instead of failing, and never reports zero for
+  "could not ask".** Every other read turns a down Memgraph into a 503, which is
+  right for a screen whose whole content is the graph. Home is the screen the app
+  opens on, and a 500 there says nothing about the half that *was* readable — so
+  each leg carries its own `available` flag and its figures stay `null`. Zero
+  would be a claim about the corpus, and it sends a reader to look for a broken
+  extractor instead of a stopped container. `recent_runs` is `null` when the
+  catalog could not be read and `[]` when it answered and nothing has run.
+- **`document_version.page_count` is a column nothing writes.** `register_version`
+  (`activities/ingest.py`) runs *before* extraction, so the page count is not
+  knowable there. The summary therefore reports `versions_with_pages` beside the
+  sum, and the UI renders "0 of 69 versions record one" rather than a zero —
+  a measurement rather than a hardcoded absence, so the figure starts working by
+  itself the day something fills the column in. The enabling step is one write
+  after extraction; nobody has done it.
+- **The overview's node list comes from the graph, not from the catalog.** A
+  canvas that draws the projection must list what the projection contains;
+  sourcing books from Postgres and edges from Memgraph would let the two disagree
+  silently, and the disagreement would render as a book with no concepts —
+  indistinguishable from one whose semantics were never extracted. A document
+  indexed but never projected therefore does not appear there. The Library screen
+  is the catalog's own view and stays so.
+- **A concept's `documents` is the degree the database counted, not the number of
+  edges in the payload.** "Dios" is mentioned by 59 books and a capped response
+  carries a handful of its edges; recomputing the degree client-side would
+  understate every concept on screen, and the degree is exactly the number a
+  reader uses to decide whether a concept joins anything.
 - **`INVOLVES` is the graph's only concept-to-concept path.** Every other route
   between two concepts runs through a chunk that mentions both, which is
   co-occurrence, not a relation anybody stated. A claim carries a second concept
@@ -462,6 +538,18 @@ broke with its dash alone on a line. What tests cannot see is
 what is left — three-column sizing at a real window width, the stacked layout
 below 60rem, and dark mode.
 
+**Inicio and the library graph are in the same position as of 2026-08-25.** Both
+endpoints were exercised against the running stack — `/project-summary` with
+Memgraph deliberately stopped, to see the degradation rather than assume it, and
+`/libraries/{id}/graph` at three thresholds, whose row counts match the figures
+measured straight out of Bolt. 45 tests render the two screens and both were
+screenshotted at 1440 and 900 in both themes. **The buttons have not been pressed
+in a real window**: pan and wheel-zoom in particular are pointer behaviour that
+neither jsdom nor a static screenshot can exercise, and the wheel handler is
+bound imperatively with `{ passive: false }` precisely because React's `onWheel`
+cannot `preventDefault` — if that binding is wrong, the page scrolls instead of
+the canvas zooming, and nothing in the suite would say so.
+
 **The Graph screen is the exception, and how it was looked at is worth
 copying.** Its redesign on 2026-08-21 was rendered to static HTML from a
 throwaway vitest file (`render` plus `document.body.innerHTML`, the stylesheet
@@ -478,6 +566,23 @@ conditional one — `.explore-panes` and `.ask-columns` work solely because they
 are declared above theirs. Anything new added to that query's selector list must
 be too, or carry its own query below its own rule.
 
+**The same recipe was run on 2026-08-25 for Inicio and the library graph, and
+found three more.** Books on the overview painted **white on white**: the
+`--graph-doc-*` tokens read as paper on a 140px card and as a *hole* on an 18px
+mark, so every hub had a gap at its centre where the book should be — they use
+the centre tokens now, which is also why dark mode inverts correctly rather than
+staying light-mode blue. The filter checkboxes had borrowed the document view's
+legend strings and read "Document sharing concepts". And the restructure had
+silently dropped the legend, so nothing explained size or thickness; it is back,
+rendering `DocumentGraph`'s own exported `Swatch` so one stylesheet moves both —
+with its own wording, because the same four marks mean different things here
+(`size` is a degree, not a mention count). Two harness lessons worth reusing: the
+shell is a full-height grid with its own scroller, so a shot file must override
+`.app{height:auto}` and `main.content{overflow:visible}` or everything below the
+fold is cropped out of the screenshot; and headless Chrome does not default to
+light, so pass `--blink-settings=preferredColorScheme=1` and inject the dark
+tokens by hand for the dark shots.
+
 One measurement the screenshots produced and nobody has acted on: at the
 narrowest two-column width the media query allows (1216px, since `rem` in a
 media query resolves against the *initial* 16px root size and not the
@@ -489,23 +594,50 @@ would end that band; 76rem was chosen deliberately to match the other screens.
 and `jsdom` are installed and `vite.config.ts` sets `environment: "jsdom"` —
 which is why its `defineConfig` now comes from `vitest/config` rather than
 `vite`, since `tsconfig.json` includes that file and vite's own config type has
-no `test` key. `App.test.tsx`, `AskScreen.test.tsx` and `GraphScreen.test.tsx`
-render components; `askSession.test.ts` and `radial.test.ts` test the Ask reducer
-and the graph's layout arithmetic as plain functions. It paid for itself on its
+no `test` key. `App.test.tsx`, `AskScreen.test.tsx`, `HomeScreen.test.tsx` and
+the two under `screens/graph/` render components; `askSession.test.ts`,
+`radial.test.ts` and `force.test.ts` test the Ask reducer and the two graph
+layouts' arithmetic as plain functions. It paid for itself on its
 first run: `content.current?.scrollTo({top: 0})` throws in jsdom, so the shell's
-scroll reset assigns `scrollTop` instead.
+scroll reset assigns `scrollTop` instead. **jsdom implements no scrolling at
+all**, and that has now bitten twice: `scrollIntoView` is simply *absent* there
+rather than throwing, so the Graph screen calls it optionally
+(`detail.current?.scrollIntoView?.(…)`) and a test asserts the guard by asserting
+the click does not throw. Anything that scrolls needs the same treatment.
+
+**`cleanup()` runs between tests but not inside one.** Vitest exposes no global
+`afterEach` here, so RTL never registers its automatic cleanup and each test file
+calls it by hand — `AskScreen.test.tsx` explains that where it does it. What that
+does *not* cover is a single test that renders twice: `screen` queries the whole
+document and finds both trees, which surfaces as "found multiple elements" or as
+an assertion passing against the previous render. Assert through each render's
+own `container` there; `ImportScreen.test.tsx` does.
 
 **Where a screen's geometry lives is a testability decision, not a tidiness
 one.** jsdom implements no SVG layout — no `getBBox`, no resolved `transform` —
 so a rendered test can assert that a node exists and carries the attributes it
 was given, and nothing at all about whether two labels overlap. That is why the
-graph's radial arithmetic is `lib/radial.ts` rather than module constants inside
-`GraphScreen.tsx`: `radial.test.ts` asserts the properties that matter (no
-concept label meets a document card, no label meets another, the two rings are
-offset by half the outer step so no document sits on a concept's ray) directly
-on the numbers, at the 12-and-8 counts that actually ship. Label footprints are
-estimated from a character count at the stylesheet's font size, which is enough
-when the question is whether two boxes are nowhere near each other.
+graph's arithmetic lives in `lib/radial.ts` and `lib/force.ts` rather than in
+module constants inside the components: `radial.test.ts` asserts the properties
+that matter for the document view (no concept label meets a document card, no
+label meets another, the two rings are offset by half the outer step so no
+document sits on a concept's ray) directly on the numbers, at the 12-and-8 counts
+that actually ship. Label footprints are estimated from a character count at the
+stylesheet's font size, which is enough when the question is whether two boxes
+are nowhere near each other.
+
+**`force.ts` is the same decision applied to a simulation, and it is seeded for
+exactly that reason.** A force-directed layout that started from `Math.random`
+could be asserted on only for not throwing. Each node's starting point comes from
+a hash of its own id, and the bodies are sorted by id before the first tick —
+because float addition is not associative, so visiting the same nodes in a
+different order lands them tens of pixels apart and "same library, same picture"
+would be nearly true rather than true. With that, `force.test.ts` asserts what a
+rendered test cannot: no two nodes overlap, everything lands inside the viewBox
+after `fit()`, connected pairs end closer than unconnected ones on average, and
+an empty graph produces no NaN. It also runs the real library's shape — 67 books
+and 1,719 concepts — to keep the quadratic version from coming back: repulsion
+goes through a uniform grid, and the whole settle takes about 0.4 s.
 
 The two older suites still scan *source text* — `i18n.test.ts` for unused keys,
 `LibraryScreen.test.ts` for the property that a permanent removal cannot fire
@@ -646,6 +778,42 @@ maps them to localised labels.
 - Both `en` and `es` bundles are shipped, and tests enforce key parity, matching
   interpolation placeholders, and that no key goes unused. UI language is a
   separate setting from a collection's *content* language.
+- **The seven screens are all mounted at once and only one is shown**, and the
+  tab order is the order of the work: `home`, `stack`, `library`, `explore`,
+  `graph`, `import`, `ask`. Home is the default because "what is in here?" is the
+  question a person arrives with — Services was the landing screen only for want
+  of anything else. Home and Services are the two that own no library, so the
+  picker is off both; Home's figures are project-wide, so a picker there would
+  offer a choice that changes nothing.
+- **Every screen may take a `go`, and only Home reads it.** A component declaring
+  no parameters is assignable to `(props: { go: (tab: Tab) => void }) => JSX`, so
+  the other six are unchanged by its existence. Home needs it because a stopped
+  stack is a *state* it reports with a way out of it, and the way out is the
+  Services tab. It imports `Tab` with `import type`, so the cycle back to `App`
+  is erased at compile time and the prop still cannot name a tab that does not
+  exist.
+- **Home probes the stack before it touches the control API.** `stackStatus()` is
+  a local compose call and free; reaching a control API that is not running costs
+  the full request timeout before it says anything, and that would be the landing
+  screen's first act on every cold launch. A stopped stack renders as a notice
+  with a button, never as the red error panel — the containers being down is the
+  ordinary state of a freshly opened app.
+- **The Graph tab is a shell over two views, and both stay mounted.**
+  `screens/graph/LibraryGraph.tsx` is the whole library and opens by default;
+  `screens/graph/DocumentGraph.tsx` is the older radial view, reached by
+  selecting a book and pressing "ver este libro". Re-entering the overview must
+  not re-run the simulation and leaving it must not throw away a pan, which is
+  the same reason the tabs are hidden rather than unmounted. The shell owns the
+  heading and the intro, because it is what knows which view is showing.
+- **The wheel handler is bound imperatively, with `{ passive: false }`.** React's
+  `onWheel` is passive and cannot `preventDefault`, so the page scrolls out from
+  under the canvas instead of the canvas zooming. Buttons cover zoom in, out and
+  reset as well, so nothing on that screen is wheel-only.
+- **A new grid carries its own `@media (max-width: 76rem)` block below its own
+  rule.** `.explore-panes` and `.ask-columns` work only because they are declared
+  *above* the shared query; anything declared below it must repeat the query, as
+  `.graph-layout` and `.run-row` do. A media query is not a stronger rule, only a
+  conditional one.
 
 ## Other agent configs detected
 

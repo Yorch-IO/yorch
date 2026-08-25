@@ -1,8 +1,17 @@
 # Company Brain
 
-Turn a pile of company documents into a searchable, cited knowledge base — and
-see exactly what the pipeline is going to do, and what it will cost, **before**
-it spends anything.
+A **retrieval-augmented generation (RAG)** system for your own documents. It
+indexes a corpus into a hybrid vector store and a concept graph, then answers
+questions out of it with citations you can check — and it shows you exactly what
+the pipeline is going to do, and what it will cost, **before** it spends
+anything.
+
+RAG is usually the easy half of a product and the hard half of a result: the
+retrieval works, the model writes a fluent paragraph, and nothing tells you
+whether the paragraph is in the documents. Here the model proposes and the code
+verifies. Every citation is checked against the passages actually retrieved, and
+an answer left with none is returned as *insufficient evidence* rather than as an
+answer with a caveat.
 
 Everything runs on your machine: the vector database, the workflow engine, the
 catalog, every intermediate artifact. Only embedding, text-fixing, OCR and
@@ -34,19 +43,32 @@ That ordering is driven by a real measured run (`docaget/costo.json`):
 Correction dominates, not embedding — so the free gate sits before correction,
 and every stage can be switched off individually there.
 
+**Which stage dominates depends on what you switch on**, which is the reason the
+switches are per stage rather than one "spend money" button. That corpus was
+later indexed with correction *off*, and then semantic extraction is essentially
+the whole bill: a 37-document batch billed **$19.75**, of which correction was
+zero. Both figures are real; they describe different runs.
+
 ## Status
 
-Early. The engine underneath is real and has indexed a ~75-document corpus; the
-app around it is at its first working milestone.
+Early, but past the walking-skeleton stage. The library it was built for holds
+**72 documents** indexed through the app's own gate — 4 722 chunks, 11 348
+concepts and 24 151 claims — and the answering and graph paths run against them.
+What is missing is the piece that would let answer *quality* be measured rather
+than argued about.
 
 | | |
 |---|---|
-| Indexing engine (`docaget/`) | Working, measured, 109 tests |
+| Indexing engine (`docaget/`) | Working, measured, 142 tests |
 | Backing services (Qdrant, Postgres, Temporal) | Running, healthy |
-| Workflow pipeline + control API | Walking skeleton verified end to end |
-| Artifact store | Done |
+| Ingestion workflow, approval gate, control API | Working; a 37-document batch ran through it |
+| Asking, with verified citations | Working |
+| Home: project-wide totals and recent activity | Working |
+| Concept graph: whole library, and one document | Working |
+| Library verbs: reindex, rebuild, permanent removal | Working, each exercised end to end |
 | Desktop app | Builds and launches on Linux; deb and AppImage bundled |
-| Ingestion workflow, preview UI, search, export | Not built yet |
+| Eval set — scoring answer quality | **Not built.** It is what three current defaults rest on |
+| Folder watching, opening a citation in the source | Not built |
 
 `doc/COMPANY_BRAIN.md` has the current detail, including which commands have
 been run to a real exit code and which are still only intended.
@@ -494,9 +516,15 @@ built on Linux. Treat it as the intended path rather than a verified one.
 
 ## What it can read
 
-Today: **PDF** (with OCR for pages that have no text layer), **DOCX**, **XLSX**,
-**PPTX**, **CSV**, **TXT**, **MD**. HTML, email and standalone images are
-planned.
+Today: **PDF**, **DOCX**, **XLSX**, **PPTX**, **CSV**, **TXT**, **MD**. HTML,
+email and standalone images are planned.
+
+**A PDF with no text layer is not readable yet.** OCR raises
+`NotImplementedError` on purpose — it is a paid stage and it needs its own spend
+gate before it can run — so a scan is skipped rather than silently indexed as a
+handful of stray characters. Of 44 unindexed PDFs in one real corpus, three were
+scans of this kind. Only PDF and TXT have been run end to end; the other formats
+are implemented and unexercised.
 
 Sources split into two shapes, and the difference is real rather than
 incidental. Text-like documents become a linear byte stream, and every chunk's
@@ -505,7 +533,158 @@ anchor is a cell range like `Ventas 2025!A41:D60`. Correction never touches
 structured sources — "correcting" a spreadsheet corrupts data rather than
 improving writing.
 
-## How it works
+## How a document gets indexed
+
+Ingestion is a Temporal workflow, so each step below is a durable activity: a run
+that takes twenty minutes survives a crash, a restart or a laptop lid closing,
+and every step it took is inspectable afterwards. **Everything up to the gate is
+free**, and nothing after it runs until you approve it.
+
+**1 · Stage and hash.** The file is copied into the workspace and hashed.
+Identity is the sha256 of the bytes, not the path — so the same document imported
+from two folders becomes one indexed version with two shelf entries, rather than
+two copies competing in the ranking. A byte-identical re-import costs nothing.
+
+**2 · Extract.** A format-specific extractor turns the file into either a linear
+byte stream (PDF, DOCX, PPTX, TXT, MD) or a set of already-delimited cells
+(XLSX, CSV). Paragraph breaks in a PDF come from the *line pitch*, not from the
+gap between text boxes: the gap has a median of 2.5 pt with 5% jitter, so a
+threshold on it fires constantly — 1 064 paragraphs on a book that has 330.
+
+**3 · Resolve a profile.** Documents are fingerprinted structurally — extractor,
+running headers, page geometry, heading numbering — and a *profile* holds the
+chunking rules learned for that family. Looking one up is free, and a document
+whose family is already known inherits its rules at no cost; learning a new one
+is a paid stage that runs after the gate, so the first document of a family
+pays for the exploration and every one after it does not. The fingerprint is
+deliberately blind to subject matter, which means two unrelated families with the
+same layout collide exactly — so the gate raises a structural warning and you can
+decline the inherited profile.
+
+**4 · Chunk, and preview.** Chunking is windowed with byte-exact spans: every
+chunk records the byte offsets it came from, so a citation can be resolved back
+to the exact slice of the source. Chunks are classified by kind — body, review
+questions, footnote, table row, slide — because a numbered review question and a
+numbered footnote look identical apart from a dot after the number, and treating
+one as the other corrupts the section path for everything below it.
+
+**5 · The gate.** You see the structure found, the chunks that would be created,
+per-stage cost estimates as a range, and warnings for the failure modes no metric
+can catch. Every paid stage below has its own switch here. Nothing has been
+billed yet.
+
+**6 · Correct** *(paid, optional)*. A conservative LLM pass repairs the
+converter, not the author: no reformulation, no sentence splitting, no touching
+names, technical terms, scripture references or figures. Each paragraph is
+verified deterministically afterwards and **rejected if it lost a proper noun,
+altered a reference or a figure, or changed length by more than 25%** — a
+rejected correction keeps the original. It runs *before* chunking, because it
+changes the text's length and every byte span would otherwise be wrong. That is
+also why previewed chunks are not the final chunks when correction is on.
+
+**7 · Project the structure.** Document, version, sections, chunks and citations
+are written to the graph. This is derived from the document's own headings —
+deterministic, nothing proposed by a model — which is why the UI can say "this
+came from the table of contents" rather than "a model thought so".
+
+**8 · Embed and index** *(paid)*. Each chunk is embedded and written to Qdrant
+alongside a BM25 sparse vector. **One text per embedding request**: the model
+returns a single embedding for a request carrying four, with no error — batching
+does not fail, it silently drops, so throughput comes from concurrency instead.
+Point ids are derived from the version and the chunk index, which is what makes
+re-indexing converge rather than accumulate, and what makes the step safe to
+retry.
+
+**9 · Extract semantics** *(paid, optional)*. Concepts and claims, **one chunk
+per call**. Batching is cheaper and wrong: every claim must carry the id of the
+chunk
+a person can check it against, and a model handed ten chunks attributes claims
+to the wrong one. Concepts are merged across documents by canonical name, which is
+what lets the graph answer "which books share this idea".
+
+**10 · Activate.** The version becomes the one citations resolve to, and the run,
+its artifacts and its costs are recorded. Costs are measured token counts with
+third-party prices applied — the counts are ours, the multipliers are not.
+
+### Answering, which is the other half
+
+A question is embedded with the *query* task rather than the document task — the
+model embeds questions and passages asymmetrically, and using one task for both
+measurably degrades retrieval. Retrieval is hybrid: a dense vector and a BM25
+sparse vector fused with reciprocal rank, filtered to the library being asked.
+A dense-only pass first acts as a topicality gate, so a question about nothing in
+the corpus comes back as *off corpus* instead of as the five least-bad passages.
+
+The graph then expands that evidence, but only through *named templates*: a
+planner returns a template id plus typed parameters, never Cypher. Claims reach
+the answering prompt as a model's *reading* of a chunk, never as the chunk — the
+prompt states that the document's own text wins any disagreement, and the model
+still cites by chunk id, because otherwise model output re-enters the context
+dressed as the source.
+
+Then every citation is verified, and unverifiable ones are dropped.
+
+## What it gives you back
+
+A citation you can check, and a graph you can interrogate. Both are built the
+same way: the model proposes, the code verifies, and anything that fails
+verification is dropped rather than shown.
+
+**Answers cite, or refuse.** Every answer names the chunks it rests on; each id
+is checked against the passages actually retrieved, and one the model invented is
+discarded. An answer left with no surviving citation is not returned as an answer
+— it comes back as *insufficient evidence*, with the passages it did find. That
+is a different state from *off corpus*, which means nothing cleared the
+similarity floor at all: the two have different fixes.
+
+**Claims carry the document's own words.** Extraction pulls out what a passage
+claims, and asks for the sentence it came from. That quote is then located in the
+chunk's own text — whitespace may differ, nothing else — and a claim whose quote
+is not found keeps its text but loses its span. Measured across three runs of a
+real corpus: **98.7%, 99.2% and 99.4%** of claims carried a quote the code could
+find.
+
+**A claim records what the document *does* with it** — asserts it, rejects it, or
+attributes it to somebody else. On one real document 14% were not plain
+assertions. Without that field a doctrine a text is about to rebut reads exactly
+like one it holds.
+
+**The concept graph answers "which", not only "how many".** It opens on the
+whole library: every book, every concept that joins one book to another, and one
+weighted line per pair. Selecting a book lights its concepts; selecting a concept
+lights every book that mentions it. From there any book opens into the older
+view — that book at the centre, its concepts on an inner ring, the documents it
+shares them with on an outer one — where selecting one of those lists every
+shared concept by name. No line is drawn between a concept and an outer document
+there, because the data does not say which passage of that document mentions it,
+and a line would be inventing one.
+
+**What the library view draws is decided by degree, not by confidence.** Measured
+on the real corpus: raising the confidence floor from 0.6 to 0.9 removes 3% of
+the edges — the extractor is confident about almost everything it proposes —
+while requiring a concept to appear in two books removes 84%, taking 10 835
+concepts down to 1 719. Everything it removes is a leaf that cannot connect two
+books. So the threshold that matters is "concepts in at least *N* books", set to
+2 by default and adjustable down to 1; nothing is unreachable either way, since
+the list beside the canvas holds every node in the response and is the keyboard
+path to any of them.
+
+**Home reports what the project holds, and says when it cannot.** Books, chunks,
+concepts, claims, semantic relations, and the last ten runs with what each one
+was and how it ended. Its two sources fail independently, so every figure carries
+its own availability: with the graph database stopped, the counts that come from
+it show an em dash — the reason is in the tooltip — and never a zero. "Could not
+be read" and "is empty" are different facts with different fixes, and a zero
+would be a claim about your corpus. Pages is in that state permanently for now:
+nothing records a page count yet, so the card says how many versions do (none),
+rather than reporting none as zero.
+
+**The cost estimate is a range, not a number.** Semantic extraction varies by
+more than 2x across documents, so a single figure could either cover the worst
+document or stay in reach of a typical one, never both. The gate shows both ends;
+the low one describes a typical document and the high one is a ceiling.
+
+## The stack it runs on
 
 ```
 ┌─ Tauri desktop app ─────────────────────────────────────────────┐
@@ -515,20 +694,25 @@ improving writing.
 ┌──────────────────────────▼──────────────────────────────────────┐
 │  api (FastAPI)     worker (Temporal + the docagent engine)       │
 │  temporal ── postgres (workflow history + catalog)               │
-│  qdrant (vectors, hybrid dense + BM25 with RRF fusion)           │
+│  qdrant (vectors) ── memgraph (concepts, claims, citations)      │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-Ingestion is a Temporal workflow, so a run that takes twenty minutes survives a
-crash, a restart, or a laptop lid closing — and every step it took is
-inspectable afterwards. The engine learns a *profile* per document family, so
-the first document of a family pays for the exploration and every one after it
-is cheaper and more consistent.
+The app never speaks Python. Temporal has no production Rust SDK, so everything
+the UI needs goes through the control API, and Rust proxies each call as an
+explicit typed command — which is what lets the webview keep a `default-src
+'self'` policy with no localhost exception, and keeps the Rust surface to what
+only Rust can do: Docker, the keychain, native dialogs, the filesystem.
 
-Retrieval is hybrid: a dense vector and a BM25 sparse vector, fused with
-reciprocal rank. Results always report hybrid and dense-only side by side,
-because synthetic eval questions leak vocabulary to the lexical leg and the gap
-between the two modes is the only honest measure of it.
+Bulk data never enters a workflow payload. Activities write chunks and semantics
+to files in the workspace and pass back a path, a sha256 and a size; Postgres
+holds the reference. API keys never enter one either — they live in your OS
+keychain and reach the worker as process state, and workflows carry only a
+provider id.
+
+One measurement worth repeating: retrieval always reports hybrid and dense-only
+side by side, because synthetic eval questions leak vocabulary to the lexical leg
+and the gap between the two modes is the only honest measure of that leak.
 
 ## Where your data goes
 
@@ -548,9 +732,16 @@ Nothing is uploaded anywhere else, and there is no telemetry.
 docaget/   the indexing engine (Python package `docagent`) — also a working CLI
 worker/    Temporal workflows and activities, plus the control API
 app/       Tauri v2 desktop app: Rust shell, React UI
-infra/     Docker Compose stack
+infra/     Docker Compose stack, backup/restore, batch indexing and its audit
 doc/       design notes, engine internals, operational runbook
 ```
+
+`infra/audit_indexacion.py` is worth knowing about if you index in bulk. It
+builds the run report from Postgres and from each run's own artifacts, and
+treats the batch script's manifest as a claim to be checked rather than as the
+record — printing every place the two disagree. The script it replaced summed
+the manifest and published the total as fact, which is how a report came to
+state three things the file it was reading contradicted.
 
 The directory is spelled `docaget` and the package inside it `docagent`. That is
 a typo, and it is now load-bearing.
@@ -558,10 +749,19 @@ a typo, and it is now load-bearing.
 ## Tests
 
 ```bash
-cd docaget && uv sync && uv run pytest -q   # engine
-cd worker  && uv sync && uv run pytest -q   # workflows, artifacts, config
-cd app     && npm install && npm run typecheck && npx vitest run
-cd app/src-tauri && cargo test --release     # see Building on Linux for the libraries
+cd docaget && uv sync && uv run pytest -q   # engine — 142 passed, 13 skipped
+cd worker  && uv sync && uv run pytest -q   # workflows, graph, catalog, API
+cd app     && npm install && npm run typecheck && npx vitest run   # 170 passed
+cd app/src-tauri && cargo test --release     # 52 — see Building on Linux for the libraries
+```
+
+The worker's graph and catalog suites are integration tests: they skip, naming
+the URL they tried, when Memgraph or Postgres is down. With the stack up it is
+**449 passed and nothing skipped** — and the Bolt port has to come from `docker`
+rather than from `infra/.env`, which can name a different one:
+
+```bash
+cd worker && BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789 uv run pytest -q
 ```
 
 The engine's property tests need a real document. They prefer the original Go

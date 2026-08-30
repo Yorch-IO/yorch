@@ -61,6 +61,7 @@ const info = (over: Partial<BackendInfo> = {}): BackendInfo => ({
   tenantId: "",
   signedIn: false,
   email: "",
+  secretStore: "keychain",
   ...over,
 });
 
@@ -94,16 +95,31 @@ describe("choosing a backend", () => {
     expect(screen.queryByLabelText(t("backend.baseUrl"))).toBeNull();
   });
 
-  it("asks for an address and an organisation only for the paid plane", async () => {
+  it("asks for an address only for the paid plane", async () => {
     render(<StackScreen />);
     const select = await screen.findByLabelText(t("backend.mode"));
     fireEvent.change(select, { target: { value: "cloud" } });
 
     expect(screen.getByLabelText(t("backend.baseUrl"))).toBeTruthy();
-    // Optional, and the hint has to say so: an account in one organisation
-    // sends no header and lets the server use its sole membership.
-    expect(screen.getByPlaceholderText(t("backend.tenantHint"))).toBeTruthy();
+    // And drops the note that exists to say the local plane needs no account.
     expect(screen.queryByText(t("backend.localNote"))).toBeNull();
+  });
+
+  it("asks for no organisation, because this release supports exactly one", async () => {
+    // The server resolves a sole membership from the token, so a field here
+    // would be a choice with one option and a way to get it wrong. The header
+    // itself stays in Rust — three tests in `control.rs` pin it — because that
+    // is what a picker would use the day several memberships exist.
+    render(<StackScreen />);
+    fireEvent.change(await screen.findByLabelText(t("backend.mode")), {
+      target: { value: "cloud" },
+    });
+    // Named rather than counted: `providerSettings` is rejected in this suite so
+    // its field never renders, and a bare count would start failing for a
+    // reason that has nothing to do with organisations.
+    expect(screen.getAllByRole("textbox")).toEqual([
+      screen.getByLabelText(t("backend.baseUrl")),
+    ]);
   });
 
   it("passes the whole choice to Rust, which is what validates it", async () => {
@@ -113,18 +129,25 @@ describe("choosing a backend", () => {
     fireEvent.change(screen.getByLabelText(t("backend.baseUrl")), {
       target: { value: "https://brain.example.com" },
     });
-    fireEvent.change(screen.getByLabelText(t("backend.tenant")), {
-      target: { value: "tnt_x" },
-    });
     fireEvent.click(screen.getByRole("button", { name: t("backend.save") }));
 
     await waitFor(() =>
-      expect(setBackendMode).toHaveBeenCalledWith(
-        "cloud",
-        "https://brain.example.com",
-        "tnt_x",
-      ),
+      // The empty third argument is an *absent* `X-Tenant-Id`, which is what
+      // tells the server to use the sole membership — not an empty header.
+      expect(setBackendMode).toHaveBeenCalledWith("cloud", "https://brain.example.com", ""),
     );
+  });
+
+  it("says where the session is kept, which is not the same everywhere", async () => {
+    // A Linux box with no Secret Service falls back to an owner-only file. That
+    // is a real difference in how well a thirty-day credential is protected,
+    // and Rust has reported it since the keychain landed while nothing read it.
+    backendSettings.mockResolvedValue(
+      info({ mode: "cloud", baseUrl: "https://b.example.com", signedIn: true, secretStore: "file" }),
+    );
+    render(<StackScreen />);
+    expect(await screen.findByText(t("backend.secretStore.file"))).toBeTruthy();
+    expect(screen.queryByText(t("backend.secretStore.keychain"))).toBeNull();
   });
 
   it("says plainly when the paid plane has no session", async () => {

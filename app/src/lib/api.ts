@@ -54,6 +54,19 @@ export type ControlErrorKind =
 export interface AppError {
   kind: AppErrorKind;
   message: string;
+  /**
+   * The *control API's* own `detail.kind`, read out by Rust.
+   *
+   * Rust does it because it holds the untruncated body: `message` is cut to 500
+   * characters for a person to read, and digging the tag out of it here needed
+   * a balanced `{…}` to survive — so a long body silently lost its guidance.
+   * `tenant_required` provoked it, carrying the caller's tenant ids as a
+   * sibling field.
+   *
+   * Absent when there is none, and absent from a shell older than this field —
+   * which is why `controlErrorKind` still falls back to reading the message.
+   */
+  controlKind?: string;
 }
 
 /** Narrow an unknown thrown value to our error shape. */
@@ -111,13 +124,18 @@ const CONTROL_GUIDANCE: Partial<Record<ControlErrorKind, string>> = {
 /**
  * The control API's `kind`, when this error carries one.
  *
- * A `control_status` error's message is the raw FastAPI body, so the tag we
- * want is nested inside a JSON string. Parsing is best-effort: a body that is
- * not JSON, or is a truncated one, simply has no tag rather than throwing while
- * rendering an error screen.
+ * Rust reads it off the untruncated body and sends it as `controlKind`; that is
+ * the path that always works. The fallback below re-reads it out of the
+ * message, which is what this did on its own until the truncation was found to
+ * be eating tags — kept so a webview running against an older shell still gets
+ * its guidance rather than none.
+ *
+ * Best-effort either way: a body that is not JSON, or one cut mid-object,
+ * simply has no tag rather than throwing while an error screen renders.
  */
 export function controlErrorKind(e: unknown): ControlErrorKind | undefined {
   if (!isAppError(e) || e.kind !== "control_status") return undefined;
+  if (e.controlKind) return e.controlKind as ControlErrorKind;
   const match = e.message.match(/\{[\s\S]*\}/);
   if (!match) return undefined;
   try {
@@ -200,6 +218,9 @@ export interface IngestRequest {
   author?: string | null;
   folderId?: string | null;
   autoApprove?: boolean;
+  /** What to call the library, when this import is the one that creates it.
+   *  Empty leaves an existing name alone rather than replacing it with the id. */
+  libraryName?: string;
 }
 
 /** Where a staged file landed, as the *worker* sees it.
@@ -466,6 +487,15 @@ export interface BackendInfo {
   signedIn: boolean;
   /** Whose session, for the screen. Never used to authorize anything. */
   email: string;
+  /**
+   * Where the refresh token is kept: `"keychain"` or `"file"`.
+   *
+   * A token rather than prose, so the wording lives in the i18n bundles the way
+   * an error `kind` does. Rust has reported it since the keychain landed and
+   * nothing read it, which made its docstring's claim that "the UI can tell the
+   * user" false.
+   */
+  secretStore: "keychain" | "file";
 }
 
 export interface ProviderSettings {

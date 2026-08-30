@@ -385,10 +385,7 @@ async fn post_token(
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
-        return Err(AppError::ControlStatus {
-            status,
-            body: body.chars().take(500).collect(),
-        });
+        return Err(AppError::control_status(status, body));
     }
     response
         .json()
@@ -473,6 +470,46 @@ mod tests {
         // The challenge is the hash, not the verifier: sending the verifier
         // would make PKCE decorative.
         assert_ne!(a.challenge, a.verifier);
+    }
+
+    #[test]
+    fn the_config_the_paid_plane_actually_returns_deserialises() {
+        // Byte-for-byte what `GET /auth/config` answered on 2026-08-29, keys
+        // and all. `AuthConfig` carries no `rename_all`, so the plane must emit
+        // snake_case — and a DTO defaulting to camelCase would not fail here,
+        // it would yield empty strings and an authorize URL reading
+        // `https:///oauth2/authorize`, which is a 30-second mystery at the one
+        // moment the user is trying to sign in.
+        let body = r#"{"hosted_ui_domain":"yorch-brain-auth.auth.us-west-2.amazoncognito.com",
+            "client_id":"7ve86qhj2a1tao98op2mogija0","region":"us-west-2",
+            "issuer":"https://cognito-idp.us-west-2.amazonaws.com/us-west-2_69PaEg3l8",
+            "flow":"authorization_code_pkce","scopes":["openid","email","profile"]}"#;
+
+        let config: AuthConfig = serde_json::from_str(body).expect("shape changed");
+        assert_eq!(
+            config.hosted_ui_domain,
+            "yorch-brain-auth.auth.us-west-2.amazoncognito.com"
+        );
+        assert_eq!(config.client_id, "7ve86qhj2a1tao98op2mogija0");
+
+        // The three fields this app does not read are extra, not forbidden:
+        // the plane may add to that body without breaking a shipped client.
+        assert!(serde_json::from_str::<AuthConfig>(
+            r#"{"hosted_ui_domain":"d","client_id":"c","algo_nuevo":1}"#
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn a_camel_cased_config_is_refused_rather_than_read_as_empty() {
+        // The failure mode worth naming: serde would happily default two
+        // missing fields if they were `Option` or `#[serde(default)]`. They are
+        // neither, so a plane that renamed them fails here instead of building
+        // an authorize URL with no domain in it.
+        assert!(serde_json::from_str::<AuthConfig>(
+            r#"{"hostedUiDomain":"d","clientId":"c"}"#
+        )
+        .is_err());
     }
 
     #[test]

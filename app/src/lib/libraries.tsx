@@ -132,6 +132,24 @@ export function useLibraries(): LibrariesState {
  * Nothing is dropped in that form: the counts and the not-ready warning are the
  * reason it shows a `<select>` rather than an id.
  */
+/**
+ * What to call a library in the picker.
+ *
+ * The name when there is one, and the id when the name *is* the id — which is
+ * every library indexed before `ensure_library` stopped being handed the id in
+ * both positions. Showing "lib_teologia · lib_teologia" would be worse than
+ * showing the id once, and dropping the id entirely would take away the value
+ * a person has to type into a runbook or a curl.
+ *
+ * Exported and tested on its own for the reason `lib/radial.ts` gives: the
+ * property is a decision about two strings, and asserting it directly beats
+ * rendering a `<select>` to find out which one came back.
+ */
+export function libraryLabel(library: LibraryRow): string {
+  const named = library.name.trim();
+  return named === "" || named === library.id ? library.id : `${named} (${library.id})`;
+}
+
 export function LibraryPicker({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
   const { rows, selected, select, reload, loading, error } = useLibraries();
@@ -163,7 +181,7 @@ export function LibraryPicker({ compact = false }: { compact?: boolean }) {
       <select value={selected} onChange={(e) => select(e.target.value)}>
         {rows.map((l) => (
           <option key={l.id} value={l.id}>
-            {l.id} ·{" "}
+            {libraryLabel(l)} ·{" "}
             {t("libraries.counts", {
               documents: l.documents,
               indexed: l.indexedVersions,

@@ -38,7 +38,9 @@ function shown(name: string): boolean {
 
 beforeEach(() => {
   libraries.mockResolvedValue({
-    libraries: [{ id: "lib_a", documents: 2, indexedVersions: 2 }],
+    libraries: [
+      { id: "lib_a", name: "Biblioteca A", language: "es", documents: 2, indexedVersions: 2 },
+    ],
   });
 });
 

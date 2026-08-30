@@ -43,6 +43,20 @@ pub struct BackendSettings {
 }
 
 impl BackendSettings {
+    /// Whether moving from `self` to `next` points the app at a different
+    /// service, and so invalidates any session it is holding.
+    ///
+    /// A pure function rather than an `if` inside the command, for the reason
+    /// `lib/radial.ts` gives on the other side of the IPC boundary: the
+    /// property is a decision about two values, and asserting it directly beats
+    /// driving a Tauri command to find out. The organisation is deliberately
+    /// **not** part of it — a token is issued by a service, not by an
+    /// organisation, and the same session is what a member of several would use
+    /// to switch between them.
+    pub fn repoints_to(&self, next: &BackendSettings) -> bool {
+        self.mode != next.mode || self.base_url != next.base_url
+    }
+
     fn path(app_data: &Path) -> PathBuf {
         app_data.join("backend.json")
     }
@@ -150,4 +164,35 @@ mod tests {
         assert!(BackendSettings::validated(BackendMode::Local, "", "").is_ok());
     }
 
+
+    #[test]
+    fn changing_where_the_app_points_ends_the_session() {
+        // A bearer belongs to the service that issued it. Sent to another one
+        // it fails as a 401, which reads like a signing problem rather than
+        // like "you are not signed in to *this* one".
+        let cloud = |url: &str| BackendSettings {
+            mode: BackendMode::Cloud,
+            base_url: url.into(),
+            tenant_id: String::new(),
+        };
+        assert!(cloud("https://a.example.com").repoints_to(&cloud("https://b.example.com")));
+        assert!(cloud("https://a.example.com").repoints_to(&BackendSettings::default()));
+        assert!(BackendSettings::default().repoints_to(&cloud("https://a.example.com")));
+    }
+
+    #[test]
+    fn saving_the_same_choice_twice_keeps_the_session() {
+        // Pressing Save without changing anything must not sign the user out.
+        let a = BackendSettings {
+            mode: BackendMode::Cloud,
+            base_url: "https://a.example.com".into(),
+            tenant_id: String::new(),
+        };
+        let b = BackendSettings { tenant_id: "tnt_x".into(), ..a.clone() };
+        assert!(!a.repoints_to(&a.clone()));
+        // And neither does naming an organisation: the token is the service's,
+        // not the organisation's, and switching between two a person belongs to
+        // is exactly what one session is for.
+        assert!(!a.repoints_to(&b));
+    }
 }

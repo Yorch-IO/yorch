@@ -631,3 +631,40 @@ def test_the_same_organisation_still_updates_its_own_library(catalog):
     catalog.ensure_library("lib_mine2", "Después", tenant_id=LEGACY_TENANT_ID)
     rows = {r["id"]: r["name"] for r in catalog.libraries(tenant_id=LEGACY_TENANT_ID)}
     assert rows["lib_mine2"] == "Después"
+
+
+def test_a_library_keeps_the_name_it_was_given(catalog: Catalog):
+    """The id is chosen by the client and is not a name.
+
+    `activities/ingest.py` passed the id in both positions, so a library seeded
+    as «Teología» read as `lib_teologia` in every picker from its first import
+    onwards — visible in this installation's own catalog, where both rows are
+    named after themselves.
+    """
+    catalog.ensure_library("lib_nueva", "Teología", tenant_id=LEGACY_TENANT_ID)
+    rows = {b["id"]: b for b in catalog.libraries(tenant_id=LEGACY_TENANT_ID)}
+    assert rows["lib_nueva"]["name"] == "Teología"
+
+
+def test_an_import_that_carries_no_name_does_not_erase_one(catalog: Catalog):
+    """Empty means "leave it alone", not "call it nothing".
+
+    The name does not travel on every `IngestRequest`, so the common case is a
+    second import into a library somebody already named. Overwriting it with a
+    fallback would put the defect back one import later, which is the same
+    reason `source_path` and `author` are `COALESCE`d on update.
+    """
+    catalog.ensure_library("lib_nueva", "Teología", tenant_id=LEGACY_TENANT_ID)
+    catalog.ensure_library("lib_nueva", "", tenant_id=LEGACY_TENANT_ID)
+
+    rows = {b["id"]: b for b in catalog.libraries(tenant_id=LEGACY_TENANT_ID)}
+    assert rows["lib_nueva"]["name"] == "Teología"
+
+
+def test_a_library_created_without_a_name_falls_back_to_its_id(catalog: Catalog):
+    """Today's behaviour, kept deliberately: that is what makes the field
+    additive. A caller that sends nothing gets exactly what it got before."""
+    catalog.ensure_library("lib_sin_nombre", tenant_id=LEGACY_TENANT_ID)
+
+    rows = {b["id"]: b for b in catalog.libraries(tenant_id=LEGACY_TENANT_ID)}
+    assert rows["lib_sin_nombre"]["name"] == "lib_sin_nombre"

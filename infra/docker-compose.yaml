@@ -325,6 +325,16 @@ services:
       BRAIN_DATABASE_URL: postgresql://${BRAIN_PG_USER:-brain}:${BRAIN_PG_PASSWORD:-brain}@postgres:5432/brain
       BRAIN_GEMINI_PROJECT_ID: ${BRAIN_GEMINI_PROJECT_ID:-}
       BRAIN_LOG_LEVEL: ${BRAIN_LOG_LEVEL:-INFO}
+      # The OpenAPI page, off unless the operator asks for it by name.
+      #
+      # It used to be forced on by `docker-compose.dev.yaml`, which is the
+      # overlay a developer and the pre-production stack both apply — so `/docs`
+      # answered 200 unauthenticated on 8788 to whoever found the port, listing
+      # every path, every field and every error kind of a multi-tenant API.
+      # Passed through here instead, so `BRAIN_DOCS=on` in the environment still
+      # turns it on for one stack, deliberately, rather than for every stack by
+      # default. Empty is unset: `env.ts` treats it that way and falls back off.
+      BRAIN_DOCS: ${BRAIN_DOCS:-}
     # The Cognito pool, in a file of its own rather than in `.env`.
     #
     # `.env` is not a place to put anything: the desktop app rewrites it whole

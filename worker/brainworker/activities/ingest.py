@@ -433,8 +433,13 @@ async def register_document(
     ver_id = make_version_id(staged.content_sha256, request.tenant_id)
 
     with Catalog(settings.database_url) as catalog:
+        # The name travels, and empty means "leave it alone". This used to pass
+        # the id in both positions, which is why a library seeded as «Teología»
+        # reads as `lib_teologia` in every picker after its first import.
         catalog.ensure_library(
-            request.library_id, request.library_id, tenant_id=request.tenant_id
+            request.library_id,
+            request.library_name,
+            tenant_id=request.tenant_id,
         )
         catalog.upsert_document(
             tenant_id=request.tenant_id,

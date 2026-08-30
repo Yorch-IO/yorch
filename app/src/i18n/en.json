@@ -134,7 +134,7 @@
     "unknownUser": "That identity is genuine but has no account here yet. An operator has to add it.",
     "userInactive": "This account has been disabled.",
     "noMembership": "This account does not belong to that organisation.",
-    "tenantRequired": "This account belongs to several organisations. Choose one under Backend.",
+    "tenantRequired": "This account belongs to more than one organisation, and this release works with one. An operator has to leave a single active membership in place.",
     "tenantScopePending": "That view is not segmented by organisation yet, so it is only available for the original one."
   },
   "library": {
@@ -435,8 +435,6 @@
     "cloud": "Paid service",
     "baseUrl": "Service address",
     "baseUrlHint": "https://…",
-    "tenant": "Organisation",
-    "tenantHint": "Leave empty if you belong to only one",
     "save": "Save",
     "signedIn": "Signed in.",
     "signedOut": "Not signed in — the paid service refuses every request until you are.",
@@ -445,6 +443,10 @@
     "signOut": "Sign out",
     "signingIn": "Waiting for the browser…",
     "signedInAs": "Signed in as {{email}}.",
-    "signOutNote": "Signing out forgets the session on this machine. It does not end it anywhere else."
+    "signOutNote": "Signing out forgets the session on this machine. It does not end it anywhere else.",
+    "secretStore": {
+      "keychain": "The session is kept in this computer system keychain.",
+      "file": "There is no system keychain here, so the session is kept in an owner-only file under the app data directory. It works, and it is protected by the file permissions rather than by the operating system."
+    }
   }
 }

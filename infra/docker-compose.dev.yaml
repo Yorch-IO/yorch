@@ -39,8 +39,3 @@ services:
 
   backend:
     <<: *backend-build
-    environment:
-      # The OpenAPI page is off unless asked for. A hosted deployment should not
-      # hand out the full surface of a multi-tenant API to whoever finds the
-      # port; a developer reading it locally is the case it exists for.
-      BRAIN_DOCS: "on"

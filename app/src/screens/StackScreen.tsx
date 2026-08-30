@@ -54,10 +54,14 @@ export function StackScreen() {
   const [status, setStatus] = useState<StackStatus | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
   const [backend, setBackend] = useState<BackendInfo | null>(null);
+  /** No organisation here on purpose. This release supports an account with a
+   *  single membership, and the server resolves that one from the token — so
+   *  offering a field would be offering a choice with one option and a way to
+   *  get it wrong. The header and its plumbing stay in Rust, because that is
+   *  what a picker would use the day several memberships are provisioned. */
   const [backendDraft, setBackendDraft] = useState<{
     mode: BackendMode;
     baseUrl: string;
-    tenantId: string;
   } | null>(null);
   const [signingIn, setSigningIn] = useState(false);
   const [provider, setProvider] = useState<ProviderSettings | null>(null);
@@ -96,12 +100,7 @@ export function StackScreen() {
       const chosen = await api.backendSettings();
       setBackend(chosen);
       setBackendDraft(
-        (draft) =>
-          draft ?? {
-            mode: chosen.mode,
-            baseUrl: chosen.baseUrl,
-            tenantId: chosen.tenantId,
-          },
+        (draft) => draft ?? { mode: chosen.mode, baseUrl: chosen.baseUrl },
       );
     } catch {
       setBackend(null);
@@ -172,11 +171,9 @@ export function StackScreen() {
     setError(null);
     try {
       setBackend(
-        await api.setBackendMode(
-          backendDraft.mode,
-          backendDraft.baseUrl,
-          backendDraft.tenantId,
-        ),
+        // Empty: an absent `X-Tenant-Id`, which is what tells the server to
+        // use the account's sole membership. Not an empty header.
+        await api.setBackendMode(backendDraft.mode, backendDraft.baseUrl, ""),
       );
       // Everything on this screen describes whichever plane is now selected,
       // so it is all stale.
@@ -312,16 +309,6 @@ export function StackScreen() {
                     }
                   />
                 </label>
-                <label className="field">
-                  <span>{t("backend.tenant")}</span>
-                  <input
-                    value={backendDraft.tenantId}
-                    placeholder={t("backend.tenantHint")}
-                    onChange={(e) =>
-                      setBackendDraft({ ...backendDraft, tenantId: e.target.value })
-                    }
-                  />
-                </label>
               </>
             ) : (
               <p className="caveat">{t("backend.localNote")}</p>
@@ -365,7 +352,12 @@ export function StackScreen() {
                   )}
                 </div>
                 {backend.signedIn && (
-                  <p className="caveat">{t("backend.signOutNote")}</p>
+                  <>
+                    <p className="caveat">
+                      {t(`backend.secretStore.${backend.secretStore}`)}
+                    </p>
+                    <p className="caveat">{t("backend.signOutNote")}</p>
+                  </>
                 )}
               </>
             )}

@@ -41,6 +41,26 @@ struct AppState {
 }
 
 impl AppState {
+    /// The local stack, refusing when this app is not the one that owns it.
+    ///
+    /// Every caller of `stack()` below is a Docker operation, and Docker is a
+    /// requirement of the local backend and of nothing else. They used to call
+    /// it unconditionally, so in cloud mode `stack_status` and
+    /// `provider_settings` still tried to allocate ports and find a container
+    /// runtime — the Services screen swallowed both failures, which is why
+    /// nobody noticed, and a user of the paid service on a machine with no
+    /// Docker got an error from a subsystem they do not use.
+    async fn local_stack(&self) -> Result<Arc<Stack>> {
+        if BackendSettings::load(&self.data_dir).mode != BackendMode::Local {
+            return Err(AppError::Config(
+                "esta operación es del backend local; el servicio de pago no \
+                 gestiona contenedores desde la aplicación"
+                    .into(),
+            ));
+        }
+        self.stack().await
+    }
+
     /// The prepared stack, laying it out on first use.
     ///
     /// Preparation is deferred rather than done at startup so a machine without
@@ -127,10 +147,11 @@ impl AppState {
             .await
             .map_err(|source| AppError::ControlUnreachable { url: url.clone(), source })?;
         if !response.status().is_success() {
-            return Err(AppError::ControlStatus {
-                status: response.status().as_u16(),
-                body: response.text().await.unwrap_or_default().chars().take(500).collect(),
-            });
+            let status = response.status().as_u16();
+            return Err(AppError::control_status(
+                status,
+                response.text().await.unwrap_or_default(),
+            ));
         }
         response
             .json()
@@ -145,7 +166,7 @@ impl AppState {
     /// taken — so it would allocate a *different* set and every subsequent
     /// command would address services that are not there.
     async fn set_gemini_project(&self, project_id: &str) -> Result<Arc<Stack>> {
-        let current = self.stack().await?;
+        let current = self.local_stack().await?;
         let updated = Arc::new(current.with_gemini_project(project_id)?);
         *self.stack.lock().await = Some(updated.clone());
         Ok(updated)
@@ -256,6 +277,17 @@ async fn set_backend_mode(
     tenant_id: String,
 ) -> Result<BackendInfo> {
     let settings = BackendSettings::validated(mode, &base_url, &tenant_id)?;
+
+    // Pointing the app somewhere else ends the session, because the token
+    // belongs to the service that issued it. Without this a bearer minted
+    // against one deployment survived a change of address and was sent to
+    // another, which fails as a 401 that reads like a signing problem rather
+    // than like "you are not signed in to *this* one". Switching to local and
+    // back counts: nothing there refreshes it, so the token quietly ages out.
+    if BackendSettings::load(&state.data_dir).repoints_to(&settings) {
+        auth::clear_session(&state.data_dir)?;
+    }
+
     settings.save(&state.data_dir)?;
     Ok(describe_backend(&state, settings))
 }
@@ -305,7 +337,7 @@ async fn docker_probe() -> Result<DockerInfo> {
 
 #[tauri::command]
 async fn stack_status(state: State<'_, AppState>) -> Result<StackStatus> {
-    state.stack().await?.status().await
+    state.local_stack().await?.status().await
 }
 
 #[tauri::command]
@@ -313,7 +345,7 @@ async fn stack_up(
     state: State<'_, AppState>,
     on_event: tauri::ipc::Channel<StackEvent>,
 ) -> Result<StackStatus> {
-    let stack = state.stack().await?;
+    let stack = state.local_stack().await?;
 
     // `up --wait` can sit silently for minutes on a cold start while Postgres
     // initialises and Temporal creates its schemas. Without these the window
@@ -340,14 +372,14 @@ async fn stack_up(
 
 #[tauri::command]
 async fn stack_down(state: State<'_, AppState>) -> Result<StackStatus> {
-    let stack = state.stack().await?;
+    let stack = state.local_stack().await?;
     stack.down().await?;
     stack.status().await
 }
 
 #[tauri::command]
 async fn stack_logs(state: State<'_, AppState>, service: String, tail: u32) -> Result<String> {
-    state.stack().await?.logs(&service, tail.min(2000)).await
+    state.local_stack().await?.logs(&service, tail.min(2000)).await
 }
 
 #[tauri::command]
@@ -479,7 +511,7 @@ async fn library_documents(
 
 #[tauri::command]
 async fn provider_settings(state: State<'_, AppState>) -> Result<ProviderSettings> {
-    let stack = state.stack().await?;
+    let stack = state.local_stack().await?;
     Ok(ProviderSettings::of(&stack))
 }
 

@@ -134,7 +134,7 @@
     "unknownUser": "Esa identidad es auténtica pero todavía no tiene cuenta aquí. Alguien con permisos debe darla de alta.",
     "userInactive": "Esta cuenta está deshabilitada.",
     "noMembership": "Esta cuenta no pertenece a esa organización.",
-    "tenantRequired": "Esta cuenta pertenece a varias organizaciones. Elige una en Backend.",
+    "tenantRequired": "Esta cuenta pertenece a más de una organización, y esta versión trabaja con una. Un operador tiene que dejar una sola membresía activa.",
     "tenantScopePending": "Esa vista todavía no está segmentada por organización, así que solo está disponible para la original."
   },
   "library": {
@@ -435,8 +435,6 @@
     "cloud": "Servicio de pago",
     "baseUrl": "Dirección del servicio",
     "baseUrlHint": "https://…",
-    "tenant": "Organización",
-    "tenantHint": "Déjalo vacío si perteneces a una sola",
     "save": "Guardar",
     "signedIn": "Sesión iniciada.",
     "signedOut": "Sin sesión: el servicio de pago rechaza cada petición hasta que la inicies.",
@@ -445,6 +443,10 @@
     "signOut": "Cerrar sesión",
     "signingIn": "Esperando al navegador…",
     "signedInAs": "Sesión iniciada como {{email}}.",
-    "signOutNote": "Cerrar sesión olvida la sesión en esta máquina. No la termina en ningún otro sitio."
+    "signOutNote": "Cerrar sesión olvida la sesión en esta máquina. No la termina en ningún otro sitio.",
+    "secretStore": {
+      "keychain": "La sesión se guarda en el llavero del sistema de este ordenador.",
+      "file": "Aquí no hay llavero del sistema, así que la sesión se guarda en un fichero de sólo-propietario dentro del directorio de datos de la aplicación. Funciona, y lo protegen los permisos del fichero en lugar del sistema operativo."
+    }
   }
 }

@@ -59,6 +59,21 @@ class IngestRequest:
     #: single-tenant by construction and *is* the legacy tenant, so naming it
     #: there would be ceremony. The paid plane always sets it explicitly.
     tenant_id: str = LEGACY_TENANT_ID
+    #: What to call the library, if it does not exist yet.
+    #:
+    #: `library_id` is chosen by the client and arrives as a plain string, so it
+    #: is an identifier and not a name. `ensure_library` was being handed it
+    #: twice — id as id and id as name — which is why every picker in the
+    #: product reads `lib_teologia` for a library seeded as «Teología», and why
+    #: both rows in this installation's catalog are named after themselves.
+    #:
+    #: Empty falls back to the id, so a caller that sends nothing gets exactly
+    #: today's behaviour: that is what makes this additive rather than a change
+    #: of contract. Appended at the end for the reason `reindex` gives above —
+    #: Temporal maps payloads by arity, and a field inserted in the middle is
+    #: how `extract_text` once produced `'dict' object has no attribute
+    #: 'source_path'` three frames from its cause.
+    library_name: str = ""
 
 
 @dataclass

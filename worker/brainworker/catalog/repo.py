@@ -265,9 +265,16 @@ class Catalog:
     # -- libraries and folders --------------------------------------------
 
     def ensure_library(
-        self, library_id: str, name: str, *, tenant_id: str, language: str = "es"
+        self, library_id: str, name: str = "", *, tenant_id: str, language: str = "es"
     ) -> str:
         """Create or update a library, refusing one that belongs to somebody else.
+
+        An empty `name` means "do not rename it", not "call it nothing". The
+        ingest is the only caller and it does not always know the name: the id
+        arrives on every `IngestRequest` and the name does not, so a request
+        that carries none must leave a library the user already named alone. A
+        row created without one falls back to its id, which is what every
+        library in this installation is currently called.
 
         **The library id is chosen by the client**, not derived: it arrives on
         `IngestRequest` as a plain string, and `lib_teologia` is the sort of
@@ -286,13 +293,19 @@ class Catalog:
             row = conn.execute(
                 """
                 INSERT INTO library (id, name, language, tenant_id)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name,
-                                               language = EXCLUDED.language
+                VALUES (%s, COALESCE(NULLIF(%s, ''), %s), %s, %s)
+                ON CONFLICT (id) DO UPDATE
+                    -- Tested against the parameter rather than against
+                    -- `EXCLUDED.name`: the insert already folded an empty name
+                    -- into the id, so by here the two are indistinguishable and
+                    -- a second import would rename the library after itself.
+                    SET name = CASE WHEN %s = '' THEN library.name
+                                    ELSE EXCLUDED.name END,
+                        language = EXCLUDED.language
                     WHERE library.tenant_id = EXCLUDED.tenant_id
                 RETURNING id
                 """,
-                (library_id, name, language, tenant_id),
+                (library_id, name, library_id, language, tenant_id, name),
             ).fetchone()
         if row is None:
             raise LibraryOwnedByAnother(

@@ -112,6 +112,14 @@ pub struct IngestRequest {
     pub folder_id: Option<String>,
     #[serde(default)]
     pub auto_approve: bool,
+    /// What to call the library, when this import is the one that creates it.
+    ///
+    /// A library id is a value the client picks — `lib_teologia` — and is not a
+    /// name. Empty means "leave whatever it is called alone", so a second
+    /// import does not rename a library after its own id, which is what every
+    /// import used to do.
+    #[serde(default)]
+    pub library_name: String,
 }
 
 /// Where a file the app uploaded landed, as the *worker* sees it.
@@ -1030,12 +1038,10 @@ impl Control {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(AppError::ControlStatus {
-                status: status.as_u16(),
-                // Bodies here are FastAPI error payloads; a truncated one is
-                // still diagnostic and keeps a runaway response out of the UI.
-                body: body.chars().take(500).collect(),
-            });
+            // The whole body, because the constructor reads the control
+            // API's `detail.kind` out of it before cutting it down for a
+            // person to read. Truncating here would sometimes take the tag.
+            return Err(AppError::control_status(status.as_u16(), body));
         }
 
         response

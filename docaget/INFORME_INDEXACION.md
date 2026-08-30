@@ -39,6 +39,7 @@ a más de un libro — ver la sección de colisiones.
 | Conferencia de Cultura, Sociedad y Cristianismo - Unificada.pdf | `4e7c3913` | 07-27 14:31 | 380 | 90 | 0.689 | 0.922 | 0.791 | 0.922 | 0.586 | OK |
 | 01_RetoDeDios_INT-S.pdf | `2bde8a7f` | 08-29 | 373 | 30 | 0.433 | 0.800 | 0.596 | 0.800 | 0.579 | OK (30/30 cap.) |
 | 02-PuertasEternas_INT.pdf | `5f4421c2` | 08-29 | 240 | 40 | 0.575 | 0.975 | 0.754 | 0.975 | 0.606 | OK (8/8 cap.) |
+| 03-ElFrutoEterno_INT-S.pdf | `43ea27a4` | 08-29 | 410 | 40 | 0.400 | 0.850 | 0.606 | 0.875 | 0.604 | OK (10/10 cap.) |
 | 1. DESDE AGUSTÍN DE HIPONA HASTA LOS SIETE CONCILIOS ECUMÉNICOS.pdf | `110b1333` | 07-31 14:03 | 114 | 40 | 0.725 | 0.975 | 0.854 | 0.975 | 0.598 | OK · fp compartido |
 | 2. PAPADO, MONAQUISMO E IMPERIO MUSULMÁN Y SU INFLUENCIA EN EL IMPERIO RONANO DE ORIENTE.pdf | `110b1333` | 07-31 14:39 | 107 | 40 | 0.675 | 0.925 | 0.772 | 0.925 | 0.584 | OK · fp compartido |
 | 3. CARLOMAGNO Y EL SACRO IMPERIO ROMANO, CISMA DE ORIENTE, CRUZADAS, INQUISICIÓN Y DESARROLLO TEOLÓGICO MEDIEVAL..pdf | `cc7db18c` | 07-31 14:55 | 62 | 40 | 0.000 | 0.050 | 0.025 | 0.025 | 0.579 | **SCORES INVÁLIDOS** |
@@ -273,6 +274,34 @@ embeddings. Ambos arreglados; el segundo es la razón de que la corrida acabara
 convergiendo.
 
 Referencia por página: **$0.0045/página** con los modelos actuales.
+
+---
+
+## Familia "Vida Cristiana / Fruto del Espíritu" — `03-ElFrutoEterno_INT-S.pdf`
+
+`03-ElFrutoEterno_INT-S.pdf`, Darío Silva-Silva, 256 páginas. Fingerprint `43ea27a4a28e6208`. Indexado el 2026-08-29 bajo `docagent_v2`.
+
+### Lectura previa (paso 1.1)
+Del índice (página 5): **10 capítulos numerados 1-10** (`1. El fruto espiritual`, `2. El misterio del amor`, `3. La alegría de Dios`, `4. El milagro de la paz`, `5. El poder de la paciencia`, `6. El tesoro de la amabilidad`, `7. La luz de la bondad`, `8. El fuego de la fidelidad`, `9. La fuerza de la humildad`, `10. La voz del dominio propio`), más Advertencia y Conclusión. Capa de texto presente (382.843 bytes en 256 páginas), sin OCR.
+
+### Resultado
+
+| Señal | Valor |
+|---|---|
+| Extractor | `pdf_text` |
+| Perfil | aprendido, `03-elfrutoeterno-int-s-43ea27a4` revisión 1 |
+| Chunks | 410 (`cuerpo` 387, `preguntas` 23) |
+| **Capítulos detectados vs. leídos** | **10 vs 10** |
+| recall@1 / recall@5 / MRR@10 | 0.400 / 0.850 / 0.606 |
+| dense-only recall@5 | 0.875 |
+| noise floor | 0.604 |
+| margen bootstrap recall@5 | ±0.054 |
+| Spans byte-exactos auditados | **410 de 410 verificados** |
+| **Veredicto** | **OK** — estructura correcta, métricas cumplen el objetivo (recall@5 = 0.850 ≥ 0.85) |
+
+### Costes y Rendimiento
+- **Total:** $0.0111 (correct: $0.0042, embed: $0.0068, eval_query: $0.0002, propose: $0.0102).
+- Referencia por página: **$0.00004/página** (gracias a la caché de embeddings y corrección).
 
 ---
 

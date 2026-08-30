@@ -1,5 +1,5 @@
 {
-  "total_usd": 0.020559,
+  "total_usd": 1.025185,
   "measured": true,
   "unpriced_stages": [],
   "prices_per_million": {
@@ -27,37 +27,59 @@
   "price_source": "third-party aggregators, 2026-07-26 — token counts are measured, multipliers are second-hand; verify against GCP billing. Models absent from prices_per_million are reported unpriced, not free.",
   "stages": [
     {
-      "stage": "correct",
+      "stage": "propose",
       "model": "gemini-3.6-flash",
-      "calls": 3,
+      "calls": 1,
       "retries": 0,
       "failures": 0,
       "cache_hits": 0,
-      "input_tokens": 2706,
-      "output_tokens": 1146,
-      "cost_usd": 0.012654
+      "input_tokens": 2207,
+      "output_tokens": 263,
+      "cost_usd": 0.005283
+    },
+    {
+      "stage": "correct",
+      "model": "gemini-3.6-flash",
+      "calls": 16,
+      "retries": 5,
+      "failures": 0,
+      "cache_hits": 0,
+      "input_tokens": 109832,
+      "output_tokens": 105765,
+      "cost_usd": 0.957986
+    },
+    {
+      "stage": "evalset",
+      "model": "gemini-3.6-flash",
+      "calls": 40,
+      "retries": 0,
+      "failures": 0,
+      "cache_hits": 0,
+      "input_tokens": 24573,
+      "output_tokens": 2030,
+      "cost_usd": 0.052085
     },
     {
       "stage": "embed",
       "model": "gemini-embedding-001",
-      "calls": 207,
-      "retries": 113,
+      "calls": 269,
+      "retries": 188,
       "failures": 0,
-      "cache_hits": 33,
-      "input_tokens": 51505,
+      "cache_hits": 141,
+      "input_tokens": 65207,
       "output_tokens": 0,
-      "cost_usd": 0.007726
+      "cost_usd": 0.009781
     },
     {
       "stage": "eval_query",
       "model": "gemini-embedding-001",
-      "calls": 40,
-      "retries": 17,
+      "calls": 11,
+      "retries": 15,
       "failures": 0,
-      "cache_hits": 0,
-      "input_tokens": 1194,
+      "cache_hits": 29,
+      "input_tokens": 342,
       "output_tokens": 0,
-      "cost_usd": 0.000179
+      "cost_usd": 5.1e-05
     },
     {
       "stage": "eval_noise",

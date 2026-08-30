@@ -1159,6 +1159,12 @@ button.link.active {
   fill: var(--muted);
 }
 
+/* Concept names are the reader's primary handle on the graph. They are three
+   times the base SVG label size; document labels and metadata stay compact. */
+.graph-canvas .node.concept text.concept-label {
+  font-size: 33px;
+}
+
 .graph-canvas .node.concept .shape {
   fill: var(--graph-concept-fill);
   stroke: var(--graph-concept-stroke);
@@ -1182,6 +1188,15 @@ button.link.active {
 
 .graph-canvas .node.concept.is-open .shape {
   fill: var(--graph-concept-stroke);
+}
+
+/* A concept under the pointer announces itself twice: its full name appears
+   beside the circle and the circle turns green. The class is set by React on
+   pointer enter and removed on leave, so selection and keyboard focus keep
+   their existing, distinct states. */
+.graph-canvas .node.concept.is-hovered .shape {
+  fill: var(--ok);
+  stroke: var(--ok);
 }
 
 .graph-canvas .node.concept.is-open text {
@@ -1447,6 +1462,18 @@ button.link.active {
   max-height: 44rem;
   cursor: grab;
   touch-action: none;
+}
+
+/* The document graph now shares the overview's pan gesture. Individual
+   concept groups cancel the SVG scale themselves, so this only affects their
+   positions, edges and document cards. */
+.graph-document .graph-canvas {
+  cursor: grab;
+  touch-action: none;
+}
+
+.graph-document .graph-canvas:active {
+  cursor: grabbing;
 }
 
 .graph-overview .graph-canvas:active {

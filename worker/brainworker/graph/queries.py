@@ -144,6 +144,24 @@ def validate_template(t: Template) -> None:
     if "LIMIT" not in upper:
         raise TemplateError(f"{t.id}: no LIMIT — every template must bound its result")
 
+    # The tenant predicate is checked here rather than left to a test, for the
+    # same reason the LIMIT is: a template that loads is a template that can be
+    # named by id, and "somebody will notice in review" is not a boundary. A new
+    # traversal that forgets the filter does not start the process.
+    #
+    # Checked as a *used parameter* rather than by looking for a WHERE clause:
+    # where the predicate belongs differs per template — the node the traversal
+    # starts from, both ends of an edge count, both concepts of a claim — and a
+    # check that guessed the shape would have to be loosened until it meant
+    # nothing.
+    if "tenant_id" not in used:
+        raise TemplateError(
+            f"{t.id}: does not filter on $tenant_id — every template must be "
+            "scoped to one organisation, and salted ids are not authorization: "
+            "a tenant id is a value its own members hold, so an id derived from "
+            "it can be recomputed by anyone who knows both halves"
+        )
+
     # A variable-length pattern with no upper bound expands to the whole
     # connected component. `[:HAS_SECTION*1..4]` and `[:HAS_SECTION*3]` are
     # bounded; `[:HAS_SECTION*]` and `[:HAS_SECTION*2..]` are not.
@@ -191,7 +209,10 @@ def bind(t: Template, args: dict[str, Any]) -> dict[str, Any]:
     return bound
 
 
-_ID = re.compile(r"(lib|fld|doc|ver|sec|chk|con|clm|cit)_[0-9a-f]{24}")
+#: `tnt` joined the list with tenancy: a tenant id is now a value that
+#: travels in a parameter, and one that did not match this pattern would be
+#: refused at the door of every template.
+_ID = re.compile(r"(lib|fld|doc|ver|sec|chk|con|clm|cit|tnt)_[0-9a-f]{24}")
 
 
 def _coerce(template_id: str, p: Param, value: Any) -> Any:
@@ -230,6 +251,15 @@ def _coerce(template_id: str, p: Param, value: Any) -> Any:
     raise fail(f"has unknown type {p.type!r}")  # unreachable; keeps mypy honest
 
 
+#: Every template takes it, and no caller may choose it.
+#:
+#: A planner returns a template id plus typed parameters, and this is the one
+#: parameter whose value decides *whose data comes back* — so `planner._validate`
+#: overwrites it with the caller's tenant before binding, exactly as it does for
+#: `library_id`. Declared required and undefaulted on purpose: a default would be
+#: somebody's tenant, and the wrong somebody.
+_TENANT = Param("tenant_id", "string")
+
 _LIMIT = Param("limit", "int", required=False, default=25)
 _FLOOR = Param("confidence_floor", "float", required=False, default=0.6)
 
@@ -239,11 +269,12 @@ TEMPLATES: tuple[Template, ...] = (
         summary="The table of contents of one document version.",
         cypher="""
             MATCH (v:DocumentVersion {id: $version_id})-[:HAS_SECTION]->(s:Section)
+            WHERE v.tenant_id = $tenant_id
             RETURN s.id AS id, s.title AS title, s.path AS path, s.level AS level
             ORDER BY s.path
             LIMIT $limit
         """,
-        params=(Param("version_id", "id"), _LIMIT),
+        params=(Param("version_id", "id"), _TENANT, _LIMIT),
     ),
     Template(
         id="section_chunks",
@@ -254,19 +285,21 @@ TEMPLATES: tuple[Template, ...] = (
         # ignore it; the LIMIT clamp is what bounds the payload.
         cypher="""
             MATCH (s:Section {id: $section_id})-[:HAS_CHUNK]->(c:Chunk)
+            WHERE s.tenant_id = $tenant_id
             RETURN c.id AS id, c.kind AS kind, c.ordinal AS ordinal,
                    c.page AS page, c.char_start AS char_start, c.char_end AS char_end,
                    c.text AS text
             ORDER BY c.ordinal
             LIMIT $limit
         """,
-        params=(Param("section_id", "id"), _LIMIT),
+        params=(Param("section_id", "id"), _TENANT, _LIMIT),
     ),
     Template(
         id="chunk_neighbours",
         summary="The chunks immediately before and after one chunk, for context.",
         cypher="""
             MATCH (c:Chunk {id: $chunk_id})
+            WHERE c.tenant_id = $tenant_id
             OPTIONAL MATCH (c)-[:NEXT]->(after:Chunk)
             OPTIONAL MATCH (c)<-[:NEXT]-(before:Chunk)
             RETURN before.id AS before_id, before.text AS before_text,
@@ -275,7 +308,7 @@ TEMPLATES: tuple[Template, ...] = (
                    after.id AS after_id, after.text AS after_text
             LIMIT $limit
         """,
-        params=(Param("chunk_id", "id"), _LIMIT),
+        params=(Param("chunk_id", "id"), _TENANT, _LIMIT),
     ),
     Template(
         id="concepts_in_version",
@@ -284,13 +317,14 @@ TEMPLATES: tuple[Template, ...] = (
             MATCH (v:DocumentVersion {id: $version_id})-[:HAS_CHUNK]->(c:Chunk)
                   -[m:MENTIONS]->(k:Concept)
             WHERE m.confidence >= $confidence_floor
+              AND v.tenant_id = $tenant_id
             RETURN k.id AS id, k.name AS name, k.type AS type,
                    k.description AS description,
                    count(c) AS mentions, max(m.confidence) AS confidence
             ORDER BY mentions DESC
             LIMIT $limit
         """,
-        params=(Param("version_id", "id"), _FLOOR, _LIMIT),
+        params=(Param("version_id", "id"), _TENANT, _FLOOR, _LIMIT),
         uses_semantic_edges=True,
     ),
     Template(
@@ -319,6 +353,7 @@ TEMPLATES: tuple[Template, ...] = (
             WHERE k.id IN $concept_ids
               AND m.confidence >= $confidence_floor
               AND d.library_id = $library_id
+              AND d.tenant_id = $tenant_id
             RETURN c.id AS id, c.version_id AS version_id,
                    max(m.confidence) AS confidence
             ORDER BY confidence DESC
@@ -331,6 +366,9 @@ TEMPLATES: tuple[Template, ...] = (
             # `confidence_floor`: a model asking to search a different library is
             # asking for something it must not get.
             Param("library_id", "string"),
+            # Overwritten the same way, and for a sharper reason: a library is
+            # one shelf inside one organisation, this is the organisation.
+            _TENANT,
             _FLOOR,
             _LIMIT,
         ),
@@ -342,10 +380,11 @@ TEMPLATES: tuple[Template, ...] = (
         cypher="""
             MATCH (k:Concept)
             WHERE k.canonical IN $canonical_names
+              AND k.tenant_id = $tenant_id
             RETURN k.id AS id, k.name AS name, k.type AS type
             LIMIT $limit
         """,
-        params=(Param("canonical_names", "string_list"), _LIMIT),
+        params=(Param("canonical_names", "string_list"), _TENANT, _LIMIT),
     ),
     Template(
         id="related_documents",
@@ -377,6 +416,8 @@ TEMPLATES: tuple[Template, ...] = (
             WHERE other.id <> $version_id
               AND m1.confidence >= $confidence_floor
               AND m2.confidence >= $confidence_floor
+              AND v.tenant_id = $tenant_id
+              AND other.tenant_id = $tenant_id
             OPTIONAL MATCH (d:Document)-[:HAS_VERSION]->(other)
             WITH other, d, collect(DISTINCT k) AS shared
             RETURN other.id AS id, other.title AS title, d.id AS document_id,
@@ -386,7 +427,7 @@ TEMPLATES: tuple[Template, ...] = (
             ORDER BY shared_concepts DESC
             LIMIT $limit
         """,
-        params=(Param("version_id", "id"), _FLOOR, _LIMIT),
+        params=(Param("version_id", "id"), _TENANT, _FLOOR, _LIMIT),
         uses_semantic_edges=True,
     ),
     Template(
@@ -406,6 +447,7 @@ TEMPLATES: tuple[Template, ...] = (
             MATCH (k:Concept {id: $concept_id})<-[a:ABOUT]-(cl:Claim)
             MATCH (cl)-[:DERIVED_FROM]->(:Chunk)
             WHERE a.confidence >= $confidence_floor
+              AND k.tenant_id = $tenant_id
             RETURN cl.id AS id, cl.text AS text, cl.confidence AS confidence,
                    cl.source_chunk_id AS source_chunk_id,
                    cl.quote AS quote,
@@ -419,7 +461,7 @@ TEMPLATES: tuple[Template, ...] = (
             ORDER BY cl.confidence DESC
             LIMIT $limit
         """,
-        params=(Param("concept_id", "id"), _FLOOR, _LIMIT),
+        params=(Param("concept_id", "id"), _TENANT, _FLOOR, _LIMIT),
         uses_semantic_edges=True,
     ),
     Template(
@@ -440,6 +482,8 @@ TEMPLATES: tuple[Template, ...] = (
             MATCH (cl)-[a:ABOUT]->(k1:Concept)
             MATCH (cl)-[i:INVOLVES]->(k2:Concept)
             WHERE a.confidence >= $confidence_floor
+              AND k1.tenant_id = $tenant_id
+              AND k2.tenant_id = $tenant_id
               AND ((k1.id = $concept_id AND k2.id = $other_id)
                    OR (k1.id = $other_id AND k2.id = $concept_id))
             RETURN cl.id AS id, cl.text AS text, cl.confidence AS confidence,
@@ -450,7 +494,13 @@ TEMPLATES: tuple[Template, ...] = (
             ORDER BY cl.confidence DESC
             LIMIT $limit
         """,
-        params=(Param("concept_id", "id"), Param("other_id", "id"), _FLOOR, _LIMIT),
+        params=(
+            Param("concept_id", "id"),
+            Param("other_id", "id"),
+            _TENANT,
+            _FLOOR,
+            _LIMIT,
+        ),
         uses_semantic_edges=True,
     ),
     Template(
@@ -459,6 +509,7 @@ TEMPLATES: tuple[Template, ...] = (
         cypher="""
             MATCH (cl:Claim)-[:DERIVED_FROM]->(c:Chunk)
             WHERE c.id IN $chunk_ids AND cl.confidence >= $confidence_floor
+              AND c.tenant_id = $tenant_id
             OPTIONAL MATCH (cl)-[a:ABOUT]->(k:Concept)
             RETURN c.id AS chunk_id, cl.id AS id, cl.text AS text,
                    cl.confidence AS confidence, cl.quote AS quote,
@@ -467,7 +518,7 @@ TEMPLATES: tuple[Template, ...] = (
             ORDER BY cl.confidence DESC
             LIMIT $limit
         """,
-        params=(Param("chunk_ids", "id_list"), _FLOOR, _LIMIT),
+        params=(Param("chunk_ids", "id_list"), _TENANT, _FLOOR, _LIMIT),
         # The claims are a model's reading of the chunk, not the chunk. Marked so
         # nothing downstream can present them as the document's own words.
         uses_semantic_edges=True,
@@ -478,11 +529,12 @@ TEMPLATES: tuple[Template, ...] = (
         cypher="""
             MATCH (c:Chunk)-[:CITES]->(cit:Citation)
             WHERE c.id IN $chunk_ids
+              AND c.tenant_id = $tenant_id
             RETURN c.id AS chunk_id, cit.id AS id, cit.locator AS locator,
                    cit.page AS page, cit.section_title AS section_title
             LIMIT $limit
         """,
-        params=(Param("chunk_ids", "id_list"), _LIMIT),
+        params=(Param("chunk_ids", "id_list"), _TENANT, _LIMIT),
     ),
     # -- overview reads ----------------------------------------------------
     #
@@ -500,21 +552,25 @@ TEMPLATES: tuple[Template, ...] = (
         # requires rather than a real truncation.
         cypher="""
             MATCH (n)
+            WHERE n.tenant_id = $tenant_id
             RETURN labels(n)[0] AS label, count(n) AS total
             ORDER BY total DESC
             LIMIT 25
         """,
+        params=(_TENANT,),
         planner_visible=False,
     ),
     Template(
         id="graph_edge_counts",
         summary="Cuántas aristas hay de cada tipo en todo el grafo.",
         cypher="""
-            MATCH ()-[r]->()
+            MATCH (a)-[r]->(b)
+            WHERE a.tenant_id = $tenant_id AND b.tenant_id = $tenant_id
             RETURN type(r) AS label, count(r) AS total
             ORDER BY total DESC
             LIMIT 25
         """,
+        params=(_TENANT,),
         # Set by hand: the pattern names no edge type, so the validator cannot
         # see that this histogram counts MENTIONS and ABOUT alongside HAS_CHUNK.
         # Some of what it returns is model-proposed, and the flag is what lets
@@ -532,6 +588,7 @@ TEMPLATES: tuple[Template, ...] = (
         cypher="""
             MATCH (d:Document)-[:HAS_VERSION]->(v:DocumentVersion)
             WHERE d.library_id = $library_id AND v.active = true
+              AND d.tenant_id = $tenant_id
             RETURN d.id AS document_id, v.id AS version_id,
                    v.title AS title, d.format AS format
             ORDER BY v.title, v.id
@@ -539,6 +596,7 @@ TEMPLATES: tuple[Template, ...] = (
         """,
         params=(
             Param("library_id", "string"),
+            _TENANT,
             Param("document_limit", "int", required=False, default=500, cap=1000),
         ),
         planner_visible=False,
@@ -584,6 +642,7 @@ TEMPLATES: tuple[Template, ...] = (
             MATCH (d:Document)-[:HAS_VERSION]->(v:DocumentVersion)
                   -[:HAS_CHUNK]->(c:Chunk)-[m:MENTIONS]->(k:Concept)
             WHERE d.library_id = $library_id
+              AND d.tenant_id = $tenant_id
               AND v.active = true
               AND m.confidence >= $confidence_floor
             WITH k, v, count(c) AS weight, max(m.confidence) AS strength
@@ -600,6 +659,7 @@ TEMPLATES: tuple[Template, ...] = (
         """,
         params=(
             Param("library_id", "string"),
+            _TENANT,
             _FLOOR,
             # 1 is "every concept", and it is reachable — the control offers it.
             # The default is 2 because that is the subgraph that has edges

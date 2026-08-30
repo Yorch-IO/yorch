@@ -1,122 +1,193 @@
-"""Schema migration, run by the control API on startup.
+"""Schema *verification*, not schema application.
 
-Startup rather than a separate step, because the schema version then cannot
-disagree with the code that reads it: there is no window in which a new API
-binary is talking to an old catalog. The cost is that migrations must be fast
-and additive; anything that rewrites a large table belongs in a maintenance
-workflow instead, and the app should refuse to start rather than block on it.
+Ownership of this catalog's schema moved to Prisma when the NestJS control
+plane arrived (`yorch-tauri-backend/prisma/migrations/`, a checkout beside
+this one). This module used to apply
+numbered SQL files on API startup; it no longer applies anything in production.
+The four files it used to run are still on disk at `catalog/schema/` as the
+historical record, and nothing reads them.
 
-Concurrency is handled with a Postgres advisory lock rather than by assuming a
-single API process. In host dev mode a developer routinely has the containerised
-API and a host one pointed at the same database, and two processes racing
-`CREATE TABLE` produce an error that reads like a corrupted catalog.
+Why the assertion survived the runner it used to be:
+
+The reason migrations ran at startup was that the schema then could not disagree
+with the code reading it — there was no window in which a new API binary talked
+to an old catalog. Moving migrations to a separate step reopens that window, so
+something has to close it, and refusing to serve is the wrong answer for a
+control plane whose `/health` is how an operator finds out what is wrong. So the
+API asks, records the answer, and reports it on `/health` — the same shape the
+old `MigrationError` path had.
+
+`apply_migrations` exists for tests and only for tests. It reads the same files
+`prisma migrate deploy` reads, so a test schema and a real one cannot drift, and
+it needs no Node toolchain in the Python environment.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import pathlib
+import uuid
 
 import psycopg
 
 log = logging.getLogger(__name__)
 
-SCHEMA_DIR = pathlib.Path(__file__).parent / "schema"
+#: The oldest migration this code is willing to run against. Bump it in the same
+#: commit as the code that needs the newer column, and never in a commit that
+#: only adds one — an assertion ahead of the code it protects turns a working
+#: deployment into a warning nobody can act on.
+REQUIRED_MIGRATION = "20260826180000_tenant_required"
 
-#: Arbitrary but fixed. Postgres advisory locks are a single global namespace;
-#: this value identifies "the Company Brain catalog migration" within it.
-LOCK_KEY = 0x0B3A17_10
+def _default_migrations_dir() -> pathlib.Path:
+    """Where `prisma migrate deploy` reads from.
+
+    The NestJS plane is its own checkout *beside* this one rather than a
+    directory inside it, so this is a guess about someone else's disk —
+    `BRAIN_MIGRATIONS_DIR` is how a machine that arranges things differently
+    says so. It is absent inside the worker image, which ships neither
+    checkout, and that is fine: nothing in production reads it and
+    :func:`require_schema` never looks.
+    """
+    if override := os.environ.get("BRAIN_MIGRATIONS_DIR", "").strip():
+        return pathlib.Path(override)
+    repo = pathlib.Path(__file__).resolve().parents[3]
+    return repo.parent / "yorch-tauri-backend" / "prisma" / "migrations"
+
+
+MIGRATIONS_DIR = _default_migrations_dir()
+
+#: The retired runner's own ledger, kept so an older worker image rolled back
+#: onto this database still finds its four rows and applies nothing.
+LEGACY_LEDGER = "schema_migration"
 
 
 class MigrationError(RuntimeError):
     pass
 
 
-def _files() -> list[pathlib.Path]:
-    files = sorted(SCHEMA_DIR.glob("*.sql"))
-    if not files:
-        raise MigrationError(f"no migrations found in {SCHEMA_DIR}")
-    seen: set[str] = set()
-    for f in files:
-        version = f.name.split("_", 1)[0]
-        if not version.isdigit():
-            raise MigrationError(f"migration {f.name} does not start with a number")
-        if version in seen:
-            raise MigrationError(f"duplicate migration number {version}")
-        seen.add(version)
-    return files
+def _applied(conn: psycopg.Connection) -> list[str]:
+    """Migration names Prisma considers applied, oldest first.
 
-
-def _ensure_table(conn: psycopg.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS schema_migration (
-            version    text PRIMARY KEY,
-            name       text NOT NULL,
-            -- Stored so an edit to an already-applied file is caught. Editing
-            -- one is the mistake that makes two machines disagree about what
-            -- the schema is while both report themselves up to date.
-            sha256     text NOT NULL,
-            applied_at timestamptz NOT NULL DEFAULT now()
-        )
-        """
-    )
-
-
-def migrate(database_url: str) -> list[str]:
-    """Apply pending migrations. Returns the names applied, newest last."""
-    applied: list[str] = []
-    with psycopg.connect(database_url, autocommit=True) as conn:
-        _ensure_table(conn)
-        # Blocks rather than failing: the other process is doing the same work,
-        # and the right behaviour is to wait for it and then find nothing to do.
-        conn.execute("SELECT pg_advisory_lock(%s)", (LOCK_KEY,))
-        try:
-            rows = conn.execute("SELECT version, name, sha256 FROM schema_migration").fetchall()
-            known = {version: (name, sha) for version, name, sha in rows}
-
-            for path in _files():
-                version, _, _ = path.name.partition("_")
-                body = path.read_text(encoding="utf-8")
-                digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
-
-                if version in known:
-                    _, previous = known[version]
-                    if previous != digest:
-                        raise MigrationError(
-                            f"{path.name} changed after it was applied "
-                            f"({previous[:12]} → {digest[:12]}). Add a new "
-                            "migration instead of editing this one."
-                        )
-                    continue
-
-                log.info("applying migration %s", path.name)
-                with conn.transaction():
-                    conn.execute(body)
-                    conn.execute(
-                        "INSERT INTO schema_migration (version, name, sha256) "
-                        "VALUES (%s, %s, %s)",
-                        (version, path.name, digest),
-                    )
-                applied.append(path.name)
-        finally:
-            conn.execute("SELECT pg_advisory_unlock(%s)", (LOCK_KEY,))
-    return applied
+    A row with `finished_at` unset is a migration that failed halfway, and one
+    with `rolled_back_at` set was marked as reverted. Neither counts, and
+    counting them is how "the column is there" gets believed about a database
+    where it is not.
+    """
+    rows = conn.execute(
+        "SELECT migration_name FROM _prisma_migrations "
+        "WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL "
+        "ORDER BY started_at"
+    ).fetchall()
+    return [name for (name,) in rows]
 
 
 def current_version(database_url: str) -> str | None:
-    """The highest applied migration, or None if the catalog is untouched.
+    """The newest applied migration, or None if the catalog is untouched.
 
-    An absent table is a normal answer, not an error: the health endpoint may
-    be asked before migrations have ever run, and reporting "no schema" is more
-    useful there than raising.
+    An absent table is a normal answer rather than an error: `/health` may be
+    asked before migrations have ever run, and "no schema" is more useful there
+    than a traceback.
     """
     with psycopg.connect(database_url) as conn:
         try:
-            row = conn.execute(
-                "SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1"
-            ).fetchone()
+            names = _applied(conn)
         except psycopg.errors.UndefinedTable:
             return None
-    return row[0] if row else None
+    return names[-1] if names else None
+
+
+def require_schema(
+    database_url: str, minimum: str = REQUIRED_MIGRATION
+) -> list[str]:
+    """Raise unless `minimum` has been applied. Returns what has been.
+
+    Deliberately a membership test rather than a comparison against the newest
+    name: a database migrated *ahead* of this code is the ordinary state during
+    a rollout and must not be refused, while a database missing the migration
+    this code was written against must be.
+    """
+    try:
+        with psycopg.connect(database_url) as conn:
+            names = _applied(conn)
+    except psycopg.errors.UndefinedTable:
+        raise MigrationError(
+            "the catalog has never been migrated (_prisma_migrations is absent). "
+            "Run `npx prisma migrate deploy` from the yorch-tauri-backend "
+            "checkout, or start the `migrate` compose service."
+        ) from None
+
+    if minimum not in names:
+        newest = names[-1] if names else "nothing"
+        raise MigrationError(
+            f"catalog schema is behind this code: {minimum!r} has not been "
+            f"applied (newest applied: {newest}). Run `npx prisma migrate "
+            "deploy` from the yorch-tauri-backend checkout."
+        )
+    return names
+
+
+def _files() -> list[pathlib.Path]:
+    if not MIGRATIONS_DIR.is_dir():
+        raise MigrationError(
+            f"no migrations directory at {MIGRATIONS_DIR} — this function is "
+            "test support and needs the repository checkout, not the image."
+        )
+    files = sorted(MIGRATIONS_DIR.glob("*/migration.sql"), key=lambda p: p.parent.name)
+    if not files:
+        raise MigrationError(f"no migrations found in {MIGRATIONS_DIR}")
+    return files
+
+
+def apply_migrations(database_url: str) -> list[str]:
+    """Apply every migration, for a throwaway test schema. **Not production.**
+
+    Production applies migrations with `prisma migrate deploy`. This exists so
+    the Python suite can build a schema without a Node toolchain, and it reads
+    the same files that command reads — which is the point. A helper that
+    maintained its own copy of the DDL would let the tests pass against a schema
+    the product does not have, which is the failure this whole move was meant to
+    end.
+
+    The `_prisma_migrations` rows it writes carry the same sha256 Prisma
+    computes, so a schema built here and one built by the CLI are
+    indistinguishable to :func:`require_schema`.
+    """
+    applied: list[str] = []
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS _prisma_migrations (
+                id                  varchar(36) PRIMARY KEY,
+                checksum            varchar(64) NOT NULL,
+                finished_at         timestamptz,
+                migration_name      varchar(255) NOT NULL,
+                logs                text,
+                rolled_back_at      timestamptz,
+                started_at          timestamptz NOT NULL DEFAULT now(),
+                applied_steps_count integer NOT NULL DEFAULT 0
+            )
+            """
+        )
+        known = set(_applied(conn))
+        for path in _files():
+            name = path.parent.name
+            if name in known:
+                continue
+            body = path.read_text(encoding="utf-8")
+            log.info("applying migration %s", name)
+            with conn.transaction():
+                conn.execute(body)
+                conn.execute(
+                    "INSERT INTO _prisma_migrations "
+                    "(id, checksum, migration_name, finished_at, applied_steps_count) "
+                    "VALUES (%s, %s, %s, now(), 1)",
+                    (
+                        str(uuid.uuid4()),
+                        hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                        name,
+                    ),
+                )
+            applied.append(name)
+    return applied

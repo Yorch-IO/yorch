@@ -3,7 +3,7 @@
 **Concept names are randomised, and that is not decoration.** `test_library_scope`
 learned it the expensive way: its first draft used the literal name "Felicidad"
 and its own precondition failed, because `concept_id` is
-`concept_id(canonical_name)` with no library and no test marker in it — the name
+`concept_id(canonical_name, LEGACY_TENANT_ID)` with no library and no test marker in it — the name
 already existed in this machine's real library from an earlier extraction run. A
 test that hard-codes a concept name is sharing a node with production data, and
 here that would mean asserting about the deletion of something a user owns.
@@ -29,6 +29,7 @@ from brainworker.graph.projection import (
     remove_document,
     remove_version,
 )
+from brainworker.graph.schema import LEGACY_TENANT_ID
 from brainworker.graph.schema import chunk_id, claim_id, concept_id
 
 
@@ -36,6 +37,7 @@ def _version(title: str, *, library: str = "lib_removal_test") -> VersionNode:
     sha = secrets.token_hex(32)
     return VersionNode(
         library=library,
+        tenant_id=LEGACY_TENANT_ID,
         source_key=f"libros/{sha[:8]}.pdf",
         content_sha256=sha,
         title=title,
@@ -68,19 +70,19 @@ def _mention(graph, version: VersionNode, concept_name: str) -> str:
         [
             SemanticEdge(
                 type="MENTIONS", source_id=chunk,
-                target_id=concept_id(concept_name), confidence=0.9,
+                target_id=concept_id(concept_name, LEGACY_TENANT_ID), confidence=0.9,
                 extractor_model="test", source_chunk_id=chunk,
             ),
             SemanticEdge(
                 type="ABOUT",
                 source_id=claim_id(chunk, f"Una afirmación sobre {concept_name}."),
-                target_id=concept_id(concept_name), confidence=0.9,
+                target_id=concept_id(concept_name, LEGACY_TENANT_ID), confidence=0.9,
                 extractor_model="test", source_chunk_id=chunk,
             ),
         ],
     )
-    _CREATED.append(concept_id(concept_name))
-    return concept_id(concept_name)
+    _CREATED.append(concept_id(concept_name, LEGACY_TENANT_ID))
+    return concept_id(concept_name, LEGACY_TENANT_ID)
 
 
 #: Concepts this module invented, drained after every test.
@@ -184,6 +186,7 @@ def test_a_version_two_documents_hold_survives_removing_either(graph):
     # Same sha256, different source_key: one version, two documents.
     second = VersionNode(
         library=first.library,
+        tenant_id=first.tenant_id,
         source_key="libros/copia.pdf",
         content_sha256=first.content_sha256,
         title=first.title,
@@ -246,6 +249,7 @@ def test_reprojecting_under_a_changed_title_does_not_duplicate_citations(graph, 
 
     renamed = VersionNode(
         library=one.library,
+        tenant_id=one.tenant_id,
         source_key=one.source_key,
         content_sha256=one.content_sha256,
         title="Otro título entirely",
@@ -282,7 +286,7 @@ def test_a_concept_reachable_only_through_a_claim_is_collected_too(graph, one):
     chunk = chunk_id(one.version, 0)
     text = f"Una afirmación sobre {name}."
     project_concepts(graph, [{"name": name, "type": "tema"}])
-    _CREATED.append(concept_id(name))
+    _CREATED.append(concept_id(name, LEGACY_TENANT_ID))
     project_claims(
         graph, [{"text": text, "confidence": 0.9, "source_chunk_id": chunk}]
     )
@@ -293,17 +297,17 @@ def test_a_concept_reachable_only_through_a_claim_is_collected_too(graph, one):
         [
             SemanticEdge(
                 type="ABOUT", source_id=claim_id(chunk, text),
-                target_id=concept_id(name), confidence=0.9,
+                target_id=concept_id(name, LEGACY_TENANT_ID), confidence=0.9,
                 extractor_model="test", source_chunk_id=chunk,
             )
         ],
     )
-    assert _count(graph, "Concept", concept_id(name)) == 1
+    assert _count(graph, "Concept", concept_id(name, LEGACY_TENANT_ID)) == 1
 
     removed = remove_version(graph, one.version)
 
     assert removed.concepts_collected == 1
-    assert _count(graph, "Concept", concept_id(name)) == 0
+    assert _count(graph, "Concept", concept_id(name, LEGACY_TENANT_ID)) == 0
 
 
 def test_a_concept_reachable_only_through_a_relation_is_collected_too(graph, one):
@@ -319,7 +323,7 @@ def test_a_concept_reachable_only_through_a_relation_is_collected_too(graph, one
     chunk = chunk_id(one.version, 0)
     text = f"Una afirmación que relaciona algo con {name}."
     project_concepts(graph, [{"name": name}])
-    _CREATED.append(concept_id(name))
+    _CREATED.append(concept_id(name, LEGACY_TENANT_ID))
     project_claims(
         graph, [{"text": text, "confidence": 0.9, "source_chunk_id": chunk}]
     )
@@ -330,17 +334,17 @@ def test_a_concept_reachable_only_through_a_relation_is_collected_too(graph, one
         [
             SemanticEdge(
                 type="INVOLVES", source_id=claim_id(chunk, text),
-                target_id=concept_id(name), confidence=0.9,
+                target_id=concept_id(name, LEGACY_TENANT_ID), confidence=0.9,
                 extractor_model="test", source_chunk_id=chunk,
             )
         ],
     )
-    assert _count(graph, "Concept", concept_id(name)) == 1
+    assert _count(graph, "Concept", concept_id(name, LEGACY_TENANT_ID)) == 1
 
     removed = remove_version(graph, one.version)
 
     assert removed.concepts_collected == 1
-    assert _count(graph, "Concept", concept_id(name)) == 0
+    assert _count(graph, "Concept", concept_id(name, LEGACY_TENANT_ID)) == 0
 
 
 def test_a_concept_both_mentioned_and_claimed_is_counted_once(graph, one):

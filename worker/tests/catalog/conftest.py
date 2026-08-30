@@ -4,6 +4,12 @@ Migrations run against a throwaway `search_path` schema rather than a throwaway
 database: it needs no CREATE DATABASE privilege, it is one statement to drop,
 and — the reason that matters — a bug in this fixture can destroy a test schema
 but cannot destroy the catalog the developer is running the app against.
+
+Two things can be missing, and both skip rather than fail, naming what they
+looked for: Postgres itself, and the migrations. The migrations now live in the
+`yorch-tauri-backend` checkout beside this one, so a clone of this repository
+alone genuinely cannot build a schema — that is a missing prerequisite, not a
+broken test. `BRAIN_MIGRATIONS_DIR` points at it when the two are not siblings.
 """
 
 from __future__ import annotations
@@ -16,6 +22,8 @@ import pytest
 
 pytest.importorskip("psycopg")
 import psycopg  # noqa: E402
+
+from brainworker.catalog import migrations  # noqa: E402
 
 def _dev_url() -> str:
     """Where the developer's Postgres actually is.
@@ -47,6 +55,13 @@ URL = _dev_url()
 
 @pytest.fixture
 def database_url():
+    if not migrations.MIGRATIONS_DIR.is_dir():
+        pytest.skip(
+            f"no migrations at {migrations.MIGRATIONS_DIR}: the schema lives in "
+            "the yorch-tauri-backend checkout. Set BRAIN_MIGRATIONS_DIR if it is "
+            "not beside this one."
+        )
+
     name = f"brain_test_{secrets.token_hex(6)}"
     try:
         with psycopg.connect(URL, autocommit=True, connect_timeout=5) as conn:

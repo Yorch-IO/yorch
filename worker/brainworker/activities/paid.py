@@ -71,7 +71,11 @@ log = logging.getLogger(__name__)
 DEFAULT_COLLECTION = "brain"
 
 #: Payload fields Qdrant must index for filtering to be usable at all.
-PAYLOAD_INDEXES = ("library_id", "version_id", "kind", "document_id")
+#:
+#: `tenant_id` is first because it is the one filter every search carries: a
+#: library is a shelf inside an organisation, and every other key here narrows
+#: within one.
+PAYLOAD_INDEXES = ("tenant_id", "library_id", "version_id", "kind", "document_id")
 
 #: Concurrent embedding requests. There is no batch size to choose: the model
 #: returns one embedding for a request carrying four texts, with no error
@@ -443,6 +447,13 @@ async def embed_and_index(
                 dense=vectors[i],
                 sparse=doc_sparse_vector(docs[i], avgdl),
                 payload={
+                    # Written on every point and forced into every search. A
+                    # point id is `uuid5(ns, f"{version_id}:{index}")` and the
+                    # version id is now salted, so two customers holding the
+                    # same file no longer collide — but a collision is not the
+                    # same thing as authorization, and this is what a query
+                    # actually filters on.
+                    "tenant_id": registered.tenant_id,
                     "library_id": library_id,
                     "document_id": registered.document_id,
                     "version_id": registered.version_id,
@@ -784,6 +795,10 @@ async def extract_semantics(
     store = ArtifactStore(settings.workspace, run_id)
     rows = list(store.iter_jsonl(chunked.chunks))
 
+    # Concept ids are salted with it: two customers who both talk about "Dios"
+    # must not share a node, because `description_raw` accumulates the text of
+    # every chunk that mentions it.
+    tenant = registered.tenant_id
     adapter = VertexAdapter(_provider())
     concepts: dict[str, dict] = {}
     claims: list[dict] = []
@@ -833,7 +848,7 @@ async def extract_semantics(
                     proj.SemanticEdge(
                         type="MENTIONS",
                         source_id=chunk,
-                        target_id=make_concept_id(name),
+                        target_id=make_concept_id(name, tenant),
                         confidence=confidence,
                         extractor_model=settings.gemini.model,
                         source_chunk_id=chunk,
@@ -895,7 +910,7 @@ async def extract_semantics(
                     proj.SemanticEdge(
                         type="ABOUT",
                         source_id=proj.claim_id(chunk, text),
-                        target_id=make_concept_id(about),
+                        target_id=make_concept_id(about, tenant),
                         confidence=confidence,
                         extractor_model=settings.gemini.model,
                         source_chunk_id=chunk,
@@ -911,7 +926,7 @@ async def extract_semantics(
                 # itself is the model restating `concepto`, and it would add a
                 # loop the traversal has to filter out on every read.
                 related = (item.get("relaciona") or "").strip()
-                if related and make_concept_id(related) != make_concept_id(about):
+                if related and make_concept_id(related, tenant) != make_concept_id(about, tenant):
                     concepts.setdefault(
                         related, {"name": related, "type": None, "descriptions": []}
                     )
@@ -919,7 +934,7 @@ async def extract_semantics(
                         proj.SemanticEdge(
                             type="INVOLVES",
                             source_id=proj.claim_id(chunk, text),
-                            target_id=make_concept_id(related),
+                            target_id=make_concept_id(related, tenant),
                             confidence=confidence,
                             extractor_model=settings.gemini.model,
                             source_chunk_id=chunk,
@@ -929,8 +944,8 @@ async def extract_semantics(
     condense_spend: Spend | None = None
     with Graph(settings.memgraph_url) as graph:
         graph.ensure_schema()
-        proj.project_concepts(graph, list(concepts.values()))
-        proj.project_claims(graph, claims)
+        proj.project_concepts(graph, list(concepts.values()), tenant=tenant)
+        proj.project_claims(graph, claims, tenant=tenant)
         written = proj.project_semantic_edges(graph, edges)
 
         # After projection, so the descriptions being condensed include this
@@ -938,7 +953,7 @@ async def extract_semantics(
         # rather than inflating the per-chunk extraction they are not part of.
         if options is not None and options.condense_descriptions:
             condenser = VertexAdapter(_provider())
-            names = [make_concept_id(c["name"]) for c in concepts.values()]
+            names = [make_concept_id(c["name"], tenant) for c in concepts.values()]
             described, paid_calls = _condense_descriptions(graph, condenser, names)
             log.info(
                 "condensed %d concept description(s), %d of them paid for",

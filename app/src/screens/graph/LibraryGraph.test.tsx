@@ -205,6 +205,28 @@ describe("the controls", () => {
     fireEvent.click(screen.getByRole("button", { name: t("graph.reset") }));
     expect(libraryGraph.mock.calls.length).toBe(calls);
   });
+
+  it("keeps every concept at 18px while the graph zooms", async () => {
+    await mounted();
+    const concept = node("Gracia");
+    expect(concept.querySelector("circle.shape")?.getAttribute("r")).toBe("9");
+
+    fireEvent.click(screen.getByRole("button", { name: t("graph.zoomIn") }));
+    expect(concept.getAttribute("transform")).toContain(`scale(${1 / 1.3})`);
+  });
+
+  it("shows a concept's full name next to its circle on hover", async () => {
+    await mounted();
+    const concept = node("Gracia");
+    expect(concept.querySelector(".concept-label")).toBeNull();
+
+    fireEvent.mouseEnter(concept);
+    expect(concept.querySelector(".concept-label")?.textContent).toBe("Gracia");
+    expect(concept.getAttribute("class")).toContain("is-hovered");
+
+    fireEvent.mouseLeave(concept);
+    expect(concept.getAttribute("class")).not.toContain("is-hovered");
+  });
 });
 
 describe("selection", () => {

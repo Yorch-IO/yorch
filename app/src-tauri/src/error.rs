@@ -59,6 +59,12 @@ pub enum AppError {
         source: std::io::Error,
     },
 
+    /// Cloud mode with no token. Its own kind rather than a `Config`, because
+    /// the fix is an action the user takes — sign in — and not a setting they
+    /// mistyped.
+    #[error("no hay sesión iniciada en el servicio de pago")]
+    NotSignedIn,
+
     #[error("{0}")]
     Config(String),
 }
@@ -76,6 +82,7 @@ impl AppError {
             Self::NoFreePort { .. } => "no_free_port",
             Self::WorkspaceNotNative { .. } => "workspace_not_native",
             Self::Io { .. } => "io",
+            Self::NotSignedIn => "not_signed_in",
             Self::Config(_) => "config",
         }
     }

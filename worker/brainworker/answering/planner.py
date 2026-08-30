@@ -120,6 +120,10 @@ def _validate(
     for name, value in (
         ("confidence_floor", question.confidence_floor),
         ("library_id", question.library_id),
+        # And the sharpest of the three: a library is one shelf inside one
+        # organisation; this decides which organisation. A model naming another
+        # is asking to answer out of a different customer's corpus.
+        ("tenant_id", question.tenant_id),
     ):
         if any(p.name == name for p in template.params):
             params[name] = value

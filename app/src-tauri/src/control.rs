@@ -48,6 +48,12 @@ const EXPLORE_TIMEOUT: Duration = Duration::from_secs(15);
 /// must not be reported as unreachable while it is still working.
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Uploading a source file. Generous because this is the one request whose
+/// duration is set by the user's upstream bandwidth rather than by the server:
+/// the cap is 200 MB, and a slow home connection can spend minutes on a book
+/// that the whole rest of the pipeline then handles in seconds.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(900);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceHealth {
     pub ok: bool,
@@ -106,6 +112,22 @@ pub struct IngestRequest {
     pub folder_id: Option<String>,
     #[serde(default)]
     pub auto_approve: bool,
+}
+
+/// Where a file the app uploaded landed, as the *worker* sees it.
+///
+/// `source_path` is a container path (`/workspace/tenants/<id>/inbox/…`) and is
+/// meaningless on the user's own machine. That is the point: it is what
+/// `IngestRequest.source_path` must carry, and in local mode the same field
+/// carries the host path the worker shares through the volume. The two planes
+/// disagree about what a path *is*, and this type is where that is resolved
+/// once rather than at every call site.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct StagedSource {
+    pub source_path: String,
+    pub source_key: String,
+    pub byte_size: u64,
 }
 
 /// Which paid stages the user approved. Individually switchable because they
@@ -870,17 +892,51 @@ fn unreachable(url: String, source: reqwest::Error) -> AppError {
     }
 }
 
+/// The credentials the paid plane needs, and the local one refuses to have.
+///
+/// `Debug` is written by hand so a token cannot reach a log through a
+/// `{:?}` on `Control` — which every derived `Debug` above this would have
+/// done for free.
+#[derive(Clone)]
+pub struct Auth {
+    pub token: String,
+    /// `X-Tenant-Id`. Absent is correct for an account in exactly one
+    /// organisation; the server refuses to guess for one in several.
+    pub tenant: Option<String>,
+}
+
+impl std::fmt::Debug for Auth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Auth")
+            .field("token", &"<redacted>")
+            .field("tenant", &self.tenant)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Control {
     base: String,
     http: reqwest::Client,
+    auth: Option<Auth>,
 }
 
 impl Control {
-    pub fn new(port: u16) -> Self {
+    /// The free plane: loopback, no credentials, and none possible.
+    pub fn local(port: u16) -> Self {
         Self {
             base: format!("http://127.0.0.1:{port}"),
             http: reqwest::Client::new(),
+            auth: None,
+        }
+    }
+
+    /// The paid plane. `base` is validated where it is set, not here.
+    pub fn cloud(base: String, auth: Auth) -> Self {
+        Self {
+            base,
+            http: reqwest::Client::new(),
+            auth: Some(auth),
         }
     }
 
@@ -924,6 +980,19 @@ impl Control {
         timeout: Duration,
     ) -> Result<T> {
         let url = format!("{}{path}", self.base);
+        // Credentials are attached here and nowhere else: every helper above
+        // funnels through this method, so a new one cannot be added that
+        // forgets them.
+        let req = match &self.auth {
+            Some(auth) => {
+                let req = req.bearer_auth(&auth.token);
+                match &auth.tenant {
+                    Some(tenant) => req.header("X-Tenant-Id", tenant),
+                    None => req,
+                }
+            }
+            None => req,
+        };
         // See `unreachable`: which of the two this becomes is decided by the
         // cause, not by the call site.
         let response = req
@@ -955,6 +1024,40 @@ impl Control {
 
     pub async fn ping(&self) -> Result<PingResult> {
         self.post("/ping", PING_TIMEOUT).await
+    }
+
+    /// Hand a local file to the paid plane, and get back the path the worker
+    /// will read it by.
+    ///
+    /// Only cloud mode has this. In local mode the worker and the app share a
+    /// filesystem through the compose volume, so a copy over HTTP would be an
+    /// upload to oneself; `stage_source` in `lib.rs` returns the path unchanged
+    /// there and never calls this.
+    ///
+    /// **The file is read into memory.** The server caps a body at 200 MB and
+    /// this is a desktop app, so the simplicity is worth more than the
+    /// streaming; if that cap ever rises, this is what has to change first.
+    ///
+    /// The filename is sent because the server records it as `source_key` — the
+    /// human-facing name of the document — but the server does **not** use it
+    /// to name what it writes. That is its decision to make and it makes it;
+    /// nothing here should depend on the two agreeing.
+    pub async fn upload_source(&self, path: &std::path::Path) -> Result<StagedSource> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "documento".to_string());
+        let bytes = std::fs::read(path).map_err(|e| AppError::io(path.display(), e))?;
+        let part = reqwest::multipart::Part::bytes(bytes).file_name(name);
+        let form = reqwest::multipart::Form::new().part("file", part);
+        self.send(
+            self.http
+                .post(format!("{}/uploads", self.base))
+                .multipart(form),
+            "/uploads",
+            UPLOAD_TIMEOUT,
+        )
+        .await
     }
 
     pub async fn start_ingest(
@@ -1554,7 +1657,7 @@ mod gate_report {
         // The distinction this asserts is the whole point: "it may still be
         // starting" is a lie about an API that answered late, and it was
         // printed over a run the API had logged as 200 OK.
-        let control = Control::new(silent_server());
+        let control = Control::local(silent_server());
         let error = control
             .send::<Health>(
                 control.http.get(format!("{}/health", control.base)),
@@ -1569,7 +1672,7 @@ mod gate_report {
 
     #[tokio::test]
     async fn a_refused_connection_still_reads_as_unreachable() {
-        let control = Control::new(dead_port());
+        let control = Control::local(dead_port());
         let error = control
             .send::<Health>(
                 control.http.get(format!("{}/health", control.base)),
@@ -1580,6 +1683,96 @@ mod gate_report {
             .expect_err("nothing is listening");
 
         assert_eq!(error.kind(), "control_unreachable", "{error}");
+    }
+
+    /// A one-request server that records what it was sent.
+    fn recording_server() -> (u16, std::sync::mpsc::Receiver<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            if let Ok((mut socket, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let read = socket.read(&mut buf).unwrap_or(0);
+                let _ = tx.send(String::from_utf8_lossy(&buf[..read]).to_string());
+                let _ = socket.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+                );
+            }
+        });
+        (port, rx)
+    }
+
+    #[tokio::test]
+    async fn the_local_plane_is_sent_no_credentials() {
+        // It has none and can have none: it is loopback-only and unauthenticated,
+        // and a bearer sent there would be a token leaked to a process that
+        // never asked for one.
+        let (port, rx) = recording_server();
+        let control = Control::local(port);
+        let _: std::result::Result<serde_json::Value, _> = control
+            .send(
+                control.http.get(format!("{}/health", control.base)),
+                "/health",
+                Duration::from_secs(5),
+            )
+            .await;
+        let request = rx.recv_timeout(Duration::from_secs(5)).expect("una petición");
+        assert!(!request.to_lowercase().contains("authorization"), "{request}");
+        assert!(!request.to_lowercase().contains("x-tenant-id"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn the_paid_plane_gets_the_bearer_and_the_tenant() {
+        let (port, rx) = recording_server();
+        let control = Control::cloud(
+            format!("http://127.0.0.1:{port}"),
+            Auth {
+                token: "abc.def.ghi".into(),
+                tenant: Some("tnt_x".into()),
+            },
+        );
+        let _: std::result::Result<serde_json::Value, _> = control
+            .send(
+                control.http.get(format!("{}/health", control.base)),
+                "/health",
+                Duration::from_secs(5),
+            )
+            .await;
+        let request = rx.recv_timeout(Duration::from_secs(5)).expect("una petición");
+        assert!(request.contains("authorization: Bearer abc.def.ghi"), "{request}");
+        assert!(request.contains("x-tenant-id: tnt_x"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn no_tenant_means_no_header_rather_than_an_empty_one() {
+        // An account in exactly one organisation sends nothing and lets the
+        // server use its sole membership. An empty header would be a value.
+        let (port, rx) = recording_server();
+        let control = Control::cloud(
+            format!("http://127.0.0.1:{port}"),
+            Auth { token: "t".into(), tenant: None },
+        );
+        let _: std::result::Result<serde_json::Value, _> = control
+            .send(
+                control.http.get(format!("{}/health", control.base)),
+                "/health",
+                Duration::from_secs(5),
+            )
+            .await;
+        let request = rx.recv_timeout(Duration::from_secs(5)).expect("una petición");
+        assert!(!request.to_lowercase().contains("x-tenant-id"), "{request}");
+    }
+
+    #[test]
+    fn a_token_cannot_reach_a_log_through_debug() {
+        // Every other type here derives `Debug`; this one is written by hand so
+        // a `{:?}` on a `Control` cannot print a bearer.
+        let auth = Auth { token: "muy-secreto".into(), tenant: Some("tnt_x".into()) };
+        let rendered = format!("{auth:?}");
+        assert!(!rendered.contains("muy-secreto"), "{rendered}");
+        assert!(rendered.contains("tnt_x"), "{rendered}");
     }
 }
 

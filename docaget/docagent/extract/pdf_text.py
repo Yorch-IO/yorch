@@ -49,6 +49,14 @@ PUA_REPLACEMENTS = {"": "—"}
 PUA_RE = re.compile(r"[-]")
 # Soft hyphen at a line break: hyphen + whitespace + lowercase letter.
 HYPHEN_BREAK_RE = re.compile(r"-\s+(\p{Ll})".replace(r"\p{Ll}", r"[a-záéíóúüñ]"))
+# The same break, typeset with a real U+00AD instead of an ASCII hyphen. It is
+# invisible, so it survives every eyeball check and still splits the word for
+# the tokenizer: "reproduc\xadción" indexes as `reproduc` + `cion`, and
+# "propósi\xadto" loses its tail entirely because BM25 drops tokens under three
+# characters. Measured at 2,140 occurrences on 01_RetoDeDios_INT-S.pdf, 368 of
+# them followed by a space. Deterministic for the same reason as the PUA map:
+# a discretionary hyphen has exactly one meaning.
+SOFT_HYPHEN_RE = re.compile("\u00ad\\s*")
 MULTI_SPACE_RE = re.compile(r"  +")
 
 # A page with less than this much text has no usable text layer -> OCR.
@@ -237,6 +245,7 @@ def _clean_text(s: str) -> str:
     # Anything still in the Private Use Area is a glyph we have no mapping for;
     # leaving it in would put an unrenderable character into the index.
     s = PUA_RE.sub("", s)
+    s = SOFT_HYPHEN_RE.sub("", s)
     s = HYPHEN_BREAK_RE.sub(r"\1", s)
     s = MULTI_SPACE_RE.sub(" ", s)
     return s.strip()

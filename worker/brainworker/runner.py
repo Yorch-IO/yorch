@@ -9,21 +9,35 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from . import config
-from .activities import ingest, paid, rebuild
-from .activities.health import probe_services
+from .activities import asking, ingest, paid, rebuild, removing
+from .activities.health import probe_provider, probe_services
+from .workflows.ask import AskWorkflow
 from .workflows.ingest import IngestWorkflow
 from .workflows.ping import PingWorkflow
+from .workflows.probe import ProviderProbeWorkflow
 from .workflows.rebuild import RebuildWorkflow
+from .workflows.removal import RemovalWorkflow
 
 log = logging.getLogger(__name__)
 
-WORKFLOWS = [PingWorkflow, IngestWorkflow, RebuildWorkflow]
+WORKFLOWS = [
+    PingWorkflow,
+    IngestWorkflow,
+    RebuildWorkflow,
+    AskWorkflow,
+    RemovalWorkflow,
+    ProviderProbeWorkflow,
+]
 
 # Every activity the workflows reference must be registered here or the worker
 # accepts the task and then fails it with "activity not registered", which reads
 # like a Temporal problem rather than a missing line in this list.
 ACTIVITIES = [
     probe_services,
+    probe_provider,
+    asking.answer_question,
+    removing.remove_document,
+    removing.remove_version,
     ingest.stage_source,
     ingest.register_document,
     ingest.extract_text,

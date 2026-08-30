@@ -21,6 +21,7 @@ from brainworker.graph.projection import (
     read_concept_descriptions,
     set_concept_descriptions,
 )
+from brainworker.graph.schema import LEGACY_TENANT_ID
 from brainworker.graph.schema import chunk_id, concept_id
 
 
@@ -69,6 +70,7 @@ def test_two_paths_with_identical_bytes_share_one_version(
     project_structure(graph, version)
     duplicate = VersionNode(
         library=version.library,
+        tenant_id=version.tenant_id,
         source_key=version.source_key.replace("libros/", "copias/"),
         content_sha256=version.content_sha256,
         title=version.title,
@@ -164,7 +166,7 @@ def test_activation_is_the_last_step_and_leaves_the_old_version_readable(
 def test_semantic_edges_carry_their_provenance(graph: Graph, version: VersionNode):
     project_structure(graph, version)
     project_concepts(graph, [{"name": "Conocimiento de Dios", "type": "doctrina"}])
-    kid = concept_id("Conocimiento de Dios")
+    kid = concept_id("Conocimiento de Dios", LEGACY_TENANT_ID)
 
     project_semantic_edges(
         graph,
@@ -205,7 +207,7 @@ def test_a_low_confidence_edge_is_stored_but_cannot_support_an_answer(
             SemanticEdge(
                 type="MENTIONS",
                 source_id=chunk_id(version.version, 0),
-                target_id=concept_id("Especulación dudosa"),
+                target_id=concept_id("Especulación dudosa", LEGACY_TENANT_ID),
                 confidence=0.2,
                 extractor_model="gemini-2.5-flash",
                 source_chunk_id=chunk_id(version.version, 0),
@@ -234,7 +236,7 @@ def test_a_relationship_type_outside_the_allowed_set_never_reaches_cypher(
                 SemanticEdge(
                     type="MENTIONS]->() DETACH DELETE n //",
                     source_id=chunk_id(version.version, 0),
-                    target_id=concept_id("x"),
+                    target_id=concept_id("x", LEGACY_TENANT_ID),
                     confidence=1.0,
                     extractor_model="m",
                     source_chunk_id=chunk_id(version.version, 0),
@@ -314,7 +316,7 @@ def test_a_concepts_descriptions_accumulate_without_doubling_on_a_retry(graph: G
     import secrets
 
     name = f"Concepto {secrets.token_hex(6)}"
-    cid = concept_id(name)
+    cid = concept_id(name, LEGACY_TENANT_ID)
     try:
         project_concepts(graph, [{"name": name, "descriptions": ["Del primer chunk."]}])
         project_concepts(graph, [{"name": name, "descriptions": ["Del primer chunk."]}])
@@ -341,7 +343,7 @@ def test_a_concept_from_an_older_artifact_still_projects(graph: Graph):
     import secrets
 
     name = f"Concepto {secrets.token_hex(6)}"
-    cid = concept_id(name)
+    cid = concept_id(name, LEGACY_TENANT_ID)
     try:
         project_concepts(graph, [{"name": name, "type": "doctrina"}])
         [row] = read_concept_descriptions(graph, [cid])
@@ -414,7 +416,7 @@ def test_a_claim_whose_chunk_is_gone_is_not_offered_as_evidence(
     project_structure(graph, version)
     source = chunk_id(version.version, 0)
     name = f"Concepto {secrets.token_hex(6)}"
-    kid = concept_id(name)
+    kid = concept_id(name, LEGACY_TENANT_ID)
     edge = dict(confidence=0.9, extractor_model="m", source_chunk_id=source)
 
     project_concepts(graph, [{"name": name}])
@@ -480,15 +482,15 @@ def test_a_claim_relates_two_concepts_and_the_traversal_finds_it_either_way(
     try:
         project_semantic_edges(graph, [
             SemanticEdge(type="ABOUT", source_id=_claim_id(source, text),
-                         target_id=concept_id(fe), **edge),
+                         target_id=concept_id(fe, LEGACY_TENANT_ID), **edge),
             SemanticEdge(type="INVOLVES", source_id=_claim_id(source, text),
-                         target_id=concept_id(obras), **edge),
+                         target_id=concept_id(obras, LEGACY_TENANT_ID), **edge),
         ])
 
         for first, second in ((fe, obras), (obras, fe)):
             rows = graph.query(
                 "claims_between_concepts",
-                {"concept_id": concept_id(first), "other_id": concept_id(second),
+                {"concept_id": concept_id(first, LEGACY_TENANT_ID), "other_id": concept_id(second, LEGACY_TENANT_ID),
                  "confidence_floor": 0.6, "limit": 10},
             )
             assert [r["text"] for r in rows] == [text], f"{first} → {second}"
@@ -499,11 +501,11 @@ def test_a_claim_relates_two_concepts_and_the_traversal_finds_it_either_way(
         # everything: co-occurrence is not a relation.
         assert graph.query(
             "claims_between_concepts",
-            {"concept_id": concept_id(fe), "other_id": concept_id(fe),
+            {"concept_id": concept_id(fe, LEGACY_TENANT_ID), "other_id": concept_id(fe, LEGACY_TENANT_ID),
              "confidence_floor": 0.6, "limit": 10},
         ) == []
     finally:
         graph.write("MATCH (cl:Claim {id: $id}) DETACH DELETE cl",
                     {"id": _claim_id(source, text)})
         graph.write("MATCH (k:Concept) WHERE k.id IN $ids DETACH DELETE k",
-                    {"ids": [concept_id(fe), concept_id(obras)]})
+                    {"ids": [concept_id(fe, LEGACY_TENANT_ID), concept_id(obras, LEGACY_TENANT_ID)]})

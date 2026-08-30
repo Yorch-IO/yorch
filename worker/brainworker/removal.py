@@ -35,6 +35,7 @@ from typing import Any
 from . import config
 from .catalog import Catalog
 from .graph import Graph
+from .graph.schema import LEGACY_TENANT_ID
 from .graph import projection as proj
 
 log = logging.getLogger(__name__)
@@ -91,11 +92,17 @@ def _qdrant(settings: config.Settings):
 
 
 def remove_document(
-    settings: config.Settings, *, library_id: str, document_id: str
+    settings: config.Settings,
+    *,
+    library_id: str,
+    document_id: str,
+    tenant: str = LEGACY_TENANT_ID,
 ) -> Removal:
     """Remove a document, and every version it was the last to hold."""
     with Catalog(settings.database_url) as catalog:
-        document = catalog.document(document_id, library_id=library_id)
+        document = catalog.document(
+            document_id, library_id=library_id, tenant_id=tenant
+        )
         if document is None:
             raise RemovalError(
                 f"no existe {document_id!r} en la biblioteca {library_id!r}",
@@ -105,6 +112,11 @@ def remove_document(
         # Who else holds each of these bytes. A version at a second path is one
         # version and two document slots, so removing one slot must leave it.
         holders = {v.id: catalog.documents_holding(v.id) for v in versions}
+        # Whose points these are. Read from the row rather than passed in: a
+        # removal deletes by filter, and a filter naming the wrong organisation
+        # either deletes nothing or — worse, before the payload carried one —
+        # deletes somebody else's.
+        tenant_id = document.tenant_id
 
     sole = [v.id for v in versions if not _others(holders[v.id], document_id)]
     shared = [v.id for v in versions if _others(holders[v.id], document_id)]
@@ -117,7 +129,11 @@ def remove_document(
         if q.exists():
             for version_id in sole:
                 result.qdrant_points += q.delete_by_filter(
-                    {"library_id": library_id, "version_id": version_id}
+                    {
+                        "tenant_id": tenant_id,
+                        "library_id": library_id,
+                        "version_id": version_id,
+                    }
                 )
             # A point's payload names the document that *indexed* it. When two
             # documents share a version the second took the `link_duplicate`
@@ -128,8 +144,8 @@ def remove_document(
             for version_id in shared:
                 survivor = _others(holders[version_id], document_id)[0]
                 result.qdrant_repointed += q.set_payload(
-                    {"library_id": library_id, "version_id": version_id,
-                     "document_id": document_id},
+                    {"tenant_id": tenant_id, "library_id": library_id,
+                     "version_id": version_id, "document_id": document_id},
                     {"document_id": survivor},
                 )
 
@@ -150,7 +166,11 @@ def remove_document(
 
 
 def remove_version(
-    settings: config.Settings, *, library_id: str, version_id: str
+    settings: config.Settings,
+    *,
+    library_id: str,
+    version_id: str,
+    tenant: str = LEGACY_TENANT_ID,
 ) -> Removal:
     """Remove one version, leaving its document and any other versions standing.
 
@@ -160,10 +180,13 @@ def remove_version(
     """
     with Catalog(settings.database_url) as catalog:
         holders = catalog.documents_holding(version_id)
-        in_library = [
-            h for h in holders
-            if catalog.document(h, library_id=library_id) is not None
+        owners = [
+            catalog.document(h, library_id=library_id, tenant_id=tenant) for h in holders
         ]
+        in_library = [d.id for d in owners if d is not None]
+        # Every holder in this library belongs to one organisation — a version
+        # is scoped by tenant now, so this cannot be ambiguous.
+        tenant_id = next((d.tenant_id for d in owners if d is not None), tenant)
         if not in_library:
             raise RemovalError(
                 f"no existe la versión {version_id!r} en la biblioteca {library_id!r}",

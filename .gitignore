@@ -97,6 +97,9 @@ __pycache__/
 infra/.env
 infra/workspace/
 infra/secrets.env
+# Pool identifiers rather than secrets, but still machine-local: which pool a
+# checkout points at is a deployment fact, not a property of the code.
+infra/cognito.env
 infra/qdrant_storage/
 
 # Tauri build-time generated schemas
@@ -109,3 +112,10 @@ app/src-tauri/gen/
 secrets.env
 **/secrets.env
 worker/cache/
+
+# The embedding cache is 1538 raw float32 blobs and regenerable. `cache/correct/`
+# stays tracked beside it, deliberately: a correction costs generation tokens and
+# its cache is what survives an interrupted run, while an embedding is cheap
+# enough ($0.000068 for a page) that carrying 19 MB of vectors in history buys
+# nothing.
+docaget/cache/embed/

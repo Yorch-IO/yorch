@@ -19,6 +19,7 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
 
 with workflow.unsafe.imports_passed_through():
+    from ..graph.schema import LEGACY_TENANT_ID
     from ..activities import ingest as act
     from ..activities import paid
     from ..activities import rebuild as reb
@@ -69,21 +70,23 @@ class RebuildWorkflow:
     # -- run ---------------------------------------------------------------
 
     @workflow.run
-    async def run(self, library_id: str, document_id: str) -> RebuildResult:
+    async def run(
+        self, library_id: str, document_id: str, tenant: str = LEGACY_TENANT_ID
+    ) -> RebuildResult:
         run_id = workflow.info().workflow_id
         try:
-            return await self._run(library_id, document_id, run_id)
+            return await self._run(library_id, document_id, run_id, tenant)
         except ActivityError as e:
             await self._record_failure(run_id, e)
             raise
 
     async def _run(
-        self, library_id: str, document_id: str, run_id: str
+        self, library_id: str, document_id: str, run_id: str, tenant: str
     ) -> RebuildResult:
         self._stage = "loading"
         inputs: RebuildInputs = await workflow.execute_activity(
             reb.load_rebuild_inputs,
-            args=[library_id, document_id, run_id, workflow.info().workflow_id],
+            args=[library_id, document_id, run_id, workflow.info().workflow_id, tenant],
             start_to_close_timeout=WRITE_TIMEOUT,
             retry_policy=_RETRY,
         )

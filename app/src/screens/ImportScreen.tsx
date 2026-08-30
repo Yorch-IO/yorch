@@ -107,10 +107,19 @@ export function ImportScreen() {
     setGate(null);
     setOutcome(null);
     try {
-      const key =
-        path.split(/[\\/]/).filter(Boolean).slice(-2).join("/") || path;
+      // Staging is what makes one screen serve both planes. Local mode hands
+      // the path straight back; cloud mode uploads the file and returns the
+      // path *inside the worker's container*, which is the only path
+      // `ingestStart` can use there. The key comes back too, because the two
+      // planes derive it differently and the screen should not have to know.
+      const staged = await api.stageSource(path);
       const run = await api.ingestStart(
-        { libraryId, sourcePath: path, sourceKey: key, title: "" },
+        {
+          libraryId,
+          sourcePath: staged.sourcePath,
+          sourceKey: staged.sourceKey,
+          title: "",
+        },
         stages,
       );
       setWorkflowId(run.workflowId);

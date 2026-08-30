@@ -222,6 +222,21 @@ describe("before a document is chosen", () => {
   });
 });
 
+describe("zoom", () => {
+  it("keeps concept circles and labels at their fixed screen size", async () => {
+    await centred();
+    const concept = conceptNode(0);
+    expect(concept.querySelector("circle.shape")?.getAttribute("r")).toBe("9");
+
+    fireEvent.click(screen.getByRole("button", { name: t("graph.zoomIn") }));
+    expect(concept.getAttribute("transform")).toContain("scale(1.3)");
+    expect(concept.getAttribute("transform")).toContain(`scale(${1 / 1.3})`);
+
+    fireEvent.click(screen.getByRole("button", { name: t("graph.reset") }));
+    expect(concept.getAttribute("transform")).toContain("scale(1) translate");
+  });
+});
+
 describe("the drawn graph", () => {
   it("draws one node per concept and one per related document", async () => {
     await centred();
@@ -261,7 +276,7 @@ describe("the drawn graph", () => {
 
   it("renders the legend and keeps the note about the edge it will not draw", async () => {
     await centred();
-    for (const k of ["concept", "doc", "size", "weight", "dashed"]) {
+    for (const k of ["concept", "doc", "weight", "dashed"]) {
       expect(screen.getByText(t(`graph.legend.${k}`)), k).toBeTruthy();
     }
     expect(screen.getByText(t("graph.proposed"))).toBeTruthy();
@@ -594,11 +609,16 @@ describe("the inspector line", () => {
     // Concept 11 is shared by neighbour 11 only… and the ring holds eight, so
     // concept 7 is the last one anybody shares: neighbour 7 alone.
     fireEvent.mouseEnter(conceptNode(7));
+    expect(conceptNode(7).querySelector(".concept-label")?.textContent).toBe("concepto 7");
+    expect(conceptNode(7).getAttribute("class")).toContain("is-hovered");
     await waitFor(() =>
       expect(document.querySelector(".graph-inspector")?.textContent).toContain(
         t("graph.probe.alsoIn", { count: 1, titles: "vecino 7" }),
       ),
     );
+
+    fireEvent.mouseLeave(conceptNode(7));
+    expect(conceptNode(7).getAttribute("class")).not.toContain("is-hovered");
 
     // Concept 0 is shared by every neighbour on the ring.
     fireEvent.mouseEnter(conceptNode(0));

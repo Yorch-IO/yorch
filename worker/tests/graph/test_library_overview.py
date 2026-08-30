@@ -25,7 +25,7 @@ import pytest
 
 from brainworker.graph import projection as proj
 from brainworker.graph.projection import ChunkNode, SectionNode, SemanticEdge, VersionNode
-from brainworker.graph.schema import chunk_id as make_chunk_id
+from brainworker.graph.schema import LEGACY_TENANT_ID, chunk_id as make_chunk_id
 from brainworker.graph.schema import concept_id as make_concept_id
 
 MODEL = "gemini-3.6-flash"
@@ -36,6 +36,7 @@ THEIRS = "lib_overview_theirs"
 def _version(library: str, title: str, chunks: int = 3, source_key: str | None = None) -> VersionNode:
     return VersionNode(
         library=library,
+        tenant_id=LEGACY_TENANT_ID,
         source_key=source_key or f"libros/{secrets.token_hex(6)}.pdf",
         content_sha256=secrets.token_hex(32),
         title=title,
@@ -90,7 +91,7 @@ def library(graph):
          {"name": lonely, "type": "Doctrina"},
          {"name": weak, "type": "Doctrina"}],
     )
-    ids = {n: make_concept_id(n) for n in (shared, lonely, weak)}
+    ids = {n: make_concept_id(n, LEGACY_TENANT_ID) for n in (shared, lonely, weak)}
     proj.project_semantic_edges(
         graph,
         _mentions(mine_a, ids[shared], [0, 1, 2])

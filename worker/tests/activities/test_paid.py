@@ -327,8 +327,8 @@ async def test_every_semantic_edge_is_attributed_to_the_chunk_that_produced_it(
         def ensure_schema(self): pass
 
     monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
-    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c: captured.setdefault("concepts", c) and 0 or len(c))
-    monkeypatch.setattr(paid.proj, "project_claims", lambda g, c: captured.setdefault("claims", c) and 0 or len(c))
+    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c, **k: captured.setdefault("concepts", c) and 0 or len(c))
+    monkeypatch.setattr(paid.proj, "project_claims", lambda g, c, **k: captured.setdefault("claims", c) and 0 or len(c))
     monkeypatch.setattr(paid.proj, "project_semantic_edges",
                         lambda g, e: captured.setdefault("edges", e) and 0 or len(e))
 
@@ -362,8 +362,8 @@ async def test_one_unparseable_chunk_does_not_lose_the_whole_document(
         def ensure_schema(self): pass
 
     monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
-    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c: len(c))
-    monkeypatch.setattr(paid.proj, "project_claims", lambda g, c: len(c))
+    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c, **k: len(c))
+    monkeypatch.setattr(paid.proj, "project_claims", lambda g, c, **k: len(c))
     monkeypatch.setattr(paid.proj, "project_semantic_edges", lambda g, e: len(e))
 
     registered, _ = _ids()
@@ -384,9 +384,9 @@ def _fake_graph(monkeypatch: pytest.MonkeyPatch) -> dict:
 
     monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
     monkeypatch.setattr(paid.proj, "project_concepts",
-                        lambda g, c: captured.setdefault("concepts", c) and 0 or len(c))
+                        lambda g, c, **k: captured.setdefault("concepts", c) and 0 or len(c))
     monkeypatch.setattr(paid.proj, "project_claims",
-                        lambda g, c: captured.setdefault("claims", c) and 0 or len(c))
+                        lambda g, c, **k: captured.setdefault("claims", c) and 0 or len(c))
     monkeypatch.setattr(paid.proj, "project_semantic_edges",
                         lambda g, e: captured.setdefault("edges", e) and 0 or len(e))
     return captured

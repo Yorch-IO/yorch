@@ -21,6 +21,8 @@ from typing import Any, Iterator, Sequence
 
 import psycopg
 from psycopg.rows import class_row, dict_row
+
+from ..graph.schema import LEGACY_TENANT_ID
 from psycopg_pool import ConnectionPool
 
 log = logging.getLogger(__name__)
@@ -47,6 +49,23 @@ class DuplicateContent(CatalogError):
         self.version_id = version_id
 
 
+class LibraryOwnedByAnother(CatalogError):
+    """A library id already exists under a different organisation.
+
+    Distinct from "not found": the id is real, and the caller may not have it.
+    It carries `kind="library_not_yours"` rather than the generic one so that
+    whatever surfaces it can say *why* — but nothing surfaces it yet. Today it
+    fails the ingest activity, and through it the workflow, which is the right
+    outcome and is why this is a raise rather than a quiet return. A 404 would
+    be the wrong answer if it ever does reach HTTP: the user picked this library
+    id, and "it does not exist" sends them to create it again under the same
+    colliding id.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, kind="library_not_yours")
+
+
 # ---------------------------------------------------------------------------
 # Row models
 # ---------------------------------------------------------------------------
@@ -71,6 +90,10 @@ class Document:
     #: library-relative on purpose, so it cannot answer "where do I read this
     #: again". Defaulted so a SELECT that does not ask for it still builds a row.
     source_path: str | None = None
+    #: Whose it is. Defaulted for the same reason: a SELECT written before this
+    #: column existed still builds a row, and the value it would have carried is
+    #: the one every pre-tenancy row already has.
+    tenant_id: str = LEGACY_TENANT_ID
 
 
 @dataclass
@@ -241,20 +264,51 @@ class Catalog:
 
     # -- libraries and folders --------------------------------------------
 
-    def ensure_library(self, library_id: str, name: str, language: str = "es") -> str:
+    def ensure_library(
+        self, library_id: str, name: str, *, tenant_id: str, language: str = "es"
+    ) -> str:
+        """Create or update a library, refusing one that belongs to somebody else.
+
+        **The library id is chosen by the client**, not derived: it arrives on
+        `IngestRequest` as a plain string, and `lib_teologia` is the sort of
+        value two organisations pick independently. Without the predicate on
+        the conflict clause, the second one's ingest would silently rename the
+        first one's library and then attach its documents to a row it does not
+        own — invisible to both, since every listing filters on `tenant_id` and
+        the two would disagree about which organisation the library is in.
+
+        A refused write raises rather than returning quietly, because the caller
+        is `register_version`, whose next statement writes a document pointing at
+        this id. Failing the ingest is the outcome; landing in another
+        organisation's library is not.
+        """
         with self._conn() as conn:
-            conn.execute(
+            row = conn.execute(
                 """
-                INSERT INTO library (id, name, language) VALUES (%s, %s, %s)
+                INSERT INTO library (id, name, language, tenant_id)
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name,
                                                language = EXCLUDED.language
+                    WHERE library.tenant_id = EXCLUDED.tenant_id
+                RETURNING id
                 """,
-                (library_id, name, language),
+                (library_id, name, language, tenant_id),
+            ).fetchone()
+        if row is None:
+            raise LibraryOwnedByAnother(
+                f"la biblioteca {library_id!r} pertenece a otra organización"
             )
         return library_id
 
-    def libraries(self) -> list[dict[str, Any]]:
-        """Every library, with how much is actually answerable in it.
+    def libraries(self, *, tenant_id: str) -> list[dict[str, Any]]:
+        """One organisation's libraries, with how much is answerable in each.
+
+        `tenant_id` is required rather than defaulted for the reason phase 2
+        dropped the column defaults: a listing that falls back to the legacy
+        organisation when a caller forgets is a listing that shows the wrong
+        corpus without saying so. The FastAPI plane is single-tenant and passes
+        `LEGACY_TENANT_ID` explicitly, at the call site, where a reader can see
+        which organisation the free plane serves.
 
         The counts are what make this a picker rather than a list of strings.
         A library with documents but nothing `indexed` answers every question
@@ -276,6 +330,7 @@ class Catalog:
               LEFT JOIN document d ON d.library_id = l.id
               LEFT JOIN document_version_link k ON k.document_id = d.id
               LEFT JOIN document_version dv ON dv.id = k.version_id
+             WHERE l.tenant_id = %s
              GROUP BY l.id, l.name, l.language
              ORDER BY count(DISTINCT dv.id) FILTER (WHERE dv.state = 'indexed')
                           DESC,
@@ -283,29 +338,40 @@ class Catalog:
         """
         with self._conn() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
-                return cur.execute(sql).fetchall()
+                return cur.execute(sql, (tenant_id,)).fetchall()
 
-    def project_totals(self) -> ProjectTotals:
-        """Everything the catalog knows about the installation, in one round trip.
+    def project_totals(self, *, tenant_id: str) -> ProjectTotals:
+        """Everything the catalog knows about one organisation, in one round trip.
 
         Scalar subqueries rather than joins, so no figure can be inflated by the
         many-to-many between documents and versions. See :class:`ProjectTotals`.
+
+        Every subquery carries the predicate itself. Wrapping the lot in one
+        outer filter is not available here — there is no join to hang it on —
+        and adding a table to this list without its predicate is the mistake the
+        shape invites, so `test_project_totals_counts_only_its_own_organisation`
+        seeds two organisations and checks each figure rather than the row.
         """
         sql = """
-            SELECT (SELECT count(*) FROM library),
-                   (SELECT count(*) FROM document WHERE present),
-                   (SELECT count(*) FROM document WHERE NOT present),
-                   (SELECT count(*) FROM document_active_version),
-                   (SELECT count(*) FROM document_version WHERE state = 'indexed'),
-                   (SELECT COALESCE(SUM(byte_size), 0) FROM document_version
-                     WHERE state = 'indexed'),
+            SELECT (SELECT count(*) FROM library WHERE tenant_id = %(t)s),
+                   (SELECT count(*) FROM document
+                     WHERE present AND tenant_id = %(t)s),
+                   (SELECT count(*) FROM document
+                     WHERE NOT present AND tenant_id = %(t)s),
+                   (SELECT count(*) FROM document_active_version a
+                     JOIN document d ON d.id = a.document_id
+                    WHERE d.tenant_id = %(t)s),
                    (SELECT count(*) FROM document_version
-                     WHERE page_count IS NOT NULL),
+                     WHERE state = 'indexed' AND tenant_id = %(t)s),
+                   (SELECT COALESCE(SUM(byte_size), 0) FROM document_version
+                     WHERE state = 'indexed' AND tenant_id = %(t)s),
+                   (SELECT count(*) FROM document_version
+                     WHERE page_count IS NOT NULL AND tenant_id = %(t)s),
                    (SELECT COALESCE(SUM(page_count), 0) FROM document_version
-                     WHERE page_count IS NOT NULL)
+                     WHERE page_count IS NOT NULL AND tenant_id = %(t)s)
         """
         with self._conn() as conn:
-            row = conn.execute(sql).fetchone()
+            row = conn.execute(sql, {"t": tenant_id}).fetchone()
         assert row is not None
         # SUM() over bigint comes back as Decimal, which is neither
         # JSON-serialisable nor what the dataclass declares.
@@ -320,7 +386,7 @@ class Catalog:
             pages=int(row[7]),
         )
 
-    def recent_runs(self, limit: int = 10) -> list[RunSummary]:
+    def recent_runs(self, limit: int = 10, *, tenant_id: str) -> list[RunSummary]:
         """The most recently started runs, newest first.
 
         `LEFT JOIN`, not an inner one: `run.document_id` is `ON DELETE SET NULL`
@@ -333,22 +399,29 @@ class Catalog:
                    d.title, d.library_id
               FROM run r
               LEFT JOIN document d ON d.id = r.document_id
+             WHERE r.tenant_id = %s
              ORDER BY r.started_at DESC
              LIMIT %s
         """
         with self._conn() as conn:
             with conn.cursor(row_factory=class_row(RunSummary)) as cur:
-                return cur.execute(sql, (max(1, limit),)).fetchall()
+                return cur.execute(sql, (tenant_id, max(1, limit))).fetchall()
 
     def ensure_folder(
-        self, folder_id: str, library_id: str, path: str, *, watch: bool = True
+        self,
+        folder_id: str,
+        library_id: str,
+        path: str,
+        *,
+        tenant_id: str,
+        watch: bool = True,
     ) -> str:
         with self._conn() as conn:
             conn.execute(
                 """
-                INSERT INTO source_folder (id, library_id, path, watch)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (library_id, path) DO UPDATE SET watch = EXCLUDED.watch
+                INSERT INTO source_folder (id, library_id, path, watch, tenant_id)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, library_id, path) DO UPDATE SET watch = EXCLUDED.watch
                 """,
                 (folder_id, library_id, path, watch),
             )
@@ -380,14 +453,15 @@ class Catalog:
         author: str | None = None,
         folder_id: str | None = None,
         source_path: str | None = None,
+        tenant_id: str,
     ) -> str:
         with self._conn() as conn:
             conn.execute(
                 """
                 INSERT INTO document
                        (id, library_id, folder_id, source_key, title, author,
-                        format, source_path)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        format, source_path, tenant_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE
                    SET title = EXCLUDED.title,
                        author = COALESCE(EXCLUDED.author, document.author),
@@ -405,7 +479,7 @@ class Catalog:
                        updated_at = now()
                 """,
                 (document_id, library_id, folder_id, source_key, title, author,
-                 fmt, source_path),
+                 fmt, source_path, tenant_id),
             )
         return document_id
 
@@ -425,7 +499,7 @@ class Catalog:
         sql = """
             SELECT id, library_id, folder_id, source_key, title, author, format,
                    present, absent_since, tags, created_at, updated_at,
-                   source_path
+                   source_path, tenant_id
               FROM document
              WHERE library_id = %s
         """
@@ -445,6 +519,7 @@ class Catalog:
         document_id: str,
         content_sha256: str,
         byte_size: int,
+        tenant_id: str,
         page_count: int | None = None,
     ) -> tuple[Version, bool]:
         """Record these bytes and link them to this document.
@@ -459,13 +534,16 @@ class Catalog:
                 row = cur.execute(
                     """
                     INSERT INTO document_version
-                           (id, content_sha256, byte_size, page_count)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (content_sha256) DO NOTHING
+                           (id, content_sha256, byte_size, page_count, tenant_id)
+                    VALUES (%s, %s, %s, %s, %s)
+                    -- Widened with the constraint: uniqueness of content is
+                    -- per tenant now, so two customers importing the same
+                    -- file get two versions rather than sharing one.
+                    ON CONFLICT (tenant_id, content_sha256) DO NOTHING
                     RETURNING id, content_sha256, byte_size, page_count, state,
                               activated_at, failed_reason, created_at
                     """,
-                    (version_id, content_sha256, byte_size, page_count),
+                    (version_id, content_sha256, byte_size, page_count, tenant_id),
                 ).fetchone()
 
                 created = row is not None
@@ -531,6 +609,17 @@ class Catalog:
         return row[0] if row else None
 
     def version_by_content(self, content_sha256: str) -> Version | None:
+        """Look a version up by its bytes.
+
+        **Not tenant-scoped, and that is a phase-1 limitation rather than a
+        decision.** Content uniqueness moved to `(tenant_id, content_sha256)`,
+        so two tenants can now hold the same bytes and this would return
+        whichever row Postgres reaches first. Nothing in the product calls it
+        today — only tests do — which is the only reason it is harmless. The fix
+        is a `tenant_id` argument, and it belongs with the change that gives the
+        activities a tenant to pass; adding the parameter before there is
+        anything to fill it would only move the guess.
+        """
         with self._conn() as conn:
             with conn.cursor(row_factory=class_row(Version)) as cur:
                 return cur.execute(
@@ -551,7 +640,13 @@ class Catalog:
     #
     # Nothing here touches the file on disk.
 
-    def document(self, document_id: str, *, library_id: str | None = None) -> Document | None:
+    def document(
+        self,
+        document_id: str,
+        *,
+        library_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> Document | None:
         """One document, optionally constrained to a library.
 
         The library check is not redundant with the id even though
@@ -564,10 +659,16 @@ class Catalog:
         sql = """
             SELECT id, library_id, folder_id, source_key, title, author, format,
                    present, absent_since, tags, created_at, updated_at,
-                   source_path
+                   source_path, tenant_id
               FROM document WHERE id = %s
         """
         params: tuple[Any, ...] = (document_id,)
+        if tenant_id is not None:
+            # Ownership, not narrowing. Without it two ids are enough to reach
+            # another organisation's document — and `remove_document` takes
+            # exactly those two.
+            sql += " AND tenant_id = %s"
+            params += (tenant_id,)
         if library_id is not None:
             sql += " AND library_id = %s"
             params += (library_id,)
@@ -713,17 +814,19 @@ class Catalog:
         run_id: str,
         workflow_id: str,
         kind: str,
+        tenant_id: str,
         document_id: str | None = None,
         version_id: str | None = None,
     ) -> str:
         with self._conn() as conn:
             conn.execute(
                 """
-                INSERT INTO run (id, workflow_id, document_id, version_id, kind)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO run
+                       (id, workflow_id, document_id, version_id, kind, tenant_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO NOTHING
                 """,
-                (run_id, workflow_id, document_id, version_id, kind),
+                (run_id, workflow_id, document_id, version_id, kind, tenant_id),
             )
         return run_id
 
@@ -760,19 +863,34 @@ class Catalog:
             )
 
     def record_artifact(
-        self, run_id: str, *, name: str, rel_path: str, sha256: str, size_bytes: int
+        self,
+        run_id: str,
+        *,
+        name: str,
+        rel_path: str,
+        sha256: str,
+        size_bytes: int,
     ) -> None:
+        """Record one artifact this run produced.
+
+        **The tenant is read from the run row rather than passed in**, and that
+        is the stronger arrangement: an artifact belongs to whoever the run
+        belongs to, so deriving it in the same statement makes the two unable to
+        disagree. Passing it would have threaded a value through nineteen call
+        sites for the privilege of being able to get it wrong at one of them.
+        """
         with self._conn() as conn:
             conn.execute(
                 """
-                INSERT INTO run_artifact (run_id, name, rel_path, sha256, size_bytes)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO run_artifact
+                       (run_id, name, rel_path, sha256, size_bytes, tenant_id)
+                SELECT %s, %s, %s, %s, %s, r.tenant_id FROM run r WHERE r.id = %s
                 ON CONFLICT (run_id, name) DO UPDATE
                    SET rel_path = EXCLUDED.rel_path,
                        sha256 = EXCLUDED.sha256,
                        size_bytes = EXCLUDED.size_bytes
                 """,
-                (run_id, name, rel_path, sha256, size_bytes),
+                (run_id, name, rel_path, sha256, size_bytes, run_id),
             )
 
     def artifacts(self, run_id: str) -> list[dict[str, Any]]:
@@ -806,11 +924,17 @@ class Catalog:
         with self._conn() as conn:
             conn.execute(
                 """
+                -- Same as `record_artifact`: the charge belongs to whoever the
+                -- run belongs to, and deriving it here is what stops the two
+                -- ever disagreeing.
                 INSERT INTO cost_entry
-                       (run_id, stage, provider, model, input_tokens, output_tokens, usd)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                       (run_id, stage, provider, model, input_tokens,
+                        output_tokens, usd, tenant_id)
+                SELECT %s, %s, %s, %s, %s, %s, %s, r.tenant_id
+                  FROM run r WHERE r.id = %s
                 """,
-                (run_id, stage, provider, model, input_tokens, output_tokens, usd),
+                (run_id, stage, provider, model, input_tokens, output_tokens,
+                 usd, run_id),
             )
 
     def costs(self, run_id: str) -> list[Cost]:
@@ -870,11 +994,15 @@ class Catalog:
         with self._conn() as conn:
             conn.execute(
                 """
+                -- Derived from the version, for the reason above.
                 INSERT INTO profile_warning
-                       (version_id, profile_id, collides_with, similarity, detail)
-                VALUES (%s, %s, %s, %s, %s)
+                       (version_id, profile_id, collides_with, similarity,
+                        detail, tenant_id)
+                SELECT %s, %s, %s, %s, %s, v.tenant_id
+                  FROM document_version v WHERE v.id = %s
                 """,
-                (version_id, profile_id, collides_with, similarity, detail),
+                (version_id, profile_id, collides_with, similarity, detail,
+                 version_id),
             )
 
     def open_profile_warnings(self, version_id: str) -> list[dict[str, Any]]:

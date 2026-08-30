@@ -8,6 +8,7 @@ that cites nothing is not returned as an answer at all.
 
 from __future__ import annotations
 
+from ..graph.schema import LEGACY_TENANT_ID
 from dataclasses import dataclass, field
 
 from ..pipeline import Spend
@@ -26,6 +27,11 @@ class Question:
     filters: dict[str, str] = field(default_factory=dict)
     #: Semantic edges below this may not support an answer.
     confidence_floor: float = 0.6
+    #: Whose corpus to search. Never taken from the planner and never from a
+    #: filter the caller supplied — the control plane sets it from the
+    #: authenticated request, and `_validate` overwrites whatever a model put
+    #: there.
+    tenant_id: str = LEGACY_TENANT_ID
 
 
 @dataclass

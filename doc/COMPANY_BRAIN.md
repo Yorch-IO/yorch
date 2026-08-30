@@ -358,7 +358,43 @@ bind-probed at first run.
 | Postgres | 5532 |
 | Temporal | 7333 |
 | Temporal UI | 8380 |
-| Control API | 8787 |
+| Control API (free plane, FastAPI) | 8787 |
+| Control API (paid plane, NestJS) | 8788 |
+
+The paid plane sits behind a compose **profile**, so a free, self-managed stack
+never starts it:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.dev.yaml \
+  -f docker-compose.adc.yaml --profile paid up -d --build backend
+```
+
+All three `-f` matter. Without `docker-compose.dev.yaml` the `--build` is a
+silent no-op; without `docker-compose.adc.yaml` anything reaching Vertex fails
+with `provider_unavailable` / `DefaultCredentialsError` while `/health` still
+shows the provider row green — that row is free and only reports whether a
+project id is set, and `POST /provider/probe` is what actually spends and
+therefore knows.
+
+It reads its Cognito pool from `infra/cognito.env`, **not** `infra/.env`: the
+desktop app rewrites `.env` whole on every launch (`app/src-tauri/src/stack.rs`
+builds the body from scratch), so a pool id added there survives until somebody
+next opens the app. The file is declared `required: false`, so a free-mode stack
+does not need it; a paid start without it refuses to boot naming the variables.
+
+## The `migrate` service
+
+Schema ownership left the API. It used to apply numbered SQL files in FastAPI's
+lifespan — which is why `worker` waited on `api` being *healthy*, a worker
+waiting on an HTTP server to establish a database fact. Two control planes now
+share this catalog, so exactly one thing may own its schema: a one-shot
+`migrate` service running `prisma migrate deploy` from the backend image, which
+`api` and `worker` both wait for with `service_completed_successfully`. Both
+planes then only *check* the version and report it on `/health`.
+
+`restart: "no"`, because a migration that failed must stay failed and visible.
+Free-mode stacks run the same step; it costs one extra image pull and removes
+the possibility of the two planes disagreeing about the schema.
 
 ## The graph substrate
 

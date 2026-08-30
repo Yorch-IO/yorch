@@ -1,0 +1,337 @@
+{
+  "fingerprint": "5f4421c27256f776",
+  "slug": "02-puertaseternas-int-5f4421c2",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [
+      "^12/22/12\\s+11:53\\s+AM$",
+      "^Las\\s+puertas\\s+eternas$"
+    ],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "question_min_marks": 2,
+    "heading_l1_max": 40,
+    "heading_l2_max": 60,
+    "heading_l1_pattern": "^Capítulo\\s+\\d+$",
+    "heading_l2_pattern": "^[A-ZÁÉÍÓÚÑ\\s]{4,60}$"
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.65,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.575,
+    "recall_at_5": 0.975,
+    "mrr_at_10": 0.7542,
+    "recall_at_5_dense_only": 0.975,
+    "noise_floor": 0.6058,
+    "chunks": 240,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Qué hecho bíblico se destaca como el inicio de la primera labor de asistencia espiritual en un contexto de privación de libertad?",
+      "chunk_index": 25,
+      "char_mid": 25486,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 1 > LA CÁRCEL"
+    },
+    {
+      "question": "¿Qué pasaje de las Escrituras retrata el cese progresivo del estruendo de molienda y la atenuación del gorjeo de las aves al bloquearse los accesos a la vía pública?",
+      "chunk_index": 112,
+      "char_mid": 106674,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 4 > PUERTA DE HOSPITALIDAD"
+    },
+    {
+      "question": "¿De qué forma un creyente logra constituirse en un elemento activo para la edificación del templo divino y asumir la autoridad sobre el reino celestial?",
+      "chunk_index": 182,
+      "char_mid": 175772,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 7"
+    },
+    {
+      "question": "¿Qué intuición sobre una futura crisis nacional le compartió un líder político estadounidense a un evangelista tejano antes de su postulación?",
+      "chunk_index": 94,
+      "char_mid": 89504,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 3 > LA PUERTA SUPERIOR"
+    },
+    {
+      "question": "¿A través de qué canales de percepción ingresan los mensajes verbales y escritos para alcanzar la mente y los sentimientos según la analogía presentada?",
+      "chunk_index": 165,
+      "char_mid": 159164,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 6 > LA PUERTA DE LOS LABIOS"
+    },
+    {
+      "question": "¿Cuál es el propósito de reconstruir el antiguo acceso según el autor y por qué considera equivocado volver a atravesarlo?",
+      "chunk_index": 56,
+      "char_mid": 54450,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 2 > LA PUERTA VIEJA"
+    },
+    {
+      "question": "¿Qué recomendación hace el autor sobre mantener abierto el acceso a la obra para otras personas y qué experiencia reconfortante le aguarda a quien decide seguir a Jesús?",
+      "chunk_index": 239,
+      "char_mid": 230830,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 8 > LA PUERTA DIVINA"
+    },
+    {
+      "question": "¿Por qué motivo la enseñanza compartida por Jesús prioriza el impacto de las palabras emitidas sobre el de los alimentos ingeridos?",
+      "chunk_index": 162,
+      "char_mid": 156126,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 6 > LA PUERTA DE LOS LABIOS"
+    },
+    {
+      "question": "¿Qué distinción fundamental establece el texto entre el dominio de datos teóricos y el ejercicio de la verdadera sensatez en las acciones diarias?",
+      "chunk_index": 184,
+      "char_mid": 177939,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 7 > LA PUERTA DE LA SABIDURÍA"
+    },
+    {
+      "question": "¿Qué recurso natural propio de la zona mesopotámica utilizó el patriarca para impermeabilizar tanto el interior como el exterior de su embarcación?",
+      "chunk_index": 46,
+      "char_mid": 45125,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 2 > LA PUERTA DEL ARCA"
+    },
+    {
+      "question": "¿Qué diferencia existe en la localización del Salvador con respecto a los seis primeros grupos cristianos descritos al inicio del Apocalipsis en contraste con el último?",
+      "chunk_index": 176,
+      "char_mid": 170549,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 6 > LA PUERTA SIN PICAPORTE"
+    },
+    {
+      "question": "¿Qué actividades relacionadas con el arbitraje de disputas personales y la regulación de estándares comerciales explicaban la denominación alternativa de este acceso en antiguos escritos?",
+      "chunk_index": 68,
+      "char_mid": 64137,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 2 > LA PUERTA DE LA INSPECCIÓN"
+    },
+    {
+      "question": "¿Qué potencia extranjera estimulaba a distancia los conflictos entre sectores acaudalados y vulnerables en el ámbito latinoamericano durante la posguerra?",
+      "chunk_index": 16,
+      "char_mid": 15088,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 1"
+    },
+    {
+      "question": "¿De qué manera exhorta Jesucristo a la colectividad de creyentes a tomar la iniciativa contra el dominio de la muerte en lugar de actuar a la defensiva?",
+      "chunk_index": 123,
+      "char_mid": 117968,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 5 > LAS PUERTAS DEL REINO DE LA MUERTE"
+    },
+    {
+      "question": "¿En qué sitio específico fue ajusticiada la soberana Atalía tras ser expulsada de la residencia real durante la revuelta liderada por Joyadá?",
+      "chunk_index": 93,
+      "char_mid": 88167,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 3 > LA PUERTA SUPERIOR"
+    },
+    {
+      "question": "¿De qué manera se entiende el valor espiritual de brindar asistencia a las personas convalecientes y recluidas según el pasaje bíblico citado?",
+      "chunk_index": 22,
+      "char_mid": 22089,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 1"
+    },
+    {
+      "question": "¿Qué repercusiones trágicas en la descendencia y el reino se desencadenaron tras la falta del monarca David, aun habiendo obtenido la absolución divina?",
+      "chunk_index": 130,
+      "char_mid": 123938,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 5 > PUERTA DE LA TENTACIÓN"
+    },
+    {
+      "question": "¿Qué convicción atribuida a la antigua civilización mesopotámica sostenía que una entidad divina podía devolver la existencia a los difuntos?",
+      "chunk_index": 33,
+      "char_mid": 32023,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 1 > EL CEMENTERIO"
+    },
+    {
+      "question": "¿Cuál es la pauta exacta provista sobre el instante en que debe clausurarse el acceso al espacio de devoción y durante qué período debe mantenerse así?",
+      "chunk_index": 105,
+      "char_mid": 99931,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 4 > LAS PUERTAS MARCADAS CON SANGRE"
+    },
+    {
+      "question": "¿De qué manera influye la calidad de la percepción de un individuo en la claridad o tinieblas de su ser interior según el pasaje bíblico citado?",
+      "chunk_index": 147,
+      "char_mid": 140860,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 6 > LA PUERTA DE LA VISTA"
+    },
+    {
+      "question": "¿Qué irreverente adoración al astro solar realizó un grupo de varones entre el pórtico y la estructura de sacrificios dando el dorso al santuario divino?",
+      "chunk_index": 78,
+      "char_mid": 74129,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 3"
+    },
+    {
+      "question": "¿Hacia qué destinatarios afirma dirigir su mensaje la comprensión al manifestarse en los accesos y vías según el texto bíblico citado?",
+      "chunk_index": 185,
+      "char_mid": 178635,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 7"
+    },
+    {
+      "question": "¿Qué cuestionamiento expresa el poeta sobre la razón por la que el Redentor aguarda bajo el frío nocturno ante su entrada buscando su afecto?",
+      "chunk_index": 179,
+      "char_mid": 173206,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 6"
+    },
+    {
+      "question": "Según la cita bíblica presentada, ¿cuáles son las limitaciones de las imágenes creadas por artesanos y qué destino comparten quienes las fabrican o depositan su fe en ellas?",
+      "chunk_index": 168,
+      "char_mid": 162403,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 6"
+    },
+    {
+      "question": "¿Cuántas gradas de acceso se necesitaban para entrar a los pasajes internos y externos en la revelación sobre el santuario?",
+      "chunk_index": 80,
+      "char_mid": 75749,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 3"
+    },
+    {
+      "question": "¿Qué habilidades artísticas y técnicas desarrollaron los pobladores de la región iraquí descendientes del primer homicida según el texto antiguo?",
+      "chunk_index": 45,
+      "char_mid": 44241,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 2 > LA PUERTA DE ISHTAR"
+    },
+    {
+      "question": "¿Cuál es el origen geográfico contemporáneo de casi todos los patriarcas fundadores del pueblo hebreo, a excepción del menor de ellos?",
+      "chunk_index": 47,
+      "char_mid": 46341,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 2 > LA PUERTA DEL ARCA"
+    },
+    {
+      "question": "¿Qué designación alternativa presente en ciertas copias manuscritas resulta menos directa para el autor que el título que prefiere emplear?",
+      "chunk_index": 55,
+      "char_mid": 53772,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 2 > LA PUERTA VIEJA"
+    },
+    {
+      "question": "¿Por qué se plantea que un entendimiento colaborativo entre la comunidad judía y la cristiana beneficiaría al mundo entero y no constituye un mero ideal inalcanzable?",
+      "chunk_index": 235,
+      "char_mid": 227190,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 8 > LAS PUERTAS DE HOLLYWOOD"
+    },
+    {
+      "question": "¿En qué circunstancias precisas tienen la capacidad los espíritus malignos de emboscar a los viajeros del sendero angosto?",
+      "chunk_index": 206,
+      "char_mid": 199518,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 7 > LA PUERTA ESTRECHA"
+    },
+    {
+      "question": "¿Cómo actuó la sirvienta cuando identificó al visitante en el acceso a la casa donde intercedían los creyentes?",
+      "chunk_index": 28,
+      "char_mid": 28281,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 1 > LA CÁRCEL"
+    },
+    {
+      "question": "¿De qué manera el texto conecta la escena poética del desencuentro en la entrada con el simbolismo de la unión espiritual entre el Salvador y la comunidad de creyentes?",
+      "chunk_index": 109,
+      "char_mid": 103574,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 4 > LA PUERTA DEL AMOR"
+    },
+    {
+      "question": "¿De qué manera caracterizó un conocido músico brasileño de la década de 1960 la esencia de un amigo verdadero?",
+      "chunk_index": 173,
+      "char_mid": 166944,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 6 > LA PUERTA DEL CORAZÓN"
+    },
+    {
+      "question": "¿De qué manera explica el autor que la asistencia a la salud perdió su carácter humanitario para convertirse en un sector lucrativo y costoso?",
+      "chunk_index": 17,
+      "char_mid": 16230,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 1"
+    },
+    {
+      "question": "¿Por qué motivo las organizaciones religiosas foráneas limitaron la suntuosidad de las entradas a los recintos de fe en territorio latinoamericano?",
+      "chunk_index": 83,
+      "char_mid": 77630,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 3 > LA PUERTA HERMOSA"
+    },
+    {
+      "question": "¿Quiénes tienen prohibido el acceso y qué amenazas de animales están ausentes en la vía consagrada citada del libro de Isaías?",
+      "chunk_index": 207,
+      "char_mid": 200261,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 7 > LA PUERTA ESTRECHA"
+    },
+    {
+      "question": "¿Qué indicación daba Jesús a quienes curaba, en oposición al afán de notoriedad de ciertos ministros modernos de la salud espiritual?",
+      "chunk_index": 196,
+      "char_mid": 187829,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 7 > PUERTAS DE PODER"
+    },
+    {
+      "question": "¿Qué exclamación lanzó un ilustre autor galo durante el festejo de su aniversario al presentarse el delegado diplomático de Mesopotamia?",
+      "chunk_index": 44,
+      "char_mid": 43019,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 2 > LA PUERTA DE ISHTAR"
+    },
+    {
+      "question": "¿Qué traducción o significado de la palabra Siloé se especifica en la cita del evangelio de Juan sobre el prodigio de sanación?",
+      "chunk_index": 60,
+      "char_mid": 57467,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 2 > LA PUERTA DE LA FUENTE"
+    },
+    {
+      "question": "¿De qué manera se explica que la pérdida del poder extraordinario de Sansón respondió a un quebrantamiento interior y no al mero acto físico de trasquilarlo?",
+      "chunk_index": 122,
+      "char_mid": 116965,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 5"
+    }
+  ],
+  "learned_from": "libros/02-PuertasEternas_INT.pdf",
+  "learned_at": 1788028415.9757502,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^12/22/12\\\\s+11:53\\\\s+AM$' matches '12/22/12   11:53 AM' on 160 pages, no body hits",
+    "OK  header_patterns: '^Las\\\\s+puertas\\\\s+eternas$' matches 'Las puertas eternas' on 70 pages, no body hits",
+    "OK  heading_patterns: nivel 1: '^Capítulo\\\\s+\\\\d+$' -> 8 encabezados sin numerar (1.4% de los párrafos)",
+    "OK  heading_patterns: nivel 2: '^[A-ZÁÉÍÓÚÑ\\\\s]{4,60}$' -> 56 encabezados sin numerar (9.8% de los párrafos)",
+    "OK  heading_guards: the learned pattern explains 8 level-1 headings against 1 numbered lines, so the numbered path is footnote noise here and its sequence is not the signal",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

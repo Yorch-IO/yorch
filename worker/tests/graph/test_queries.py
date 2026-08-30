@@ -11,9 +11,28 @@ import pytest
 
 from brainworker.graph import queries as q
 from brainworker.graph.queries import Param, Template, TemplateError
+from brainworker.graph.schema import LEGACY_TENANT_ID as LEGACY
 
 
 def tpl(cypher: str, **kw) -> Template:
+    """A throwaway template that already satisfies the tenant rule.
+
+    The rule has its own tests below; every *other* test here is about a
+    different property — a forbidden keyword, an unbounded pattern, a clamp —
+    and making each of them carry the predicate by hand would bury what they
+    are actually asserting. `raw` is the escape hatch for the tests that are
+    about the rule itself.
+    """
+    # A real clause, not a comment: `validate_template` strips comments before
+    # it looks for parameters, so a `// $tenant_id` would leave the declared
+    # parameter looking unused — which is its own, different error.
+    cypher = f"WITH $tenant_id AS _scope\n{cypher.lstrip()}"
+    params = tuple(kw.pop("params", ())) + (Param("tenant_id", "string"),)
+    return Template(id="probe", summary="test", cypher=cypher, params=params, **kw)
+
+
+def raw(cypher: str, **kw) -> Template:
+    """A template exactly as written, for the tests about the tenant rule."""
     return Template(id="probe", summary="test", cypher=cypher, **kw)
 
 
@@ -128,33 +147,33 @@ def test_binding_rejects_an_id_that_is_not_one():
     t = q.get("document_outline")
     for bad in ["", "ver_x", "'; MATCH (n) DETACH DELETE n //", "ver_" + "z" * 24]:
         with pytest.raises(TemplateError):
-            q.bind(t, {"version_id": bad})
+            q.bind(t, {"tenant_id": LEGACY, "version_id": bad})
 
 
 def test_binding_rejects_a_missing_required_argument():
     with pytest.raises(TemplateError, match="missing required"):
-        q.bind(q.get("document_outline"), {})
+        q.bind(q.get("document_outline"), {"tenant_id": LEGACY, })
 
 
 def test_binding_rejects_an_unexpected_argument():
     with pytest.raises(TemplateError, match="unexpected"):
         q.bind(
             q.get("document_outline"),
-            {"version_id": "ver_" + "a" * 24, "database": "other"},
+            {"tenant_id": LEGACY, "version_id": "ver_" + "a" * 24, "database": "other"},
         )
 
 
 def test_an_optional_argument_falls_back_to_its_default():
-    bound = q.bind(q.get("document_outline"), {"version_id": "ver_" + "a" * 24})
+    bound = q.bind(q.get("document_outline"), {"tenant_id": LEGACY, "version_id": "ver_" + "a" * 24})
     assert bound["limit"] == 25
 
 
 def test_the_limit_is_clamped_no_matter_what_the_planner_asks_for():
     t = q.get("document_outline")
     vid = "ver_" + "a" * 24
-    assert q.bind(t, {"version_id": vid, "limit": 10_000})["limit"] == q.MAX_LIMIT
-    assert q.bind(t, {"version_id": vid, "limit": 0})["limit"] == 1
-    assert q.bind(t, {"version_id": vid, "limit": -5})["limit"] == 1
+    assert q.bind(t, {"tenant_id": LEGACY, "version_id": vid, "limit": 10_000})["limit"] == q.MAX_LIMIT
+    assert q.bind(t, {"tenant_id": LEGACY, "version_id": vid, "limit": 0})["limit"] == 1
+    assert q.bind(t, {"tenant_id": LEGACY, "version_id": vid, "limit": -5})["limit"] == 1
 
 
 def test_a_bool_is_not_an_int():
@@ -162,7 +181,7 @@ def test_a_bool_is_not_an_int():
     with pytest.raises(TemplateError, match="must be an int"):
         q.bind(
             q.get("document_outline"),
-            {"version_id": "ver_" + "a" * 24, "limit": True},
+            {"tenant_id": LEGACY, "version_id": "ver_" + "a" * 24, "limit": True},
         )
 
 
@@ -170,10 +189,10 @@ def test_an_id_list_is_element_checked_and_truncated():
     t = q.get("citations_for_chunks")
     good = "chk_" + "a" * 24
     with pytest.raises(TemplateError, match="list of graph ids"):
-        q.bind(t, {"chunk_ids": [good, "not-an-id"]})
+        q.bind(t, {"tenant_id": LEGACY, "chunk_ids": [good, "not-an-id"]})
     with pytest.raises(TemplateError, match="list of graph ids"):
-        q.bind(t, {"chunk_ids": good})  # a bare string is not a list
-    bound = q.bind(t, {"chunk_ids": [good] * (q.MAX_LIMIT + 50)})
+        q.bind(t, {"tenant_id": LEGACY, "chunk_ids": good})  # a bare string is not a list
+    bound = q.bind(t, {"tenant_id": LEGACY, "chunk_ids": [good] * (q.MAX_LIMIT + 50)})
     assert len(bound["chunk_ids"]) == q.MAX_LIMIT
 
 
@@ -185,7 +204,7 @@ def test_a_capped_parameter_clamps_at_its_own_ceiling_not_the_global_one():
     The ceiling moves; it does not disappear."""
     t = q.get("library_mentions")
     cap = next(p.cap for p in t.params if p.name == "mention_limit")
-    bound = q.bind(t, {"library_id": "lib_x", "mention_limit": cap * 10})
+    bound = q.bind(t, {"tenant_id": LEGACY, "library_id": "lib_x", "mention_limit": cap * 10})
     assert bound["mention_limit"] == cap > q.MAX_LIMIT
 
 
@@ -193,7 +212,7 @@ def test_an_uncapped_parameter_still_clamps_at_the_global_ceiling():
     """The escape hatch is per parameter. Adding one must not have loosened the
     rule for every template that never asked."""
     t = q.get("document_outline")
-    bound = q.bind(t, {"version_id": "ver_" + "a" * 24, "limit": 10_000})
+    bound = q.bind(t, {"tenant_id": LEGACY, "version_id": "ver_" + "a" * 24, "limit": 10_000})
     assert bound["limit"] == q.MAX_LIMIT
 
 
@@ -227,6 +246,53 @@ def test_the_library_scope_cannot_be_omitted_from_the_overview():
     """Concepts merge by canonical name with no library in the id. A defaulted
     scope would mean a caller who forgot one silently got a different library."""
     with pytest.raises(TemplateError, match="missing required argument"):
-        q.bind(q.get("library_mentions"), {})
+        q.bind(q.get("library_mentions"), {"tenant_id": LEGACY, })
     with pytest.raises(TemplateError, match="missing required argument"):
         q.bind(q.get("library_documents"), {})
+
+
+# -- the tenant rule --------------------------------------------------------
+#
+# Checked in the validator rather than left to a test, because a template that
+# loads is a template that can be named by id. These assert the rule itself; the
+# *isolation* it buys is proved against a real database in
+# `test_tenant_isolation.py`.
+
+
+def test_a_template_that_does_not_scope_itself_does_not_load():
+    with pytest.raises(TemplateError, match="tenant_id"):
+        q.validate_template(
+            raw(
+                "MATCH (c:Chunk {id: $chunk_id}) RETURN c.id AS id LIMIT 1",
+                params=(Param("chunk_id", "id"),),
+            )
+        )
+
+
+def test_the_rule_is_satisfied_by_using_the_parameter_not_by_declaring_it():
+    """Declaring `tenant_id` and never filtering on it would be worse than not
+    declaring it: it would look scoped in the parameter list and read
+    everything. The check is on *used* parameters, and the validator's own
+    unused-parameter rule closes the other direction."""
+    with pytest.raises(TemplateError, match="unused parameter"):
+        q.validate_template(
+            raw(
+                "MATCH (c:Chunk {id: $chunk_id}) RETURN c.id AS id LIMIT 1",
+                params=(Param("chunk_id", "id"), Param("tenant_id", "string")),
+            )
+        )
+
+
+def test_every_shipped_template_is_scoped():
+    """The registry as it ships, not a constructed example."""
+    for t in q.TEMPLATES:
+        assert any(p.name == "tenant_id" for p in t.params), t.id
+        assert "$tenant_id" in t.cypher, t.id
+
+
+def test_the_tenant_is_required_and_has_no_default():
+    """A default would be somebody's organisation, and the wrong somebody."""
+    for t in q.TEMPLATES:
+        tenant = next(p for p in t.params if p.name == "tenant_id")
+        assert tenant.required, t.id
+        assert tenant.default is None, t.id

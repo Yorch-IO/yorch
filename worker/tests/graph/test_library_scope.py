@@ -16,7 +16,7 @@ The concept name is randomised per run, and that is not incidental. A first draf
 used the literal "Felicidad" and the precondition assertion failed with
 ``{'lib_real', 'lib_scope_mine', 'lib_scope_theirs'}``: the name already existed
 in this machine's real library, projected by an earlier semantic-extraction run.
-Concept identity is ``concept_id(canonical_name)`` with no library in it, so a
+Concept identity is ``concept_id(canonical_name, LEGACY_TENANT_ID)`` with no library in it, so a
 test name collides with production data — which is precisely the mechanism the
 leak rode on, demonstrated by accident.
 """
@@ -30,7 +30,7 @@ import pytest
 from brainworker.graph import projection as proj
 from brainworker.graph.projection import ChunkNode, SectionNode, SemanticEdge, VersionNode
 from brainworker.graph.queries import TemplateError
-from brainworker.graph.schema import chunk_id as make_chunk_id
+from brainworker.graph.schema import LEGACY_TENANT_ID, chunk_id as make_chunk_id
 from brainworker.graph.schema import concept_id as make_concept_id
 
 MODEL = "gemini-3.6-flash"
@@ -41,6 +41,7 @@ THEIRS = "lib_scope_theirs"
 def _version(library: str, title: str) -> VersionNode:
     return VersionNode(
         library=library,
+        tenant_id=LEGACY_TENANT_ID,
         source_key=f"libros/{secrets.token_hex(6)}.pdf",
         content_sha256=secrets.token_hex(32),
         title=title,
@@ -66,7 +67,7 @@ def two_libraries(graph):
     proj.project_structure(graph, mine)
     proj.project_structure(graph, theirs)
     proj.project_concepts(graph, [{"name": shared, "type": "Estado"}])
-    concept = make_concept_id(shared)
+    concept = make_concept_id(shared, LEGACY_TENANT_ID)
     proj.project_semantic_edges(
         graph,
         [
@@ -149,12 +150,12 @@ def test_hydration_refuses_a_chunk_from_another_library(graph, two_libraries):
     mine, theirs, _ = two_libraries
     asked = [make_chunk_id(mine.version, 0), make_chunk_id(theirs.version, 0)]
 
-    got = _hydrate(graph, asked, "graph", MINE)
+    got = _hydrate(graph, asked, "graph", MINE, LEGACY_TENANT_ID)
     assert [e.chunk_id for e in got] == [make_chunk_id(mine.version, 0)]
     assert all(e.title == "Mi documento" for e in got)
 
     # And it is symmetric — nothing about `MINE` is privileged in the code.
-    got = _hydrate(graph, asked, "graph", THEIRS)
+    got = _hydrate(graph, asked, "graph", THEIRS, LEGACY_TENANT_ID)
     assert [e.chunk_id for e in got] == [make_chunk_id(theirs.version, 0)]
 
 
@@ -168,6 +169,6 @@ def test_hydration_of_a_chunk_with_no_owning_document_drops_it(graph):
     graph.write("CREATE (c:Chunk {id: $id, text: 'huérfano', kind: 'cuerpo'})",
                 {"id": orphan})
     try:
-        assert _hydrate(graph, [orphan], "graph", MINE) == []
+        assert _hydrate(graph, [orphan], "graph", MINE, LEGACY_TENANT_ID) == []
     finally:
         graph.write("MATCH (c:Chunk {id: $id}) DETACH DELETE c", {"id": orphan})

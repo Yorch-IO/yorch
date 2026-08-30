@@ -35,9 +35,9 @@ def _fake_graph(monkeypatch: pytest.MonkeyPatch) -> dict:
 
     monkeypatch.setattr(rebuild, "Graph", lambda url: FakeGraph())
     monkeypatch.setattr(rebuild.proj, "project_concepts",
-                        lambda g, c: captured.setdefault("concepts", c) and 0 or len(c))
+                        lambda g, c, **k: captured.setdefault("concepts", c) and 0 or len(c))
     monkeypatch.setattr(rebuild.proj, "project_claims",
-                        lambda g, c: captured.setdefault("claims", c) and 0 or len(c))
+                        lambda g, c, **k: captured.setdefault("claims", c) and 0 or len(c))
     monkeypatch.setattr(rebuild.proj, "project_semantic_edges",
                         lambda g, e: captured.setdefault("edges", e) and 0 or len(e))
     return captured
@@ -106,3 +106,90 @@ async def test_a_replay_reports_the_quotes_the_artifact_does_carry(
     # The descriptions ride along, so a rebuild restores a condensed graph's
     # inputs without re-extracting anything.
     assert captured["concepts"][0]["descriptions"] == ["El gobierno de Dios."]
+
+
+
+# -- whose document a rebuild replays ----------------------------------------
+
+ACME = "tnt_" + "9" * 24
+
+
+class _CatalogWithOneDocument:
+    """Just enough catalog for `load_rebuild_inputs`.
+
+    A double rather than Postgres because what is under test is the
+    `IngestRequest` this activity *builds*, not any query it runs — and the
+    fields that matter come straight off the row it is handed.
+    """
+
+    def __init__(self, tenant: str):
+        self.tenant = tenant
+        self.started: dict = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def document(self, document_id, *, library_id, tenant_id):
+        assert tenant_id == self.tenant, "ownership is resolved before anything else"
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            id=document_id, library_id=library_id, tenant_id=self.tenant,
+            source_path="/workspace/x.pdf", source_key="libros/x.pdf",
+            title="Un libro", author=None, format="pdf", folder_id=None,
+        )
+
+    def active_version(self, _document_id):
+        return "ver_x"
+
+    def versions_of(self, _document_id):
+        from types import SimpleNamespace
+
+        return [SimpleNamespace(id="ver_x", content_sha256="a" * 64, byte_size=10)]
+
+    def latest_run_with_artifact(self, *_a, **_k):
+        return "run_src"
+
+    def start_run(self, **kw):
+        self.started = kw
+
+
+async def test_a_rebuild_replays_into_the_organisation_the_document_belongs_to(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The `IngestRequest` a rebuild reassembles is what `project_structure`
+    reads the tenant off. It left the field out, so a paying organisation's
+    document, sections, chunks and citations were re-projected into the legacy
+    graph under an unsalted version id — and because retrieval still returned
+    the right text, only with no locator and no claim, it looked exactly like a
+    graph that had not been built yet rather than like a leak.
+    """
+    from brainworker.artifacts import ArtifactStore
+
+    store = ArtifactStore(workspace, "run_src")
+    chunks = store.write_jsonl(
+        "chunks", [{"index": 0, "kind": "cuerpo", "text": "Uno.",
+                    "char_from": 0, "char_to": 4}]
+    )
+    catalog = _CatalogWithOneDocument(ACME)
+    monkeypatch.setattr(rebuild, "Catalog", lambda *_a, **_k: catalog)
+    row = {"name": rebuild.REQUIRED_ARTIFACT, "rel_path": chunks.path,
+           "sha256": chunks.sha256, "size_bytes": chunks.bytes}
+    monkeypatch.setattr(
+        rebuild, "_artifact_of",
+        lambda _c, _r, name: row if name == rebuild.REQUIRED_ARTIFACT else None,
+    )
+
+
+    inputs = await rebuild.load_rebuild_inputs(
+        "lib_1", "doc_1", "run_new", "rebuild-1", ACME
+    )
+
+    assert inputs.request.tenant_id == ACME
+    assert inputs.registered.tenant_id == ACME
+    # And the run is filed against the same organisation, not whoever pressed
+    # the button.
+    assert catalog.started["tenant_id"] == ACME

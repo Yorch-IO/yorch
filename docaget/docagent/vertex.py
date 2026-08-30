@@ -31,7 +31,10 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures as cf
+import hashlib
 import os
+import pathlib
+import struct
 import sys
 import time
 from dataclasses import dataclass
@@ -42,9 +45,25 @@ import httpx
 from .ledger import Ledger
 
 LOCATION = "global"
-#: ``gemini-embedding-001`` is no longer served — listing the endpoint's models
-#: on 2026-08-19 returned 23 ids, of which this is the only embedding one.
-EMBED_MODEL = "gemini-embedding-2"
+#: Listing the endpoint's models on 2026-08-19 returned 23 ids with
+#: ``gemini-embedding-2`` as the only embedding one, and that was read as
+#: ``gemini-embedding-001`` no longer being served. **Listing a model is not
+#: having access to it.** Measured against the live endpoint on 2026-08-28 with
+#: ADC:
+#:
+#:     yorch-platform-prod / gemini-embedding-2   -> HTTP 404
+#:     yorch-platform-prod / gemini-embedding-001 -> HTTP 200
+#:     verveux             / both                 -> HTTP 403
+#:
+#: A run died on that 404 after paying $1.27 for correction, indexing nothing.
+#:
+#: Availability is the smaller half of the reason. Every point in `docagent_v2`
+#: was embedded with ``gemini-embedding-001``; both models are 3,072-wide, so
+#: Qdrant accepts the other one's vectors silently and a cosine between two
+#: models' embeddings means nothing. Changing this constant re-indexes a
+#: collection into a second vector space with a healthy log and a corrupted
+#: ranking — so it moves only together with a full re-embed of everything in it.
+EMBED_MODEL = "gemini-embedding-001"
 #: Kept in step with the app's `BRAIN_GEMINI_MODEL` default. Chosen over
 #: 3.5-flash for a 17% cheaper output token, which is where this workload's bill
 #: actually sits.
@@ -58,6 +77,20 @@ TASK_DOCUMENT = "RETRIEVAL_DOCUMENT"
 TASK_QUERY = "RETRIEVAL_QUERY"
 
 MAX_ATTEMPTS = 3
+
+#: A rate-limit 429 gets its own, longer patience. The quota that matters here
+#: refills per minute, and `_retry`'s 3 attempts at 2s then 8s spend about ten
+#: seconds against it — then `embed_many` raises, and one text failing takes the
+#: whole run with it by design. Measured 2026-08-28 indexing a 600-chunk book:
+#: the run stalled at `embedding 1/600` under 127 429s, while a single serial
+#: request and eight parallel ones both answered 200 the moment the burst
+#: stopped. Concurrency was not the wall; the refill window was.
+#:
+#: 2, 8, 32, 60, 60 — 162 seconds, comfortably past a per-minute window, and
+#: capped because a sleep longer than the window buys nothing. A 429 says
+#: "later"; a read timeout says "again", and that one keeps its measured three.
+RATE_LIMIT_ATTEMPTS = 6
+RATE_LIMIT_MAX_BACKOFF = 60.0
 
 # Bounded per-phase timeouts. Measured on real correction batches: 22,946 chars of
 # input took 55.8s and produced 5,243 output tokens, so 240s of read is roughly 4x
@@ -86,6 +119,52 @@ def _adc() -> tuple[Any, str | None]:
 
         _adc_cache = google.auth.default(scopes=_ADC_SCOPES)
     return _adc_cache
+
+
+#: One file per vector rather than the single JSON the correction cache uses:
+#: 3,072 float32 is 12 KB, so a 600-chunk book is ~7 MB and re-serialising one
+#: dict per write would dominate the run. Relative to the process CWD like
+#: `PROFILE_DIR` and `CACHE_DIR`, which is what lets the container relocate all
+#: of them with `WORKDIR /workspace` and no code change.
+EMBED_CACHE_DIR = pathlib.Path("cache/embed")
+
+
+def _embed_cache_key(text: str, task_type: str) -> str:
+    # The model and the task type are part of the key, not decoration: the same
+    # text embedded as RETRIEVAL_QUERY is a different vector, and a model change
+    # invalidates every entry rather than silently mixing two vector spaces.
+    raw = f"{EMBED_MODEL}\x00{EMBED_DIMS}\x00{task_type}\x00{text}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _embed_cache_read(text: str, task_type: str) -> "EmbedResult | None":
+    path = EMBED_CACHE_DIR / f"{_embed_cache_key(text, task_type)}.f32"
+    try:
+        blob = path.read_bytes()
+    except OSError:
+        return None
+    if len(blob) != 4 + EMBED_DIMS * 4:
+        return None  # truncated by an interrupted write; treat as a miss
+    tokens = int.from_bytes(blob[:4], "little")
+    values = list(struct.unpack(f"<{EMBED_DIMS}f", blob[4:]))
+    return EmbedResult(values, tokens, False)
+
+
+def _embed_cache_write(text: str, task_type: str, result: EmbedResult) -> None:
+    if result.truncated:
+        return  # a truncated embedding is a warning, not something to reuse
+    try:
+        os.makedirs(EMBED_CACHE_DIR, exist_ok=True)
+        path = EMBED_CACHE_DIR / f"{_embed_cache_key(text, task_type)}.f32"
+        # Write-then-rename: `embed_many` runs a worker pool, and a reader must
+        # never see half a vector.
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_bytes(
+            result.tokens.to_bytes(4, "little") + struct.pack(f"<{EMBED_DIMS}f", *result.values)
+        )
+        os.replace(tmp, path)
+    except OSError:
+        pass  # a cache that cannot be written must not fail the run
 
 
 class VertexError(RuntimeError):
@@ -254,15 +333,18 @@ class Vertex:
         8s backoff.
         """
         last: Exception | None = None
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+        for attempt in range(1, max(MAX_ATTEMPTS, RATE_LIMIT_ATTEMPTS) + 1):
             try:
                 return self._post(model, verb, body)
             except VertexError as e:
                 last = e
-                if not e.retryable or attempt == MAX_ATTEMPTS:
+                limit = RATE_LIMIT_ATTEMPTS if e.status == 429 else MAX_ATTEMPTS
+                if not e.retryable or attempt == limit:
                     break
                 backoff = max(2.0 ** (2 * attempt - 1), e.retry_after)
-                self._note_retry(stage, model, attempt, f"HTTP {e.status}", backoff)
+                if e.status == 429:
+                    backoff = min(backoff, RATE_LIMIT_MAX_BACKOFF)
+                self._note_retry(stage, model, attempt, f"HTTP {e.status}", backoff, limit)
                 time.sleep(backoff)
             except httpx.HTTPError as e:
                 # Transport failure: always retryable, but the pooled connection is
@@ -270,7 +352,7 @@ class Vertex:
                 last = e
                 self._reset_client()
                 if attempt == MAX_ATTEMPTS:
-                    break
+                    break  # transport failures keep their measured three
                 backoff = 2.0 ** (2 * attempt - 1)
                 self._note_retry(stage, model, attempt, type(e).__name__, backoff)
                 time.sleep(backoff)
@@ -279,14 +361,21 @@ class Vertex:
         raise last
 
     def _note_retry(
-        self, stage: str, model: str, attempt: int, why: str, backoff: float
+        self, stage: str, model: str, attempt: int, why: str, backoff: float,
+        limit: int = MAX_ATTEMPTS,
     ) -> None:
         """Retries must be visible. A silent retry loop is indistinguishable from
-        progress, which is how 450 seconds of a dead socket went unnoticed."""
+        progress, which is how 450 seconds of a dead socket went unnoticed.
+
+        The limit is passed rather than read from `MAX_ATTEMPTS`, because a 429
+        now gets `RATE_LIMIT_ATTEMPTS` and printing "3/3" while the loop goes on
+        to a fourth attempt makes the log say the run is about to fail when it
+        is not.
+        """
         self.ledger.record(stage, model, calls=0, retries=1)
         print(
-            f"    retry {attempt}/{MAX_ATTEMPTS} on {stage}: {why}, "
-            f"waiting {backoff:.0f}s (connection pool reset)",
+            f"    retry {attempt}/{limit} on {stage}: {why}, "
+            f"waiting {backoff:.0f}s",
             file=sys.stderr,
             flush=True,
         )
@@ -296,7 +385,17 @@ class Vertex:
     def embed(
         self, text: str, task_type: str = TASK_DOCUMENT, stage: str = "embed"
     ) -> EmbedResult:
-        """Embed one text. One instance per request is the model's hard limit."""
+        """Embed one text. One instance per request is the model's hard limit.
+
+        Cached on disk, for the same reason the correction pass is: an
+        interrupted run must keep what it paid for. Here the scarce resource is
+        not the money but the quota — `online_prediction_requests_per_base_model`
+        is metered `1/min/{project}/{base_model}` — and a run that dies at 586 of
+        600 and then re-spends 586 units to reach the same wall never converges.
+        """
+        if (hit := _embed_cache_read(text, task_type)) is not None:
+            self.ledger.record(stage, EMBED_MODEL, calls=0, cache_hits=1)
+            return hit
         body = {
             "instances": [{"task_type": task_type, "content": text}],
             "parameters": {"outputDimensionality": EMBED_DIMS, "autoTruncate": False},
@@ -314,7 +413,9 @@ class Vertex:
         tokens = int(stats.get("token_count", 0))
 
         self.ledger.record(stage, EMBED_MODEL, input_tokens=tokens)
-        return EmbedResult(values, tokens, bool(stats.get("truncated")))
+        result = EmbedResult(values, tokens, bool(stats.get("truncated")))
+        _embed_cache_write(text, task_type, result)
+        return result
 
     def embed_many(
         self,

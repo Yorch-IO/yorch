@@ -15,7 +15,7 @@ import pytest
 from brainworker.graph import projection as proj
 from brainworker.graph.projection import ChunkNode, SectionNode, SemanticEdge, VersionNode
 from brainworker.graph.queries import TemplateError
-from brainworker.graph.schema import chunk_id as make_chunk_id
+from brainworker.graph.schema import LEGACY_TENANT_ID, chunk_id as make_chunk_id
 from brainworker.graph.schema import claim_id as make_claim_id
 from brainworker.graph.schema import concept_id as make_concept_id
 from brainworker.graph.schema import section_id as make_section_id
@@ -98,7 +98,7 @@ def test_every_chunk_carries_a_locator_someone_can_open(graph, projected):
 def semantics(graph, projected) -> tuple[str, str]:
     """Concepts and claims, as `extract_semantics` would have written them."""
     source = make_chunk_id(projected.version, 0)
-    concept = make_concept_id(NAME)
+    concept = make_concept_id(NAME, LEGACY_TENANT_ID)
     claim = make_claim_id(source, CLAIM_TEXT)
 
     proj.project_concepts(graph, [{"name": NAME, "type": "Concepto teológico"}])
@@ -175,6 +175,7 @@ def test_related_documents_name_a_document_not_only_a_version(
     concept, _ = semantics
     other = VersionNode(
         library="lib_test",
+        tenant_id=LEGACY_TENANT_ID,
         source_key="libros/otro-calvino.pdf",
         content_sha256="e" * 64,
         title="Otro tratado",

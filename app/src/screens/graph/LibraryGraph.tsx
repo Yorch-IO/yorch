@@ -10,10 +10,11 @@ import {
   type GraphDocument,
   type LibraryGraph as LibraryGraphData,
 } from "../../lib/api";
-import { fit, radius, settle, type ForceEdge, type ForceNode } from "../../lib/force";
+import { fit, settle, type ForceEdge, type ForceNode } from "../../lib/force";
 import { useLibraries } from "../../lib/libraries";
 import { scale, truncate } from "../../lib/radial";
 import { Swatch } from "./DocumentGraph";
+import { CONCEPT_RADIUS, GRAPH_ZOOM } from "./geometry";
 
 /**
  * The whole library at once: every projected book, every concept that joins two
@@ -46,7 +47,7 @@ const LABEL_ZOOM = 1.35;
 
 /** Zoom bounds. Below 0.35 the graph is a texture; above 6 a single node fills
  *  the canvas and panning becomes the only navigation left. */
-const ZOOM = { MIN: 0.35, MAX: 6, STEP: 1.3 } as const;
+const ZOOM = GRAPH_ZOOM;
 
 /** The thresholds the control offers. 1 is "everything", and it is reachable on
  *  purpose — the canvas slows down but nothing is hidden by the app's choice. */
@@ -55,7 +56,7 @@ const THRESHOLDS = [1, 2, 3, 5, 10] as const;
 const FLOORS = [0.5, 0.6, 0.7, 0.8, 0.9] as const;
 
 /** The document view's marks, minus `dashed`: there is one edge type here. */
-const OVERVIEW_LEGEND = ["doc", "concept", "size", "weight"] as const;
+const OVERVIEW_LEGEND = ["doc", "concept", "weight"] as const;
 
 /** How many nodes the accessible list renders before it says "and N more".
  *  10,835 list items is not a keyboard path either. */
@@ -110,6 +111,7 @@ export function LibraryGraph({
   const [showBooks, setShowBooks] = useState(true);
   const [showConcepts, setShowConcepts] = useState(true);
   const [selected, setSelected] = useState<Selection>(null);
+  const [hoveredConcept, setHoveredConcept] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
 
@@ -135,6 +137,7 @@ export function LibraryGraph({
         setData(next);
         setError(null);
         setSelected(null);
+        setHoveredConcept(null);
         setClaims(null);
       } catch (e) {
         // The previous graph is deliberately left on screen: a failed refetch at
@@ -156,8 +159,6 @@ export function LibraryGraph({
         (d) => data.edges.filter((e) => e.versionId === d.versionId).length,
       ),
     );
-    const maxConcept = Math.max(1, ...data.concepts.map((c) => c.documents));
-
     const nodes: ForceNode[] = [
       ...data.documents.map((d) => ({
         id: d.versionId,
@@ -202,7 +203,7 @@ export function LibraryGraph({
         kind: "concept",
         x: p.x * t.scale + t.x,
         y: p.y * t.scale + t.y,
-        r: radius(c.documents, maxConcept),
+        r: CONCEPT_RADIUS,
         label: c.name,
       });
     }
@@ -481,7 +482,7 @@ export function LibraryGraph({
                   );
                 })}
 
-                {layout.filter(visible).map((p) => {
+                {layout.filter((p) => visible(p) && p.kind === "doc").map((p) => {
                   const dimmed = neighbours !== null && !neighbours.has(p.id);
                   const found = matches !== null && matches.has(p.id);
                   const chosen = selected?.id === p.id;
@@ -501,21 +502,56 @@ export function LibraryGraph({
                       onKeyDown={activate(p)}
                     >
                       <title>{p.label}</title>
-                      {p.kind === "doc" ? (
-                        <rect
-                          className="shape"
-                          x={p.x - p.r}
-                          y={p.y - p.r * 0.7}
-                          width={p.r * 2}
-                          height={p.r * 1.4}
-                          rx={2}
-                        />
-                      ) : (
-                        <circle className="shape" cx={p.x} cy={p.y} r={p.r} />
-                      )}
+                      <rect
+                        className="shape"
+                        x={p.x - p.r}
+                        y={p.y - p.r * 0.7}
+                        width={p.r * 2}
+                        height={p.r * 1.4}
+                        rx={2}
+                      />
                       {named && (
                         <text x={p.x} y={p.y - p.r - 4} textAnchor="middle">
                           {truncate(p.label, 24)}
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+                {layout.filter((p) => visible(p) && p.kind === "concept").map((p) => {
+                  const dimmed = neighbours !== null && !neighbours.has(p.id);
+                  const found = matches !== null && matches.has(p.id);
+                  const chosen = selected?.id === p.id;
+                  const hovered = hoveredConcept === p.id;
+                  // The parent scales the position; this inverse scale keeps
+                  // the node and its label at their screen-space size.
+                  return (
+                    <g
+                      key={p.id}
+                      className={`node concept ${chosen ? "is-active" : ""} ${
+                        found ? "is-shared" : ""
+                      } ${dimmed && !found ? "is-faded" : ""} ${
+                        hovered ? "is-hovered" : ""
+                      }`}
+                      transform={`translate(${p.x} ${p.y}) scale(${1 / zoom})`}
+                      role="button"
+                      tabIndex={-1}
+                      aria-label={p.label}
+                      aria-pressed={chosen}
+                      onClick={() => pick(p)}
+                      onKeyDown={activate(p)}
+                      onMouseEnter={() => setHoveredConcept(p.id)}
+                      onMouseLeave={() => setHoveredConcept(null)}
+                    >
+                      <title>{p.label}</title>
+                      <circle className="shape" r={CONCEPT_RADIUS} />
+                      {(chosen || found || hovered) && (
+                        <text
+                          className="concept-label"
+                          x={CONCEPT_RADIUS + 8}
+                          dominantBaseline="middle"
+                        >
+                          {hovered ? p.label : truncate(p.label, 24)}
                         </text>
                       )}
                     </g>
@@ -535,13 +571,11 @@ export function LibraryGraph({
               {busy && ` · ${t("graph.loading")}`}
             </p>
 
-            {/* Four of the document view's five marks, drawn from its own
-                component so one stylesheet change moves both legends. `dashed`
+            {/* Three of the document view's four marks, drawn from its own
+            component so one stylesheet change moves both legends. `dashed`
                 is left out: there is no second edge type here — every line is a
-                mention. The wording is its own: the same four marks mean
-                different things here — `size` is a degree rather than a
-                mention count, and `weight` is a mention count rather than a
-                number of shared concepts. */}
+                mention. `weight` is a mention count rather than a number of
+                shared concepts. */}
             <ul className="graph-legend">
               {OVERVIEW_LEGEND.map((kind) => (
                 <li key={kind}>

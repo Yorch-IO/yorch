@@ -19,7 +19,11 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 from dataclasses import dataclass, field
+
+#: The shape `graph.schema` mints and the query binder accepts.
+_TENANT_ID = re.compile(r"tnt_[0-9a-f]{24}")
 
 DEFAULT_SECRETS_FILE = "/run/secrets/providers.env"
 
@@ -34,6 +38,51 @@ class Paths:
     """Everything the pipeline writes, rooted at the mounted workspace volume."""
 
     root: pathlib.Path
+
+    def for_tenant(self, tenant: str) -> "Paths":
+        """This organisation's corner of the volume.
+
+        The legacy tenant keeps the root itself, and that is not a shortcut: a
+        `run_artifact` row stores a **workspace-relative** path, so rerooting an
+        existing corpus would invalidate every one of them at once — the same
+        reasoning that keeps its derived ids unsalted, and measured the same way
+        (69 indexed versions, 31 whose artifacts are still on disk). Everything
+        minted since lands under `tenants/<id>/`, and the rows written there are
+        relative to *that*, so neither has to know about the other.
+        """
+        from .graph.schema import LEGACY_TENANT_ID
+
+        if tenant == LEGACY_TENANT_ID:
+            return self
+        if not _TENANT_ID.fullmatch(tenant):
+            # A path segment built from an unchecked string is how a workspace
+            # gets escaped. Refused here rather than at the filesystem.
+            raise ValueError(f"not a tenant id: {tenant!r}")
+        return Paths(root=self.root / "tenants" / tenant)
+
+    def contains(self, path: pathlib.Path) -> bool:
+        """Whether `path` is inside this organisation's tree.
+
+        Used to refuse an ingest whose `source_path` points somewhere else —
+        including another tenant's inbox, which is the case a plain "is it under
+        the workspace" check would wave through.
+
+        **The legacy tenant needs the second clause, and it is not symmetry for
+        its own sake.** Its root is the volume itself, so `tenants/<other>/…` is
+        under it: without excluding that subtree the one organisation that
+        predates tenancy could read every organisation that came after. A test
+        found this after the first version shipped the containment check alone.
+        """
+        try:
+            resolved = path.resolve()
+            root = self.root.resolve()
+            if not resolved.is_relative_to(root):
+                return False
+            # Everything below `tenants/` belongs to somebody more specific.
+            others = root / "tenants"
+            return not resolved.is_relative_to(others)
+        except (OSError, ValueError):
+            return False
 
     @property
     def inbox(self) -> pathlib.Path:

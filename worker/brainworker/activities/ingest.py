@@ -378,7 +378,25 @@ async def stage_source(request: IngestRequest) -> Staged:
     """
     from docagent.extract import extractor_name
 
+    settings = _settings()
     path = pathlib.Path(request.source_path)
+
+    # **The path is the request's, so it is checked before it is read.**
+    #
+    # Nothing else stops it. This activity does not stage a file — it is handed
+    # a path and hashes whatever is there — so without this an organisation
+    # could name another's inbox, or `/run/secrets/providers.env`, and have the
+    # pipeline index it into their own corpus under their own tenant. The
+    # containment check is against *their* tree, not the workspace: "somewhere
+    # under /workspace" is exactly the check that would wave a neighbour's file
+    # through.
+    scope = settings.paths.for_tenant(request.tenant_id)
+    if not scope.contains(path):
+        raise PermissionError(
+            f"{request.source_path!r} is outside this organisation's workspace "
+            f"({scope.root})"
+        )
+
     if not path.is_file():
         raise FileNotFoundError(f"no such file: {request.source_path}")
 
@@ -410,11 +428,16 @@ async def register_document(
     """
     settings = _settings()
     doc_id = make_document_id(request.library_id, request.source_key)
-    ver_id = make_version_id(staged.content_sha256)
+    # Salted with the tenant: two customers importing the same PDF used to
+    # compute the same id, and this is a primary key.
+    ver_id = make_version_id(staged.content_sha256, request.tenant_id)
 
     with Catalog(settings.database_url) as catalog:
-        catalog.ensure_library(request.library_id, request.library_id)
+        catalog.ensure_library(
+            request.library_id, request.library_id, tenant_id=request.tenant_id
+        )
         catalog.upsert_document(
+            tenant_id=request.tenant_id,
             document_id=doc_id,
             library_id=request.library_id,
             source_key=request.source_key,
@@ -433,6 +456,7 @@ async def register_document(
         # yet — and the resulting ForeignKeyViolation surfaces as a failed
         # ingest with no obvious connection to ordering.
         catalog.start_run(
+            tenant_id=request.tenant_id,
             run_id=run_id,
             workflow_id=workflow_id,
             # 'reindex' has been in the CHECK constraint since the first
@@ -441,6 +465,7 @@ async def register_document(
             document_id=doc_id,
         )
         version, created = catalog.register_version(
+            tenant_id=request.tenant_id,
             version_id=ver_id,
             document_id=doc_id,
             content_sha256=staged.content_sha256,
@@ -453,6 +478,7 @@ async def register_document(
         version_id=version.id,
         created=created,
         already_indexed=version.state == "indexed",
+        tenant_id=request.tenant_id,
     )
 
 
@@ -1168,6 +1194,7 @@ async def link_duplicate(
         source_key=request.source_key,
         content_sha256=staged.content_sha256,
         title=staged.title,
+        tenant_id=request.tenant_id,
         author=request.author,
         fmt=staged.fmt,
     )
@@ -1214,6 +1241,7 @@ async def project_structure(
         source_key=request.source_key,
         content_sha256=staged.content_sha256,
         title=staged.title,
+        tenant_id=request.tenant_id,
         author=request.author,
         fmt=staged.fmt,
         sections=tuple(nodes.values()),
@@ -1245,6 +1273,7 @@ async def activate_version(
         source_key=request.source_key,
         content_sha256=staged.content_sha256,
         title=staged.title,
+        tenant_id=request.tenant_id,
     )
     with Graph(settings.memgraph_url) as graph:
         proj.activate(graph, version)

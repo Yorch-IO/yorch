@@ -12,7 +12,7 @@ import pytest
 
 from brainworker import config
 from brainworker.activities import ingest as act
-from brainworker.pipeline import IngestRequest, Preview, StageOptions
+from brainworker.pipeline import IngestRequest, Preview, Registered, StageOptions
 
 TEXTO = """LIBRO PRIMERO
 
@@ -69,7 +69,7 @@ def request_for(path: pathlib.Path, **kw) -> IngestRequest:
 # -- staging ----------------------------------------------------------------
 
 
-async def test_staging_identifies_the_file_without_parsing_it(libro: pathlib.Path):
+async def test_staging_identifies_the_file_without_parsing_it(libro: pathlib.Path, workspace):
     staged = await act.stage_source(request_for(libro))
     assert staged.byte_size == libro.stat().st_size
     assert staged.fmt == "txt"
@@ -78,7 +78,7 @@ async def test_staging_identifies_the_file_without_parsing_it(libro: pathlib.Pat
     assert len(staged.content_sha256) == 64
 
 
-async def test_the_same_bytes_hash_the_same_from_two_paths(tmp_path: pathlib.Path):
+async def test_the_same_bytes_hash_the_same_from_two_paths(tmp_path: pathlib.Path, workspace):
     """Version identity is the content, so this equality is load-bearing."""
     a, b = tmp_path / "a.txt", tmp_path / "copias" / "b.txt"
     b.parent.mkdir()
@@ -90,7 +90,7 @@ async def test_the_same_bytes_hash_the_same_from_two_paths(tmp_path: pathlib.Pat
     assert first.content_sha256 == second.content_sha256
 
 
-async def test_an_unsupported_format_is_refused_by_name(tmp_path: pathlib.Path):
+async def test_an_unsupported_format_is_refused_by_name(tmp_path: pathlib.Path, workspace):
     """Better here than three activities deep, where the error names an extractor."""
     path = tmp_path / "libro.epub"
     path.write_bytes(b"not supported")
@@ -98,7 +98,7 @@ async def test_an_unsupported_format_is_refused_by_name(tmp_path: pathlib.Path):
         await act.stage_source(request_for(path))
 
 
-async def test_a_missing_file_says_so(tmp_path: pathlib.Path):
+async def test_a_missing_file_says_so(tmp_path: pathlib.Path, workspace):
     with pytest.raises(FileNotFoundError):
         await act.stage_source(request_for(tmp_path / "ausente.txt"))
 
@@ -834,3 +834,165 @@ async def test_the_high_end_covers_the_worst_document_in_the_corpus(
     assert semantics.output_tokens_high >= chunks * worst_per_chunk
     # And the low end still describes the middle of the corpus, not the tail.
     assert semantics.output_tokens <= chunks * 894, "p95 is the reach limit"
+
+
+# -- the organisation's own tree ---------------------------------------------
+
+
+async def test_a_path_outside_the_organisation_is_refused_before_it_is_read(
+    tmp_path: pathlib.Path, workspace
+):
+    """The one guard on `source_path`, and there is nothing else.
+
+    This activity does not stage a file; it is handed a path and hashes whatever
+    is there. Without the check an organisation could name another's inbox — or
+    the mounted provider secrets — and have the pipeline index it into their own
+    corpus under their own tenant.
+    """
+    outsider = tmp_path.parent / "de-otro.txt"
+    outsider.write_text(TEXTO, encoding="utf-8")
+    with pytest.raises(PermissionError, match="outside"):
+        await act.stage_source(request_for(outsider))
+
+
+async def test_one_organisation_cannot_read_anothers_inbox(
+    tmp_path: pathlib.Path, workspace
+):
+    """The case a plain "is it under the workspace?" check waves through.
+
+    Both files are inside the volume. Only one is inside the asking
+    organisation's tree, and that is the distinction that matters.
+    """
+    other = "tnt_" + "b" * 24
+    theirs = tmp_path / "tenants" / other / "inbox"
+    theirs.mkdir(parents=True)
+    theirs_file = theirs / "suyo.txt"
+    theirs_file.write_text(TEXTO, encoding="utf-8")
+
+    # The owner reads it.
+    staged = await act.stage_source(request_for(theirs_file, tenant_id=other))
+    assert staged.content_sha256
+
+    # The legacy tenant, whose root is the volume itself, must not — even though
+    # the file is plainly under that root.
+    with pytest.raises(PermissionError, match="outside"):
+        await act.stage_source(request_for(theirs_file))
+
+
+# -- whose graph a run writes into -------------------------------------------
+#
+# `VersionNode.tenant_id` used to carry a default, and all three activities that
+# build one forgot to pass it. A paying organisation's document, sections,
+# chunks and citations were written into the legacy tenant's graph under an
+# *unsalted* version id — readable by the free plane, and absent from the
+# organisation that paid for it. Nothing failed: retrieval still found the right
+# text, with no locator and no claim, which reads exactly like a graph that has
+# not been projected yet.
+#
+# The field is required now. These pin the three call sites, because "required"
+# only stops a *new* one from being written without a tenant — it says nothing
+# about one that passes the wrong tenant, and passing `LEGACY_TENANT_ID`
+# explicitly would compile.
+
+ACME = "tnt_" + "9" * 24
+
+
+class _NoopCatalog:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def activate(self, *_a, **_k):
+        pass
+
+
+class _CapturingGraph:
+    """Stands in for `Graph`, and for the projection functions it is passed to.
+
+    The activities open a real Bolt session, so the double replaces the context
+    manager; the projection call is intercepted separately, since what is being
+    asserted is the *node handed over*, not anything Memgraph does with it.
+    """
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def ensure_schema(self):
+        pass
+
+
+@pytest.fixture
+def acme_libro(workspace: pathlib.Path) -> pathlib.Path:
+    """A source file inside ACME's own workspace subtree.
+
+    Not in `tmp_path` beside the other fixtures' documents: phase 2 made
+    `Paths.contains` refuse a source outside the organisation's own root, so a
+    file elsewhere is rejected before any of this is reached. That refusal is
+    the workspace half of the same boundary these tests are about.
+    """
+    path = workspace / "tenants" / ACME / "inbox" / "institucion.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(TEXTO, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def captured_versions(monkeypatch):
+    seen: list = []
+    monkeypatch.setattr(act, "Graph", lambda *_a, **_k: _CapturingGraph())
+    monkeypatch.setattr(
+        act.proj, "project_structure", lambda _g, version: seen.append(version) or {}
+    )
+    monkeypatch.setattr(
+        act.proj, "activate", lambda _g, version: seen.append(version)
+    )
+    return seen
+
+
+async def test_project_structure_writes_into_the_organisation_that_asked(
+    acme_libro, workspace, captured_versions
+):
+    request = request_for(acme_libro, tenant_id=ACME)
+    staged = await act.stage_source(request)
+    # Built rather than registered: `register_document` writes to Postgres, and
+    # what is being asserted here is which organisation the *graph* node names.
+    registered = Registered(
+        document_id="doc_x", version_id="ver_x", created=True,
+        already_indexed=False, tenant_id=ACME,
+    )
+
+    # Chunking is not what is under test and needs the corrected artifact, so
+    # the structure is projected from a hand-written one-row chunk file.
+    store = act.ArtifactStore(workspace, "run_t")
+    ref = store.write_jsonl(
+        "chunks",
+        [{"index": 0, "kind": "cuerpo", "text": "Uno.", "char_from": 0, "char_to": 4}],
+    )
+    await act.project_structure(request, staged, registered, "run_t", ref)
+
+    assert [v.tenant_id for v in captured_versions] == [ACME]
+    # The id the rest of the system will look this version up by. Unsalted is
+    # what the defect produced, and it is a different string.
+    assert captured_versions[0].version == act.make_version_id(
+        staged.content_sha256, ACME
+    )
+
+
+async def test_activation_marks_the_asking_organisations_version(
+    acme_libro, workspace, captured_versions, monkeypatch
+):
+    request = request_for(acme_libro, tenant_id=ACME)
+    staged = await act.stage_source(request)
+    registered = Registered(
+        document_id="doc_x", version_id="ver_x", created=True,
+        already_indexed=False, tenant_id=ACME,
+    )
+    # The catalog leg of activation is not what is under test.
+    monkeypatch.setattr(act, "Catalog", lambda *_a, **_k: _NoopCatalog())
+    await act.activate_version(request, staged, registered)
+    assert [v.tenant_id for v in captured_versions] == [ACME]

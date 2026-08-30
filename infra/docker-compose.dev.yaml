@@ -17,3 +17,30 @@ services:
     image: ${BRAIN_WORKER_IMAGE:-company-brain-worker:dev}
 
   worker: *build
+
+# The NestJS control plane and the migrate step share one image, built from
+# `../../yorch-tauri-backend` — its own checkout, beside this one rather than
+# inside it. The context is therefore outside the repo, which is fine for a
+# dev overlay and is exactly why the path is here and not in the base file:
+# a packaged app pulls the pinned image and never builds.
+#
+# BRAIN_BACKEND_CONTEXT overrides it, because a sibling directory name is an
+# assumption about someone else's disk.
+#
+# `migrate` is in the default profile, so a free-mode stack builds this image
+# too even though it never runs the server role. That is the price of one schema
+# owner, and it is the right price: the alternative is two migration runners
+# against one catalog.
+  migrate: &backend-build
+    build:
+      context: ${BRAIN_BACKEND_CONTEXT:-../../yorch-tauri-backend}
+      dockerfile: Dockerfile
+    image: ${BRAIN_BACKEND_IMAGE:-company-brain-backend:dev}
+
+  backend:
+    <<: *backend-build
+    environment:
+      # The OpenAPI page is off unless asked for. A hosted deployment should not
+      # hand out the full surface of a multi-tenant API to whoever finds the
+      # port; a developer reading it locally is the case it exists for.
+      BRAIN_DOCS: "on"

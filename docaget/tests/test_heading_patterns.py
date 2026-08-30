@@ -298,3 +298,28 @@ def test_the_pattern_the_prompt_recommends_survives_validation():
         v = _validate(heading_l1_pattern=pattern, heading_l1_max=70)
         assert "heading_patterns" not in v.failed_rules(), pattern
         assert v.passed, pattern
+
+
+# --- printer's signature lines ----------------------------------------------
+
+
+def test_a_run_of_page_numbers_is_not_a_chapter():
+    """Measured on 02-PuertasEternas_INT.pdf, which carries its printing
+    signature on its own line in the front matter.
+
+    `HEADING_RE` sees a leading number and the length cap sees 27 characters,
+    well under `heading_l1_max`, so the line read as chapter 12 and became the
+    breadcrumb of 13 chunks — the epigraph, the whole introduction and its four
+    named sections (ALDABA, QUICIO, DINTEL, UMBRAL). Nothing failed: the chunks
+    indexed and retrieved correctly, they just answered under a chapter that does
+    not exist.
+    """
+    assert heading_level("12 13 14 15 16 v6 5 4 3 2 1", ChunkRules()) == 0
+
+
+def test_a_numbered_heading_keeps_its_level_when_it_carries_a_title():
+    """The guard must not cost the ordinary case, including the tightest one it
+    lets through: "2.1.1 Foo" is three digits against three letters."""
+    assert heading_level("1. Introducción", ChunkRules()) == 1
+    assert heading_level("2.1.1 Foo", ChunkRules()) == 3
+    assert heading_level("12. La puerta de las ovejas", ChunkRules()) == 1

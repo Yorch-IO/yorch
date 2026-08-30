@@ -6,6 +6,8 @@ import {
   api,
   errorGuidanceKey,
   errorMessage,
+  type BackendInfo,
+  type BackendMode,
   type DockerInfo,
   type Health,
   type ProviderSettings,
@@ -51,6 +53,13 @@ export function StackScreen() {
   const [dockerError, setDockerError] = useState<string | null>(null);
   const [status, setStatus] = useState<StackStatus | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
+  const [backend, setBackend] = useState<BackendInfo | null>(null);
+  const [backendDraft, setBackendDraft] = useState<{
+    mode: BackendMode;
+    baseUrl: string;
+    tenantId: string;
+  } | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
   const [provider, setProvider] = useState<ProviderSettings | null>(null);
   const [projectDraft, setProjectDraft] = useState("");
   /** Set once a project has been saved in this session. The containers keep the
@@ -77,6 +86,27 @@ export function StackScreen() {
   }, []);
 
   const refresh = useCallback(async () => {
+    // First, and deliberately before the stack is asked about: this is the one
+    // read that must work when there is no local stack at all. In cloud mode
+    // Docker is irrelevant, and a user whose stack cannot start still has to be
+    // able to see — and change — which backend they are pointed at. Putting it
+    // after `stackStatus`'s early return hid the whole section on exactly the
+    // machine that needed it.
+    try {
+      const chosen = await api.backendSettings();
+      setBackend(chosen);
+      setBackendDraft(
+        (draft) =>
+          draft ?? {
+            mode: chosen.mode,
+            baseUrl: chosen.baseUrl,
+            tenantId: chosen.tenantId,
+          },
+      );
+    } catch {
+      setBackend(null);
+    }
+
     try {
       setStatus(await api.stackStatus());
       setError(null);
@@ -102,6 +132,59 @@ export function StackScreen() {
       setHealth(null);
     }
   }, []);
+
+  /**
+   * Save the chosen plane.
+   *
+   * The address is validated in Rust, not here: it has to be refused by the
+   * request that set it rather than by every screen afterwards, and a check in
+   * the webview would only be the first of two.
+   */
+  /**
+   * The button stays disabled for as long as the browser has the user, which
+   * can be minutes — a password and possibly a one-time code. Without the flag
+   * a second press binds a second listener to the same port and fails with an
+   * error about an address in use, which says nothing about what happened.
+   */
+  const startSession = useCallback(async () => {
+    setError(null);
+    setSigningIn(true);
+    try {
+      setBackend(await api.signIn());
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSigningIn(false);
+    }
+  }, []);
+
+  const endSession = useCallback(async () => {
+    setError(null);
+    try {
+      setBackend(await api.signOut());
+    } catch (e) {
+      setError(e);
+    }
+  }, []);
+
+  const saveBackend = useCallback(async () => {
+    if (!backendDraft) return;
+    setError(null);
+    try {
+      setBackend(
+        await api.setBackendMode(
+          backendDraft.mode,
+          backendDraft.baseUrl,
+          backendDraft.tenantId,
+        ),
+      );
+      // Everything on this screen describes whichever plane is now selected,
+      // so it is all stale.
+      await refresh();
+    } catch (e) {
+      setError(e);
+    }
+  }, [backendDraft, refresh]);
 
   const saveProject = useCallback(async () => {
     setError(null);
@@ -178,12 +261,128 @@ export function StackScreen() {
     }
   }
 
-  if (dockerError !== null) {
+  /**
+   * The backend chooser, rendered by *both* returns below.
+   *
+   * A machine with no Docker used to get a screen that talked only about
+   * installing Docker — with no way off it. That is precisely the user the paid
+   * service exists for: Docker is a requirement of the local backend and of
+   * nothing else, and stranding them on an install prompt made the switch
+   * unreachable exactly where it mattered.
+   */
+  const backendChooser = backendDraft && (
+    <>
+  {/* Which plane, before anything about the local one. The two speak the
+            same requests, so this is the only place in the app that knows there
+            is more than one. */}
+        <h3>{t("backend.title")}</h3>
+        <p>{t("backend.intro")}</p>
+        {backendDraft && (
+          <>
+            <label className="field">
+              <span>{t("backend.mode")}</span>
+              {/* `aria-label` as well as the visible span: a `<select>` inside a
+                  `<label>` folds its own option text into the label's accessible
+                  name, so "Which backend" becomes "Which backendLocal…Paid
+                  service" — unmatchable, and wrong for a screen reader too. The
+                  inputs beside it need no such thing: they have no text content. */}
+              <select
+                aria-label={t("backend.mode")}
+                value={backendDraft.mode}
+                onChange={(e) =>
+                  setBackendDraft({
+                    ...backendDraft,
+                    mode: e.target.value as BackendMode,
+                  })
+                }
+              >
+                <option value="local">{t("backend.local")}</option>
+                <option value="cloud">{t("backend.cloud")}</option>
+              </select>
+            </label>
+            {backendDraft.mode === "cloud" ? (
+              <>
+                <label className="field">
+                  <span>{t("backend.baseUrl")}</span>
+                  <input
+                    value={backendDraft.baseUrl}
+                    placeholder={t("backend.baseUrlHint")}
+                    onChange={(e) =>
+                      setBackendDraft({ ...backendDraft, baseUrl: e.target.value })
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>{t("backend.tenant")}</span>
+                  <input
+                    value={backendDraft.tenantId}
+                    placeholder={t("backend.tenantHint")}
+                    onChange={(e) =>
+                      setBackendDraft({ ...backendDraft, tenantId: e.target.value })
+                    }
+                  />
+                </label>
+              </>
+            ) : (
+              <p className="caveat">{t("backend.localNote")}</p>
+            )}
+            <div className="actions">
+              <button
+                type="button"
+                onClick={() => void saveBackend()}
+                disabled={busy !== "idle"}
+              >
+                {t("backend.save")}
+              </button>
+            </div>
+            {backend?.mode === "cloud" && (
+              <>
+                <ul className="probes">
+                  <li>
+                    <span className={backend.signedIn ? "ok" : "bad"}>
+                      {backend.signedIn ? "✓" : "✕"}
+                    </span>{" "}
+                    {backend.signedIn
+                      ? backend.email
+                        ? t("backend.signedInAs", { email: backend.email })
+                        : t("backend.signedIn")
+                      : t("backend.signedOut")}
+                  </li>
+                </ul>
+                <div className="actions">
+                  {backend.signedIn ? (
+                    <button type="button" onClick={() => void endSession()}>
+                      {t("backend.signOut")}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void startSession()}
+                      disabled={signingIn}
+                    >
+                      {signingIn ? t("backend.signingIn") : t("backend.signIn")}
+                    </button>
+                  )}
+                </div>
+                {backend.signedIn && (
+                  <p className="caveat">{t("backend.signOutNote")}</p>
+                )}
+              </>
+            )}
+          </>
+        )}
+    </>
+  );
+
+  // Docker is a requirement of the local backend and of nothing else, so its
+  // absence is not an error at all for someone using the paid service.
+  if (dockerError !== null && backend?.mode !== "cloud") {
     return (
       <section className="panel">
         <h2>{t("docker.missingTitle")}</h2>
         <p>{t("docker.missingBody")}</p>
         <pre className="detail">{dockerError}</pre>
+        {backendChooser}
         <div className="actions">
           <button type="button" onClick={() => void checkDocker()}>
             {t("docker.retry")}
@@ -205,6 +404,7 @@ export function StackScreen() {
     <section className="panel">
       <h2>{t("stack.title")}</h2>
       <p>{t("stack.intro")}</p>
+      {backendChooser}
 
       <p className="muted">
         {docker

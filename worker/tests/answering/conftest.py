@@ -14,6 +14,8 @@ import random
 import httpx
 import pytest
 
+from brainworker.graph.schema import LEGACY_TENANT_ID
+
 from brainworker import config
 
 QDRANT = os.environ.get("BRAIN_QDRANT_URL", "http://127.0.0.1:6433")
@@ -53,8 +55,8 @@ def indexed():
             cited = {
                 r["chunk_id"]
                 for r in graph.query(
-                    "citations_for_chunks",
-                    {"chunk_ids": [c for c in by_chunk if c], "limit": 200},
+            "citations_for_chunks",
+            {"tenant_id": LEGACY_TENANT_ID, "chunk_ids": [c for c in by_chunk if c], "limit": 200},
                 )
             }
     except GraphError as e:

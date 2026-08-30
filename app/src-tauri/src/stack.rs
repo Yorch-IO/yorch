@@ -35,15 +35,30 @@ pub const PROJECT_NAME: &str = "company-brain";
 pub const REPO_ROOT_ENV: &str = "COMPANY_BRAIN_REPO_ROOT";
 
 /// Services the app expects to exist, in the order the Stack screen lists them.
-pub const SERVICES: [&str; 7] = [
+///
+/// `migrate` is here even though it exits immediately, and deliberately: it is
+/// the one-shot that owns the catalog schema, and a migration that failed is a
+/// stack state an operator has to be able to see. It used to happen inside the
+/// API's startup, where it was invisible.
+pub const SERVICES: [&str; 8] = [
     "qdrant",
     "memgraph",
     "postgres",
     "temporal",
     "temporal-ui",
+    "migrate",
     "api",
     "worker",
 ];
+
+/// Declared in the compose file but behind a profile, so a default `up` never
+/// starts them.
+///
+/// `backend` is the paid control plane: a free, self-managed stack has no
+/// tenants and no Cognito pool, and listing it on the Stack screen would show a
+/// permanently stopped service that is not supposed to be running. It is here
+/// so `logs` can still reach it and so the inventory test stays exhaustive.
+pub const PROFILE_SERVICES: [&str; 1] = ["backend"];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -279,7 +294,7 @@ impl Stack {
     }
 
     pub async fn logs(&self, service: &str, tail: u32) -> Result<String> {
-        if !SERVICES.contains(&service) {
+        if !SERVICES.contains(&service) && !PROFILE_SERVICES.contains(&service) {
             return Err(AppError::Config(format!("unknown service {service:?}")));
         }
         let tail = tail.to_string();
@@ -594,11 +609,21 @@ mod tests {
             .filter_map(|l| {
                 let indent = l.len() - l.trim_start().len();
                 let trimmed = l.trim_end();
+                // Comments are skipped rather than shaped around. A prose line
+                // ending in a colon at this indent is ordinary in a file that
+                // explains itself, and reading one as a service name produced a
+                // failure naming the sentence.
+                if trimmed.trim_start().starts_with('#') {
+                    return None;
+                }
                 (indent == 2 && trimmed.ends_with(':')).then(|| trimmed.trim().trim_end_matches(':'))
             })
             .collect();
 
+        // Both lists, because the file declares both and a service missing
+        // from *either* is what this test exists to catch.
         let mut expected = SERVICES.to_vec();
+        expected.extend_from_slice(&PROFILE_SERVICES);
         expected.sort_unstable();
         let mut found = declared;
         found.sort_unstable();
@@ -639,7 +664,9 @@ mod tests {
             checked += 1;
         }
         // A scoping bug that matched nothing would make this test pass silently.
-        assert_eq!(checked, 7, "expected one published mapping per exposed port");
+        // Seven stores and control planes, plus the paid plane's own port.
+        // `migrate` publishes nothing: it runs and exits.
+        assert_eq!(checked, 8, "expected one published mapping per exposed port");
     }
 
     #[test]

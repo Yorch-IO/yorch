@@ -18,6 +18,7 @@ export type AppErrorKind =
   | "no_free_port"
   | "workspace_not_native"
   | "io"
+  | "not_signed_in"
   | "config";
 
 /**
@@ -28,6 +29,16 @@ export type AppErrorKind =
  * inside it to offer the right advice.
  */
 export type ControlErrorKind =
+  // The paid plane adds these. `tenant_scope_pending` is phase-1 only: the
+  // graph and the pipeline are not segmented by organisation yet, so they
+  // answer only for the legacy one — a refusal that names the reason rather
+  // than an empty result that would claim the corpus is empty.
+  | "unauthenticated"
+  | "unknown_user"
+  | "user_inactive"
+  | "no_membership"
+  | "tenant_required"
+  | "tenant_scope_pending"
   | "unsupported_format"
   | "run_not_found"
   | "gate_not_ready"
@@ -75,6 +86,7 @@ const GUIDANCE: Partial<Record<AppErrorKind, string>> = {
   compose_failed: "error.composeFailed",
   control_unreachable: "error.controlUnreachable",
   control_timeout: "error.controlTimeout",
+  not_signed_in: "error.notSignedIn",
 };
 
 /** Advice keyed on the control API's own `kind`, read out of the error body. */
@@ -88,6 +100,12 @@ const CONTROL_GUIDANCE: Partial<Record<ControlErrorKind, string>> = {
   rebuild_unavailable: "error.rebuildUnavailable",
   document_not_found: "error.documentNotFound",
   question_not_found: "error.questionNotFound",
+  unauthenticated: "error.unauthenticated",
+  unknown_user: "error.unknownUser",
+  user_inactive: "error.userInactive",
+  no_membership: "error.noMembership",
+  tenant_required: "error.tenantRequired",
+  tenant_scope_pending: "error.tenantScopePending",
 };
 
 /**
@@ -182,6 +200,18 @@ export interface IngestRequest {
   author?: string | null;
   folderId?: string | null;
   autoApprove?: boolean;
+}
+
+/** Where a staged file landed, as the *worker* sees it.
+ *
+ * `sourcePath` is meaningless on the user's own machine in cloud mode — it is a
+ * path inside the worker's container. It goes straight into `IngestRequest`
+ * and is never shown or opened.
+ */
+export interface StagedSource {
+  sourcePath: string;
+  sourceKey: string;
+  byteSize: number;
 }
 
 export interface StageOptions {
@@ -392,6 +422,33 @@ export interface Answer {
  * no third option and no fallback — without ADC the project id alone buys
  * nothing.
  */
+/**
+ * Which control plane the app talks to.
+ *
+ * The two speak the same 26 paths with the same payloads — parity the server
+ * side tests — so nothing above this type knows which one answered. `local` is
+ * the free stack on this machine; `cloud` is the paid, multi-tenant service.
+ *
+ * `signedIn` rather than a token: the webview has no reason to hold a bearer,
+ * and it only needs to know whether the paid mode is usable.
+ */
+export type BackendMode = "local" | "cloud";
+
+export interface BackendInfo {
+  mode: BackendMode;
+  baseUrl: string;
+  /** Sent as `X-Tenant-Id`. Empty is correct for an account in one organisation. */
+  tenantId: string;
+  /**
+   * A stored session exists. Still true while the ID token has expired: the
+   * refresh token is good for thirty days and the next request renews it, so
+   * reporting "signed out" for that would send a user to sign in once an hour.
+   */
+  signedIn: boolean;
+  /** Whose session, for the screen. Never used to authorize anything. */
+  email: string;
+}
+
 export interface ProviderSettings {
   projectId: string;
   configured: boolean;
@@ -752,6 +809,14 @@ export const api = {
   controlHealth: () => invoke<Health>("control_health"),
   controlPing: () => invoke<PingResult>("control_ping"),
 
+  /** Put a file where the worker can read it, whichever plane that is.
+   *
+   *  Local mode returns the same path back and copies nothing — the app and the
+   *  worker share a filesystem. Cloud mode uploads it and returns the container
+   *  path the worker will open. The screen calls this in both cases and uses
+   *  what it gets, so nothing in the UI has to know which plane is in use.
+   */
+  stageSource: (path: string) => invoke<StagedSource>("stage_source", { path }),
   ingestStart: (request: IngestRequest, options: StageOptions = DEFAULT_STAGES) =>
     invoke<StartedRun>("ingest_start", { request, options }),
   /** null while the free stages are still running — a normal first answer. */
@@ -791,6 +856,16 @@ export const api = {
   rebuildGate: (workflowId: string) =>
     invoke<RebuildReport | null>("rebuild_gate", { workflowId }),
 
+  backendSettings: () => invoke<BackendInfo>("backend_settings"),
+  /**
+   * Opens the hosted sign-in in the system browser and waits for it. The whole
+   * exchange happens in Rust: the PKCE verifier must not reach the webview,
+   * which is the point of the flow.
+   */
+  signIn: () => invoke<BackendInfo>("sign_in"),
+  signOut: () => invoke<BackendInfo>("sign_out"),
+  setBackendMode: (mode: BackendMode, baseUrl: string, tenantId: string) =>
+    invoke<BackendInfo>("set_backend_mode", { mode, baseUrl, tenantId }),
   providerSettings: () => invoke<ProviderSettings>("provider_settings"),
   /** Compose interpolates `.env` at `up` time, so this reaches the containers on
    *  the next `stackUp` and not before. The screen has to say so. */

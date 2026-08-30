@@ -195,7 +195,7 @@ def test_inv07_ledger_uses_reported_tokens(monkeypatch):
     assert entry.input_tokens == 1_000_000, "the reported count, not an estimate"
     # Exactly one million reported tokens costs exactly the per-million price,
     # with no character heuristic anywhere in the path.
-    assert entry.cost_usd() == pytest.approx(PRICES_PER_MILLION["gemini-embedding-2"][0])
+    assert entry.cost_usd() == pytest.approx(PRICES_PER_MILLION["gemini-embedding-001"][0])
     assert v.ledger.unpriced_stages() == []
 
 

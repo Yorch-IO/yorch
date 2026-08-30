@@ -39,3 +39,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if REFERENCE_MARKER in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_embed_cache(tmp_path_factory, monkeypatch):
+    """Never let the suite read or write the real embedding cache.
+
+    `Vertex.embed` caches to `cache/embed` relative to the process CWD, and the
+    suite runs from the repository root — so without this, two invariant tests
+    were silently served a cached vector instead of exercising the request they
+    exist to check (`test_inv06_embed_sends_exactly_one_instance` saw no request
+    body at all), and any test embedding text could write a fake vector into a
+    cache a real indexing run then trusts.
+
+    Same rule the root CLAUDE.md states for Qdrant: tests must never write to
+    the collection real work depends on. A cache is that collection's cheaper
+    cousin.
+    """
+    from docagent import vertex
+
+    monkeypatch.setattr(
+        vertex, "EMBED_CACHE_DIR", tmp_path_factory.mktemp("embed_cache")
+    )

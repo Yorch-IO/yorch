@@ -23,6 +23,12 @@ log = logging.getLogger(__name__)
 
 #: Payload keys a caller may filter on. An allowlist because filters arrive from
 #: the API and a free-form key would let a caller probe payload internals.
+#:
+#: **`tenant_id` is deliberately absent, and must stay absent.** It is not a
+#: narrowing a caller may request; it is the scope the caller is confined to,
+#: and it is written over whatever arrived just below. Adding it here would turn
+#: the one filter that decides whose corpus is searched into one a request can
+#: name.
 ALLOWED_FILTERS = frozenset({"document_id", "version_id", "kind", "library_id"})
 
 #: Cosine floor on the dense leg. Inherited from the engine, where it was tuned:
@@ -73,6 +79,10 @@ def search(
         k: v for k, v in question.filters.items() if k in ALLOWED_FILTERS
     }
     filters["library_id"] = question.library_id
+    # Assigned after the allowlist, so a caller who found a way to smuggle the
+    # key in still loses it here. Two guards for one property, because this is
+    # the property.
+    filters["tenant_id"] = question.tenant_id
 
     with Qdrant(settings.qdrant_url, settings.qdrant_collection) as q:
         gate_opts = SearchOpts(
@@ -124,14 +134,14 @@ def _expand(
             if plan.concepts:
                 added += _by_concept(graph, question, plan, found)
             if plan.template_id is not None:
-                added += _by_template(graph, plan, found, question.library_id)
+                added += _by_template(graph, plan, found, question)
             # Graph hits go after vector hits: the vector score is a similarity
             # to the actual question, while a graph hit is only topically
             # adjacent. Truncated before the two lookups below rather than after,
             # so neither pays for evidence that will not reach the prompt.
             kept = evidence + added[: max(0, question.top_k - len(evidence))]
-            _attach_citations(graph, kept)
-            _attach_claims(graph, kept, question.confidence_floor)
+            _attach_citations(graph, kept, question.tenant_id)
+            _attach_claims(graph, kept, question.confidence_floor, question.tenant_id)
     except GraphError as e:
         log.warning("graph expansion unavailable, answering from vectors: %s", e)
         return evidence
@@ -142,7 +152,10 @@ def _expand(
 def _by_concept(graph: Graph, question: Question, plan: Plan, found: set[str]) -> list[Evidence]:
     rows = graph.query(
         "concept_by_name",
-        {"canonical_names": [canonical_concept(c) for c in plan.concepts]},
+        {
+            "canonical_names": [canonical_concept(c) for c in plan.concepts],
+            "tenant_id": question.tenant_id,
+        },
     )
     if not rows:
         return []
@@ -155,16 +168,21 @@ def _by_concept(graph: Graph, question: Question, plan: Plan, found: set[str]) -
             # above are library-agnostic and this is what keeps the chunks they
             # reach in scope.
             "library_id": question.library_id,
+            "tenant_id": question.tenant_id,
             "confidence_floor": question.confidence_floor,
             "limit": question.top_k,
         },
     )
     return _hydrate(
-        graph, [r["id"] for r in chunks if r["id"] not in found], "graph", question.library_id
+        graph,
+        [r["id"] for r in chunks if r["id"] not in found],
+        "graph",
+        question.library_id,
+        question.tenant_id,
     )
 
 
-def _by_template(graph: Graph, plan: Plan, found: set[str], library_id: str) -> list[Evidence]:
+def _by_template(graph: Graph, plan: Plan, found: set[str], question: Question) -> list[Evidence]:
     """Turn whatever a template returned into chunks an answer can rest on.
 
     A row names a chunk in one of two ways, and both are read: templates over
@@ -187,11 +205,11 @@ def _by_template(graph: Graph, plan: Plan, found: set[str], library_id: str) -> 
                 found.add(candidate)
                 ids.append(candidate)
                 break
-    return _hydrate(graph, ids, "graph", library_id)
+    return _hydrate(graph, ids, "graph", question.library_id, question.tenant_id)
 
 
 def _hydrate(
-    graph: Graph, chunk_ids: list[str], source: str, library_id: str
+    graph: Graph, chunk_ids: list[str], source: str, library_id: str, tenant_id: str
 ) -> list[Evidence]:
     """Fetch the text of chunks the graph named, within one library.
 
@@ -199,9 +217,10 @@ def _hydrate(
     must be assemblable from the graph's own citation path even when a vector
     index has been rebuilt and its point ids have moved.
 
-    **This is the choke point for the library scope, and it is deliberately
-    belt-and-braces.** `chunks_for_concepts` already filters, but every path that
-    turns a graph result into `Evidence` goes through here — including
+    **This is the choke point for the library and the organisation scope, and it
+    is deliberately belt-and-braces.** `chunks_for_concepts` already filters, and
+    the registry now refuses to load a template that does not, but every path
+    that turns a graph result into `Evidence` goes through here — including
     `_by_template`, which extracts chunk ids from whatever template the planner
     chose. Filtering once, here, means a template added later cannot reopen the
     hole by forgetting to scope itself.
@@ -212,6 +231,7 @@ def _hydrate(
         """
         MATCH (d:Document)-[:HAS_VERSION]->(v:DocumentVersion)-[:HAS_CHUNK]->(c:Chunk)
         WHERE c.id IN $ids AND d.library_id = $library_id
+          AND d.tenant_id = $tenant_id
         RETURN c.id AS chunk_id, c.text AS text, c.kind AS kind,
                c.page AS page, v.id AS version_id, v.title AS title,
                d.id AS document_id
@@ -220,7 +240,7 @@ def _hydrate(
         # owning Document cannot be attributed to a library or shown a source,
         # and dropping it is the safe direction: an answer is not allowed to
         # cite something it cannot name the origin of.
-        {"ids": chunk_ids, "library_id": library_id},
+        {"ids": chunk_ids, "library_id": library_id, "tenant_id": tenant_id},
     )
     return [
         Evidence(
@@ -239,7 +259,7 @@ def _hydrate(
     ]
 
 
-def _attach_citations(graph: Graph, evidence: list[Evidence]) -> None:
+def _attach_citations(graph: Graph, evidence: list[Evidence], tenant_id: str) -> None:
     """Fill in each chunk's verifiable locator.
 
     Done in one query rather than per chunk: the answer step refuses any
@@ -249,7 +269,10 @@ def _attach_citations(graph: Graph, evidence: list[Evidence]) -> None:
     ids = [e.chunk_id for e in evidence if e.chunk_id]
     if not ids:
         return
-    rows = graph.query("citations_for_chunks", {"chunk_ids": ids, "limit": len(ids)})
+    rows = graph.query(
+        "citations_for_chunks",
+        {"chunk_ids": ids, "tenant_id": tenant_id, "limit": len(ids)},
+    )
     by_chunk = {r["chunk_id"]: r for r in rows}
     for e in evidence:
         if (row := by_chunk.get(e.chunk_id)) is not None:
@@ -259,7 +282,9 @@ def _attach_citations(graph: Graph, evidence: list[Evidence]) -> None:
                 e.breadcrumb = e.breadcrumb or row["section_title"]
 
 
-def _attach_claims(graph: Graph, evidence: list[Evidence], floor: float) -> None:
+def _attach_claims(
+    graph: Graph, evidence: list[Evidence], floor: float, tenant_id: str
+) -> None:
     """Attach what a model read out of each chunk, above the confidence floor.
 
     One query for the whole set, like the citations and for the same reason.
@@ -277,6 +302,7 @@ def _attach_claims(graph: Graph, evidence: list[Evidence], floor: float) -> None
         "claims_for_chunks",
         {
             "chunk_ids": ids,
+            "tenant_id": tenant_id,
             "confidence_floor": floor,
             "limit": len(ids) * CLAIMS_PER_CHUNK,
         },

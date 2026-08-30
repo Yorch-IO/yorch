@@ -19,6 +19,7 @@ from dataclasses import replace
 
 from temporalio import activity
 
+from ..graph.schema import LEGACY_TENANT_ID
 from ..artifacts import ArtifactRef, ArtifactStore
 from ..catalog import Catalog
 from ..graph import Graph
@@ -62,7 +63,11 @@ def _artifact_of(catalog: Catalog, run_id: str, name: str) -> dict | None:
 
 @activity.defn(name="load_rebuild_inputs")
 async def load_rebuild_inputs(
-    library_id: str, document_id: str, run_id: str, workflow_id: str
+    library_id: str,
+    document_id: str,
+    run_id: str,
+    workflow_id: str,
+    tenant: str = LEGACY_TENANT_ID,
 ) -> RebuildInputs:
     """Reassemble a rebuild's inputs from the catalog and one previous run.
 
@@ -73,7 +78,11 @@ async def load_rebuild_inputs(
     """
     settings = _settings()
     with Catalog(settings.database_url) as catalog:
-        document = catalog.document(document_id, library_id=library_id)
+        # Ownership: two ids are otherwise enough to rebuild — and re-project —
+        # another organisation's document.
+        document = catalog.document(
+            document_id, library_id=library_id, tenant_id=tenant
+        )
         if document is None:
             raise RebuildUnavailable(
                 f"no existe {document_id!r} en la biblioteca {library_id!r}"
@@ -105,6 +114,8 @@ async def load_rebuild_inputs(
         # filing it under 'reindex' would make the two indistinguishable in the
         # cost history — the one place a user can see where the money went.
         catalog.start_run(
+            # The rebuild belongs to whoever the document does.
+            tenant_id=document.tenant_id,
             run_id=run_id,
             workflow_id=workflow_id,
             kind="rebuild",
@@ -132,6 +143,13 @@ async def load_rebuild_inputs(
             title=document.title,
             author=document.author,
             reindex=True,
+            # Same reason as `Registered.tenant_id` below, and it was missed
+            # here: `project_structure` reads the tenant off *this* request, so
+            # without it a rebuild re-projected the document, its sections, its
+            # chunks and its citations into the legacy organisation under an
+            # unsalted version id. Nothing failed — retrieval returned the right
+            # text with no locator and no claim, which reads as an empty graph.
+            tenant_id=document.tenant_id,
         ),
         staged=Staged(
             content_sha256=version.content_sha256 if version else "",
@@ -145,6 +163,10 @@ async def load_rebuild_inputs(
             version_id=version_id,
             created=False,
             already_indexed=True,
+            # Read from the catalog rather than assumed: a rebuild replays
+            # somebody's artifacts and must project them back under the tenant
+            # they belong to, not under whoever pressed the button.
+            tenant_id=document.tenant_id,
         ),
         chunks=chunks,
         characters=characters,
@@ -171,8 +193,10 @@ async def replay_semantics(
     edges = [proj.SemanticEdge(**e) for e in payload.get("edges", [])]
     with Graph(settings.memgraph_url) as graph:
         graph.ensure_schema()
-        proj.project_concepts(graph, payload.get("concepts", []))
-        proj.project_claims(graph, payload.get("claims", []))
+        # A rebuild replays somebody's artifacts; it must project them back
+        # under the tenant they belong to, not under whoever is replaying.
+        proj.project_concepts(graph, payload.get("concepts", []), tenant=registered.tenant_id)
+        proj.project_claims(graph, payload.get("claims", []), tenant=registered.tenant_id)
         written = proj.project_semantic_edges(graph, edges)
 
     replayed = payload.get("claims", [])

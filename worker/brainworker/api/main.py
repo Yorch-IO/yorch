@@ -13,7 +13,6 @@ import asyncio
 import logging
 import pathlib
 import time
-from collections import OrderedDict
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -26,13 +25,14 @@ from temporalio.client import Client
 
 from .. import config
 from ..artifacts import ArtifactRef, ArtifactStore
-from ..catalog import Catalog, MigrationError, current_version, migrate
+from ..catalog import Catalog, MigrationError, current_version, require_schema
 from ..graph import DEFAULT_CONFIDENCE_FLOOR, Graph, GraphError
 from ..graph.queries import TemplateError, bind, get
-from ..graph.schema import SEMANTIC_EDGES
+from ..graph.schema import LEGACY_TENANT_ID, SEMANTIC_EDGES
 from ..activities.rebuild import REQUIRED_ARTIFACT
 from ..answering import Question, ask
 from ..pipeline import SUPPORTED_FORMATS, IngestRequest, StageOptions
+from ..workflows.ask import AskWorkflow
 from ..workflows.ingest import Approval, IngestWorkflow
 from ..workflows.rebuild import RebuildWorkflow
 from ..workflows.ping import PingWorkflow
@@ -49,11 +49,18 @@ _schema_error: str | None = "not attempted"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Migrate the catalog before serving.
+    """Check the catalog schema before serving; do not change it.
 
-    Running migrations here rather than as a separate step is what keeps the
-    schema version and the code that reads it from ever disagreeing: there is no
-    window in which a new binary talks to an old catalog.
+    This used to apply migrations, which is what kept the schema and the code
+    reading it from ever disagreeing. Prisma owns the schema now
+    (`yorch-tauri-backend/prisma/migrations`), applied by the `migrate` service
+    before either plane starts, so what is left here is the check that closes
+    the same window from the other side: the API asks whether the migration this
+    code was written against is present, and reports the answer on /health.
+
+    Startup still does not fail. A control plane whose /health is how an
+    operator finds out what is wrong must be able to answer while Postgres is
+    still coming up.
     """
     ensure_schema()
     yield
@@ -66,16 +73,16 @@ _client: Client | None = None
 
 
 def ensure_schema() -> str | None:
-    """Apply pending migrations. Returns the error, or None on success."""
+    """Check the catalog schema. Returns the error, or None when it is usable."""
     global _schema_error
     try:
-        applied = migrate(settings().database_url)
-        if applied:
-            log.info("catalog migrations applied: %s", ", ".join(applied))
+        applied = require_schema(settings().database_url)
+        log.info("catalog schema ok: %d migration(s), newest %s", len(applied), applied[-1])
         _schema_error = None
     except MigrationError as e:
-        # A migration that cannot be applied is a code/schema disagreement, not
-        # a transient outage. Retrying it every request would bury the cause.
+        # A schema behind the code is a version disagreement, not a transient
+        # outage, and it has a one-line fix the message names. Retrying it every
+        # request would bury the cause.
         log.error("catalog schema is unusable: %s", e)
         _schema_error = str(e)
     except Exception as e:
@@ -439,73 +446,23 @@ async def run_status(workflow_id: str) -> dict[str, Any]:
 # separates the two clocks: a client timeout now applies to a poll, and the
 # answer survives the window being closed.
 #
-# The store is this process's memory on purpose. Surviving an API restart would
-# need a table, and the remedy for a question lost that way is to ask it again —
-# the same reasoning that keeps a question out of Temporal. It is safe only
-# because uvicorn runs a single worker (`entrypoint.py`); passing `workers=N`
-# there would send a poll to a process that never saw the question.
-
-
-@dataclass
-class _Asked:
-    #: "running" | "done" | "failed"
-    state: str
-    started: float
-    answer: dict[str, Any] | None = None
-    error: dict[str, str] | None = None
-
-
-#: Questions asked, oldest first. Bounded, so a long-lived API does not keep one
-#: answer per question ever asked; a running question is never evicted.
-_ASKED: OrderedDict[str, _Asked] = OrderedDict()
-_ASKED_LIMIT = 64
-_ASKED_TTL = 3600.0
-
-#: Strong references to the tasks in flight. asyncio holds only a weak one, so a
-#: task nothing else refers to can be collected mid-await and cancelled with no
-#: error anywhere — the answer would simply never arrive.
-_ASKING: set[asyncio.Task[None]] = set()
-
-
-def _reap(now: float) -> None:
-    """Drop finished questions that are old, then oldest-first over the cap."""
-    for question_id, entry in list(_ASKED.items()):
-        if entry.state != "running" and now - entry.started > _ASKED_TTL:
-            del _ASKED[question_id]
-    while len(_ASKED) > _ASKED_LIMIT:
-        for question_id, entry in _ASKED.items():
-            if entry.state != "running":
-                del _ASKED[question_id]
-                break
-        else:
-            break
-
-
-async def _answer_question(question_id: str, s: Any, question: Question) -> None:
-    entry = _ASKED[question_id]
-    try:
-        result = await asyncio.to_thread(ask, s, question)
-    except Exception as e:
-        log.warning("question %s failed: %s", question_id, e)
-        entry.error = {"kind": "ask_failed", "message": f"{type(e).__name__}: {e}"}
-        entry.state = "failed"
-    else:
-        entry.answer = asdict(result)
-        # State last, always. A poll landing between these two lines must not
-        # see a finished question with nothing in it.
-        entry.state = "done"
+# **The store used to be this process's memory, and is now the workflow's.**
+# That was safe only while exactly one process could hold it — uvicorn runs a
+# single worker, and passing `workers=N` would have sent a poll to a process
+# that never saw the question. A second control plane makes that assumption
+# false by construction, so the state moved to `AskWorkflow`, which both planes
+# reach by id. Durability came along as a side effect rather than as the motive;
+# the reasoning in `answering/service.py` about a question not needing to be a
+# workflow was about *durability*, and it was right.
 
 
 @app.post("/ask")
 async def ask_question(question: Question) -> dict[str, Any]:
-    """Start answering, and return the id to collect the answer with.
-
-    Answering runs in a threadpool rather than a workflow: a question is
-    interactive and short-lived, and durability buys nothing when the remedy for
-    a failure is to ask again.
-    """
+    """Start answering, and return the id to collect the answer with."""
     s = settings()
     if not s.gemini.configured:
+        # Refused here as well as in the activity, so a misconfigured project is
+        # answered by the request that asked rather than by a failed run.
         raise HTTPException(
             status_code=503,
             detail={
@@ -514,20 +471,18 @@ async def ask_question(question: Question) -> dict[str, Any]:
             },
         )
 
-    now = time.monotonic()
-    _reap(now)
-    question_id = "q_" + uuid4().hex
-    _ASKED[question_id] = _Asked(state="running", started=now)
-
-    task = asyncio.create_task(_answer_question(question_id, s, question))
-    _ASKING.add(task)
-    task.add_done_callback(_ASKING.discard)
-
-    return {"question_id": question_id, "state": "running"}
+    client = await temporal()
+    handle = await client.start_workflow(
+        AskWorkflow.run,
+        question,
+        id=f"ask-{_ulid()}",
+        task_queue=s.task_queue,
+    )
+    return {"question_id": handle.id, "state": "running"}
 
 
 @app.get("/ask/{question_id}")
-def ask_result(question_id: str) -> dict[str, Any]:
+async def ask_result(question_id: str) -> dict[str, Any]:
     """Collect a question started earlier, or say it is still running.
 
     Note the three states an answer can carry. `answered` always has at least one
@@ -536,24 +491,29 @@ def ask_result(question_id: str) -> dict[str, Any]:
     support an answer. `off_corpus` means nothing cleared the similarity floor at
     all, which is a different problem with a different fix.
     """
-    entry = _ASKED.get(question_id)
-    if entry is None:
+    client = await temporal()
+    handle = client.get_workflow_handle(question_id)
+    try:
+        outcome = await handle.query(AskWorkflow.result)
+    except Exception as e:
         raise HTTPException(
             status_code=404,
             detail={
                 "kind": "question_not_found",
                 "message": (
-                    "Esa pregunta ya no está en vuelo. Las preguntas viven en la "
-                    "memoria de la API y se pierden si se reinicia."
+                    "Esa pregunta ya no está en vuelo. Las preguntas viven en el "
+                    "historial de Temporal y se pierden cuando expira su "
+                    f"retención ({type(e).__name__})."
                 ),
             },
-        )
+        ) from e
     return {
         "question_id": question_id,
-        "state": entry.state,
-        "answer": entry.answer,
-        "error": entry.error,
+        "state": outcome.state,
+        "answer": asdict(outcome.answer) if outcome.answer is not None else None,
+        "error": outcome.error,
     }
+
 
 
 # ---------------------------------------------------------------------------
@@ -583,13 +543,14 @@ def _graph_totals(s: config.Settings) -> dict[str, Any]:
     """
     try:
         with Graph(s.memgraph_url, timeout=PROBE_TIMEOUT) as graph:
+            scope = {"tenant_id": LEGACY_TENANT_ID}
             nodes = {
                 row.data["label"]: row.data["total"]
-                for row in graph.query("graph_node_counts", {})
+                for row in graph.query("graph_node_counts", scope)
             }
             edges = {
                 row.data["label"]: row.data["total"]
-                for row in graph.query("graph_edge_counts", {})
+                for row in graph.query("graph_edge_counts", scope)
             }
     except Exception as e:
         return {
@@ -628,8 +589,12 @@ def _catalog_totals(s: config.Settings, runs: int) -> dict[str, Any]:
     """
     try:
         with Catalog(s.database_url, pooled=False) as catalog:
-            totals = catalog.project_totals()
-            recent = catalog.recent_runs(runs)
+            # This plane is the free, self-managed, single-tenant one, and its
+            # organisation is the legacy one. Named at the call site rather
+            # than defaulted in the repository, so two planes reading one
+            # catalog cannot disagree about whose figures these are.
+            totals = catalog.project_totals(tenant_id=LEGACY_TENANT_ID)
+            recent = catalog.recent_runs(runs, tenant_id=LEGACY_TENANT_ID)
     except Exception as e:
         return {
             "catalog": {
@@ -703,7 +668,8 @@ def libraries() -> dict[str, Any]:
     """
     s = settings()
     with Catalog(s.database_url) as catalog:
-        rows = catalog.libraries()
+        # Single-tenant plane; see the note in the project summary above.
+        rows = catalog.libraries(tenant_id=LEGACY_TENANT_ID)
     return {
         "libraries": [
             {
@@ -1057,6 +1023,12 @@ async def reindex_document(
         # Without this the workflow short-circuits on `already_indexed`, which
         # is the whole point of the button.
         reindex=True,
+        # Named rather than defaulted, for the reason the rebuild path learned
+        # the hard way: `project_structure` reads the tenant off this request,
+        # and a request that leaves it out projects into the legacy
+        # organisation silently. This plane *is* that organisation, so here the
+        # value is right — saying it is what makes that a decision.
+        tenant_id=LEGACY_TENANT_ID,
     )
     client = await temporal()
     handle = await client.start_workflow(
@@ -1134,12 +1106,19 @@ async def rebuild_gate(workflow_id: str) -> dict[str, Any]:
 def _explore(template_id: str, args: dict[str, Any]) -> list[dict[str, Any]]:
     """Run one registered template and hand back plain rows.
 
+    The tenant is injected here rather than taken from the caller, and that is
+    the whole tenancy story of this plane: it is the free, self-managed one, it
+    has no accounts, and everything it can reach belongs to the tenant every
+    pre-tenancy row already carries. A route that accepted an organisation would
+    be offering a choice this product does not have.
+
     `Graph.query` validates the template and binds the parameters, which is where
     the limit clamp and the type checks live. A graph that is simply down is a
     503 naming the fix, not a 500: the answer is "start the stack", and a UI that
     can say so beats one echoing a Bolt error.
     """
     s = settings()
+    args = {**args, "tenant_id": LEGACY_TENANT_ID}
     try:
         # Validated *before* connecting, and the order is the point. `Graph.query`
         # binds after opening a session, so a malformed id sent while Memgraph

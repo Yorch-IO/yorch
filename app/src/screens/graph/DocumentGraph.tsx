@@ -57,6 +57,7 @@ import {
   STAGGER,
   truncate,
 } from "../../lib/radial";
+import { CONCEPT_RADIUS, GRAPH_ZOOM } from "./geometry";
 
 /** Concepts drawn in the inner ring. Past roughly this many the labels collide
  *  and the picture stops being readable, which defeats the point of drawing it.
@@ -64,6 +65,7 @@ import {
 const CONCEPTS = 12;
 /** Related documents in the outer ring, same reasoning. */
 const RELATED = 8;
+const ZOOM = GRAPH_ZOOM;
 
 /** Which node the pointer or the keyboard is on. One piece of state for both,
  *  which is what makes keyboard focus behave identically to hover instead of
@@ -73,7 +75,7 @@ type NodeKey = { kind: "concept" | "doc" | "centre"; id: string } | null;
 /** The legend's entries, in reading order. Rendered from this rather than
  *  written out five times, and the i18n scanner accepts the resulting
  *  `graph.legend.${…}` lookup as using the whole group. */
-export const LEGEND = ["concept", "doc", "size", "weight", "dashed"] as const;
+export const LEGEND = ["concept", "doc", "weight", "dashed"] as const;
 
 /** What the active node touches. The centre touches every edge there is, so
  *  hovering it lights the whole picture rather than dimming it — anything else
@@ -131,12 +133,6 @@ export function Swatch({ kind }: { kind: (typeof LEGEND)[number] }) {
           <rect className="shape" x={2} y={3} width={22} height={10} rx={2} />
         </g>
       )}
-      {kind === "size" && (
-        <g className="node concept is-active">
-          <circle className="shape" cx={6} cy={8} r={3} />
-          <circle className="shape" cx={18} cy={8} r={6} />
-        </g>
-      )}
       {kind === "weight" && (
         <>
           {/* Solid, so this swatch reads as "thin against thick" and the one
@@ -183,6 +179,8 @@ export function DocumentGraph({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [active, setActive] = useState<NodeKey>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   /** The outer document held up against the centre, by version id.
    *
    *  A count answers "these two share 57 concepts" and leaves the only question
@@ -203,6 +201,8 @@ export function DocumentGraph({
   const opening = useRef<string | null>(null);
   const comparing = useRef<string | null>(null);
   const detail = useRef<HTMLDivElement | null>(null);
+  const canvas = useRef<SVGSVGElement | null>(null);
+  const dragging = useRef<{ x: number; y: number } | null>(null);
 
   // The shelf, so the centre can be chosen and so a related document — which
   // arrives as a *version* id — can be re-centred on.
@@ -497,6 +497,37 @@ export function DocumentGraph({
     }
   };
 
+  const resetView = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  const zoomBy = useCallback((factor: number) => {
+    setZoom((current) => Math.min(ZOOM.MAX, Math.max(ZOOM.MIN, current * factor)));
+  }, []);
+
+  useEffect(() => {
+    const node = canvas.current;
+    if (node === null) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      zoomBy(e.deltaY < 0 ? ZOOM.STEP : 1 / ZOOM.STEP);
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, [zoomBy]);
+
+  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    dragging.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+  };
+  const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const from = dragging.current;
+    if (from !== null) setPan({ x: e.clientX - from.x, y: e.clientY - from.y });
+  };
+  const endDrag = () => {
+    dragging.current = null;
+  };
+
   // No heading and no intro: the shell owns both, because it is the shell that
   // knows which of the two views is showing and therefore which sentence
   // describes it.
@@ -523,6 +554,20 @@ export function DocumentGraph({
         {floor !== null && <Proposed floor={floor} />}
       </div>
 
+      {versionId !== null && (
+        <div className="actions graph-zoom">
+          <button type="button" onClick={() => zoomBy(ZOOM.STEP)}>
+            {t("graph.zoomIn")}
+          </button>
+          <button type="button" onClick={() => zoomBy(1 / ZOOM.STEP)}>
+            {t("graph.zoomOut")}
+          </button>
+          <button type="button" onClick={resetView}>
+            {t("graph.reset")}
+          </button>
+        </div>
+      )}
+
       {error !== null && (
         <p className="warn">
           {t("graph.failed")} — {errorMessage(error)}
@@ -537,14 +582,20 @@ export function DocumentGraph({
         <div className="graph-layout">
           <div className="graph-main">
             <svg
+              ref={canvas}
               className={`graph-canvas ${active !== null ? "is-probing" : ""}`}
               viewBox={`0 0 ${GEOM.W} ${GEOM.H}`}
               role="group"
               aria-label={t("graph.alt", { title })}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={endDrag}
+              onPointerLeave={endDrag}
             >
               {/* Paint order, top to bottom of this block: edges, document
                   cards, the centre, then concepts. Concepts are last so nothing
                   can cover one. Do not reorder. */}
+              <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
               {placedConcepts.map(({ item, x, y }) => (
                 <line
                   key={`e-${item.id}`}
@@ -660,13 +711,14 @@ export function DocumentGraph({
                   })}
                 </text>
               </g>
+              </g>
 
               {/* Concepts, last: clicking one lists the claims behind it. */}
               {placedConcepts.map(({ item, x, y, angle }) => {
-                const r = scale(item.mentions, maxMentions, 9, 11);
-                const a = labelAnchor(angle, r);
+                const a = labelAnchor(angle, CONCEPT_RADIUS);
                 const label = conceptLabel(item);
                 const isOpen = openConcept?.id === item.id;
+                const isHovered = active?.kind === "concept" && active.id === item.id;
                 const open = () => void showClaims(item);
                 // Only meaningful while a comparison is open: `sharedIds` is
                 // null otherwise and both classes stay off, which is what keeps
@@ -679,8 +731,8 @@ export function DocumentGraph({
                       incident(active, "concept", item.id) ? "is-active" : ""
                     } ${isShared ? "is-shared" : ""} ${
                       sharedIds !== null && !isShared ? "is-faded" : ""
-                    }`}
-                    transform={`translate(${x} ${y})`}
+                    } ${isHovered ? "is-hovered" : ""}`}
+                    transform={`translate(${pan.x} ${pan.y}) scale(${zoom}) translate(${x} ${y}) scale(${1 / zoom})`}
                     onClick={open}
                     role="button"
                     tabIndex={0}
@@ -693,18 +745,17 @@ export function DocumentGraph({
                     onBlur={() => setActive(null)}
                   >
                     <title>{label}</title>
-                    {/* A comfortable target: the circle itself is 18px across at
-                        the bottom of the mention scale. */}
-                    <circle className="hit" r={Math.max(r, GEOM.HIT_R)} />
-                    <circle className="shape" r={r} />
-                    {isOpen && <circle className="ring" r={r + 5} />}
+                    <circle className="hit" r={GEOM.HIT_R} />
+                    <circle className="shape" r={CONCEPT_RADIUS} />
+                    {isOpen && <circle className="ring" r={CONCEPT_RADIUS + 5} />}
                     <text
+                      className="concept-label"
                       x={a.dx}
                       y={a.dy}
                       textAnchor={a.anchor}
                       dominantBaseline={a.baseline}
                     >
-                      {truncate(item.name, LABEL.CONCEPT_CHARS)}
+                      {isHovered ? item.name : truncate(item.name, LABEL.CONCEPT_CHARS)}
                     </text>
                   </g>
                 );

@@ -19,6 +19,7 @@ pytest.importorskip("fastapi.testclient")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from brainworker.graph.schema import LEGACY_TENANT_ID
 from brainworker.api import main  # noqa: E402
 from brainworker.catalog.repo import ProjectTotals, RunSummary  # noqa: E402
 from brainworker.graph import GraphError  # noqa: E402
@@ -186,10 +187,23 @@ class _FakeCatalog:
     def __exit__(self, *_):
         return False
 
-    def project_totals(self):
+    def project_totals(self, *, tenant_id: str):
+        self.asked_as = tenant_id
         return self._totals
 
-    def recent_runs(self, limit: int = 10):
+    def libraries(self, *, tenant_id: str):
+        self.asked_as = tenant_id
+        return [
+            {
+                "id": "lib_1",
+                "name": "Una",
+                "language": "es",
+                "documents": 3,
+                "indexed_versions": 2,
+            }
+        ]
+
+    def recent_runs(self, limit: int = 10, *, tenant_id: str):
         return self._runs[:limit]
 
 
@@ -355,3 +369,31 @@ def test_a_concepts_degree_is_the_one_the_database_counted(client, called):
     body = client.get(f"/libraries/{LIB}/graph").json()
     gracia = next(c for c in body["concepts"] if c["id"] == "con_a")
     assert gracia["documents"] == 2
+
+
+# ---------------------------------------------------------------------------
+# `/libraries`
+#
+# It had no test at all, and it broke: `Catalog.libraries` gained a required
+# `tenant_id` and this call site was missed, so the route 500ed while the whole
+# suite stayed green. The double's signature is the real one on purpose — a
+# double more permissive than the function it stands for cannot catch this.
+# ---------------------------------------------------------------------------
+
+
+def test_the_library_list_is_served(client, monkeypatch):
+    _catalog(monkeypatch, _FakeCatalog())
+    r = client.get("/libraries")
+    assert r.status_code == 200
+    assert [row["id"] for row in r.json()["libraries"]] == ["lib_1"]
+
+
+def test_the_free_plane_asks_as_the_legacy_organisation(client, monkeypatch):
+    """This plane is single-tenant. Asking without naming an organisation would
+    list every customer's libraries to a local install sharing one catalog."""
+    catalog = _FakeCatalog()
+    _catalog(monkeypatch, catalog)
+    client.get("/libraries")
+    assert catalog.asked_as == LEGACY_TENANT_ID
+    client.get("/project-summary")
+    assert catalog.asked_as == LEGACY_TENANT_ID

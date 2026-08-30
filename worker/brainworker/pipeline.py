@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .artifacts import ArtifactRef
+from .graph.schema import LEGACY_TENANT_ID
 
 #: Formats V1 accepts. The engine's extractor registry is the authority; this
 #: list exists so the API can refuse an unsupported file *before* a workflow
@@ -49,6 +50,15 @@ class IngestRequest:
     #: payloads onto activity parameters by arity, so changing an arity breaks
     #: every history in flight, while an absent field simply takes its default.
     reindex: bool = False
+    #: Whose corpus this becomes. Everything derived from the run carries it:
+    #: the catalog rows, the Qdrant payloads, the graph nodes — and the *ids*,
+    #: since `version_id` and `concept_id` are salted with it.
+    #:
+    #: A defaulted field rather than a required one, for the reason `reindex`
+    #: gives above and for one of its own: the free, self-managed plane is
+    #: single-tenant by construction and *is* the legacy tenant, so naming it
+    #: there would be ceremony. The paid plane always sets it explicitly.
+    tenant_id: str = LEGACY_TENANT_ID
 
 
 @dataclass
@@ -207,6 +217,11 @@ class Registered:
     #: Set when the identical content is already fully indexed, in which case
     #: the run links the new path and stops without spending anything.
     already_indexed: bool
+    #: Carried forward so the paid stages can derive tenant-salted ids without a
+    #: new activity parameter — Temporal maps payloads onto parameters by arity,
+    #: and an absent field takes its default where a changed arity breaks every
+    #: history in flight.
+    tenant_id: str = LEGACY_TENANT_ID
 
 
 @dataclass

@@ -128,7 +128,14 @@
     "rebuildUnavailable": "No run still holds this document's artifacts, so there is nothing to replay without paying again.",
     "documentNotFound": "That document is no longer in this library. Another window may have removed it — refresh the list.",
     "questionNotFound": "That question is no longer in flight. Questions live in the control API's memory and are lost if it restarts — ask it again.",
-    "controlTimeout": "The control API is running but did not finish in time. That is not a stack still coming up — check the API's logs, and if you have just rebuilt one half of the app, rebuild the other."
+    "controlTimeout": "The control API is running but did not finish in time. That is not a stack still coming up — check the API's logs, and if you have just rebuilt one half of the app, rebuild the other.",
+    "notSignedIn": "Sign in to the paid service before using it, or switch back to the local backend.",
+    "unauthenticated": "The session is no longer valid. Sign in again.",
+    "unknownUser": "That identity is genuine but has no account here yet. An operator has to add it.",
+    "userInactive": "This account has been disabled.",
+    "noMembership": "This account does not belong to that organisation.",
+    "tenantRequired": "This account belongs to several organisations. Choose one under Backend.",
+    "tenantScopePending": "That view is not segmented by organisation yet, so it is only available for the original one."
   },
   "library": {
     "title": "Library",
@@ -409,5 +416,25 @@
       "atribuido": "attributed to another",
       "sin_estado": "undetermined"
     }
+  },
+  "backend": {
+    "title": "Backend",
+    "intro": "Two products, one app. The local backend is the stack on this machine: free, self-managed, reachable only from here. The paid service is hosted and multi-tenant. Both answer the same requests, so nothing else in the app changes.",
+    "mode": "Which backend",
+    "local": "Local (free, self-managed)",
+    "cloud": "Paid service",
+    "baseUrl": "Service address",
+    "baseUrlHint": "https://…",
+    "tenant": "Organisation",
+    "tenantHint": "Leave empty if you belong to only one",
+    "save": "Save",
+    "signedIn": "Signed in.",
+    "signedOut": "Not signed in — the paid service refuses every request until you are.",
+    "localNote": "The local backend needs no sign-in: it is bound to this machine and has no accounts.",
+    "signIn": "Sign in",
+    "signOut": "Sign out",
+    "signingIn": "Waiting for the browser…",
+    "signedInAs": "Signed in as {{email}}.",
+    "signOutNote": "Signing out forgets the session on this machine. It does not end it anywhere else."
   }
 }

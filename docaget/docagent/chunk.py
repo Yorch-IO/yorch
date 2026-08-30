@@ -49,6 +49,18 @@ class ChunkRules:
     # A paragraph averaging one ¿ per this many chars or denser is a question
     # block, not prose. See classify_kind.
     question_chars_per_mark: int = 300
+    #: How many ¿ a paragraph must carry before the density rule may fire at all.
+    #:
+    #: The density rule exists for the one question block that does not begin
+    #: with a number ("Freud\n27. ¿Hasta dónde…"), and the reference book put
+    #: 17 marks in 2054 chars against prose at one per 800-4300. That gap is why
+    #: one mark was enough there — its paragraphs are long. On a rhetorical
+    #: essay split at the line pitch, a 280-char paragraph with a single
+    #: rhetorical ¿ clears 300 chars/mark on its own: 62 paragraphs of prose
+    #: were tagged `preguntas` on 01_RetoDeDios_INT-S.pdf. A block of review
+    #: questions is recognisable by carrying *several* marks, so corroboration
+    #: costs nothing on the documents the threshold was measured against.
+    question_min_marks: int = 2
     # Heading guards, copied from html/main.go's headingLevel.
     heading_l1_max: int = 40
     heading_l2_max: int = 120
@@ -259,6 +271,16 @@ def heading_level(s: str, rules: ChunkRules) -> int:
         return 2 if len(s) <= rules.heading_l2_max else 0
     if not HEADING_RE.match(s):
         return 0
+    if sum(c.isdigit() for c in s) > sum(c.isalpha() for c in s):
+        # A "numbered heading" with more digits than letters is a printer's
+        # signature line or a run of page numbers, not a heading. Measured on
+        # 02-PuertasEternas: "12 13 14 15 16 v6 5 4 3 2 1" (18 digits, 1 letter)
+        # read as chapter 12 and became the breadcrumb of 13 chunks — the whole
+        # epigraph and introduction, including four named sections. The length
+        # cap above cannot catch it: at 27 chars it is well under heading_l1_max.
+        # A real numbered heading always carries its title ("2.1.1 Foo" is 3 and
+        # 3, which this lets through).
+        return 0
     prefix = s.split()[0].rstrip(".")
     level = prefix.count(".") + 1
     if level == 1 and len(s) > rules.heading_l1_max:
@@ -289,11 +311,28 @@ def classify_kind(text: str, rules: ChunkRules) -> str:
     """
     if heading_level(text, rules) > 0:
         return KIND_BODY  # callers normally handle headings; be safe if not
+    if TOC_LINE_RE.search(text):
+        # A table-of-contents line ("10. El «concordato evangélico»......105") is
+        # numbered and dotted, so `NUMBERED_ITEM_RE` reads it as a review
+        # question. `heading_level` already refuses it for the same reason and
+        # returns 0; this classifier took that 0 and did not consult the guard.
+        # Measured on 01_RetoDeDios_INT-S.pdf: 99 index lines tagged `preguntas`,
+        # each one also resetting the section path (invariant #11).
+        return KIND_BODY
     if NUMBERED_ITEM_RE.match(text):
         return KIND_QUESTIONS
     n = text.count("¿")
-    if n > 0 and n * rules.question_chars_per_mark >= len(text.encode("utf-8")):
-        return KIND_QUESTIONS
+    if n and n * rules.question_chars_per_mark >= len(text.encode("utf-8")):
+        # Density alone is not enough on a rhetorical essay. The rule exists for
+        # the block that does not *begin* with a number but still is one
+        # ("Freud\n27. ¿Hasta dónde…"), so a single mark must be corroborated by
+        # a numbered item somewhere inside the paragraph; several marks
+        # corroborate themselves. See `question_min_marks`.
+        numbered_inside = any(
+            NUMBERED_ITEM_RE.match(line) for line in text.splitlines()
+        )
+        if n >= rules.question_min_marks or numbered_inside:
+            return KIND_QUESTIONS
     if FOOTNOTE_RE.match(text):
         return KIND_FOOTNOTE
     return KIND_BODY

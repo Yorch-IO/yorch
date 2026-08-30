@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-Two things, in one checkout:
+Three things, and one of them is **not** in this checkout:
 
 - **`docaget/`** — a working, measured document-indexing engine (Python package
   `docagent`). Extracts, chunks with byte-exact spans, LLM-corrects, embeds via
@@ -12,6 +12,14 @@ Two things, in one checkout:
   per-document-family profiles, and measures retrieval quality against a
   synthetic eval set. Driven by a CLI, orchestrated by LangGraph. It has been
   used on a real ~75-document Spanish theology corpus.
+- **`../yorch-tauri-backend`** — a **second HTTP control plane**, in its own
+  checkout beside this one. NestJS, multi-tenant, Cognito-authenticated: the
+  *paid* product. The FastAPI plane in `worker/` is the *free, self-managed*
+  one, and it is not going away. Both serve the same 26 paths with the same
+  payloads, both read the same Postgres, Memgraph, Qdrant and Temporal worker,
+  and the desktop app picks one with a backend-mode setting. That repository has
+  its own `CLAUDE.md`; the entries below are the parts that constrain work
+  *here*.
 - **`app/` + `worker/` + `infra/`** — **Company Brain**, a Tauri v2 desktop app
   being built *around* that engine: a durable Temporal pipeline with an approval
   gate before anything is paid for, a Postgres catalog for provenance and cost,
@@ -439,6 +447,126 @@ driver, so there is one owner of the schema and one set of models.
   *not* "reindex with correction off": correction changes the text's length, so
   that produces different `char_span`s and a silently different index.
 
+### Tenancy, and the rules it added here
+
+Two planes over one set of stores. Everything below is a constraint on code in
+this repository; the plane itself is documented in its own checkout.
+
+**Taken end to end on 2026-08-28**, which is what makes the gaps listed under
+"What is not built yet" gaps rather than guesses. A second organisation was
+seeded (`acme`), given a Cognito user and a library, and a real 226 KB PDF was
+uploaded through `POST /uploads`, indexed through the approval gate — **$0.1255
+billed against a $0.135–$0.19 estimate**, so the range over-reported, which is
+the direction it is supposed to fail — and answered, with 5 verified citations
+carrying byte-exact locators. Isolation was checked in both directions against
+the running stores afterwards: legacy holds 72 documents, 69 indexed versions,
+4,721 Qdrant points and 69 `DocumentVersion` nodes, all unchanged; acme holds 1
+document, 1 indexed version and 13 points; and **no row, node or point in any of
+the three stores lacks a tenant**. Three real leaks were found by doing this —
+the entries below on field defaults, on listings and on library ids — none of
+them failed anything, which is why none of them had been found by reading.
+
+- **The error body's `detail.kind` is a client contract.** `app/src/lib/api.ts`
+  parses it and keys its guidance map on it, so both planes emit
+  `{"detail": {"kind": …, "message": …}}` and an unmatched route emits FastAPI's
+  bare `{"detail": "Not Found"}` — a kind the guidance map has never heard of is
+  worse than no kind. The paid plane reproduces four FastAPI quirks for the same
+  reason: `/ingest`'s embedded body against `reindex`'s bare one, `approved` as
+  a lowercase *string*, `@property` fields absent from every payload, and
+  `/runs/{id}` omitting `semantics` rather than zeroing it.
+
+- **Derived ids are salted with the tenant, except the legacy one's.**
+  `version_id` and `concept_id` take a tenant; everything downstream (`sec_`,
+  `chk_`, `clm_`, `cit_`) inherits it. `_salt()` returns nothing for the legacy
+  tenant, and that branch is load-bearing rather than tidy: salting
+  unconditionally would have invalidated every id in the graph and every Qdrant
+  point at once, and the projections can only be rebuilt from artifacts.
+  **Measured 2026-08-26: 69 indexed versions, all 69 with a `chunks` artifact
+  recorded, and only 31 with the file still on disk.** The other 38 would have
+  needed the full pipeline re-run, correction included, against source files
+  many of them no longer record. `test_the_legacy_tenants_ids_are_exactly_what_they_were`
+  is what stops somebody tidying the branch away.
+
+- **A salted id is not authorization.** It is `digest(tenant, content)`, and a
+  tenant id is a value its own members hold — it travels in `X-Tenant-Id`. A
+  member of A who has the same file as B can recompute B's `ver_`. Salting stops
+  collisions; only a predicate refuses a read. That is why
+  `graph/queries.py::validate_template` **refuses to load a template that does
+  not use `$tenant_id`** — checked as a used parameter, not by looking for a
+  `WHERE`, because where the predicate belongs differs per template.
+
+- **`ALLOWED_FILTERS` must never contain `tenant_id`.** It is not a narrowing a
+  caller may request; it is the scope the caller is confined to, and
+  `retrieve.search` assigns it after the allowlist so a smuggled key loses
+  anyway. Two guards for one property, because this is the property.
+
+- **The workspace is per organisation, and the legacy root excludes
+  `tenants/`.** `Paths.for_tenant` gives the legacy tenant the volume itself —
+  same reasoning as the ids: a `run_artifact` row stores a workspace-relative
+  path. `contains()` therefore has a second clause, and it is not symmetry:
+  without it the one organisation that predates tenancy could read every one
+  that came after. A test found that after the first version shipped.
+  `stage_source` checks it before hashing, because that activity is handed a
+  path and reads whatever is there.
+
+- **A tenant default on a *field* is the same mistake as one on a column, and
+  it cost a whole organisation's graph.** `VersionNode.tenant_id` defaulted to
+  `LEGACY_TENANT_ID` with the same honest reasoning the columns had — a replay
+  of an old `semantics.json` should land where its rows already are. All four
+  sites that build one forgot to pass it: the three in `activities/ingest.py`
+  and the `IngestRequest` that `load_rebuild_inputs` reassembles, two lines
+  above a comment that gets it right for `Registered`. Measured on a real import
+  2026-08-28: a paying organisation's `Document`, `DocumentVersion`, 5
+  `Section`s, 13 `Chunk`s and 13 `Citation`s went into the legacy tenant's graph
+  under an **unsalted** version id, while its 50 `Concept`s went in correctly and
+  were orphaned. **Nothing failed.** Retrieval returned the right chunks, with
+  an empty `locator` and no claims — and since `answer._verify` drops a citation
+  whose chunk has no locator, the answer came back with none. That reads as a
+  graph nobody has projected yet, not as a leak. The field is required now, and
+  a caller that means the legacy tenant says so — one word at the two sites where
+  that is true. Four tests pin the four sites, because "required" stops a *new*
+  site being written without a tenant and says nothing about one passing the
+  wrong one.
+
+- **A listing has no id to resolve ownership through, so the predicate is the
+  whole boundary.** `Catalog.libraries`, `project_totals` and `recent_runs`
+  enumerated across every organisation; the free plane's `/libraries` listed a
+  paid tenant's libraries the moment one existed. All three take a required
+  `tenant_id` now and the FastAPI plane names `LEGACY_TENANT_ID` at the call
+  site, because that plane *is* that organisation and saying so is what makes it
+  a decision. `project_totals` carries the predicate in each of its eight scalar
+  subqueries — there is no join to hang one outer filter on — so the test seeds
+  two organisations and asserts each figure rather than the row.
+
+- **The library id is chosen by the client, so `ensure_library` checks who owns
+  it.** It arrives on every `IngestRequest` as a plain string, and
+  `lib_teologia` is a value two organisations pick independently. The upsert's
+  `ON CONFLICT (id) DO UPDATE` now carries `WHERE library.tenant_id =
+  EXCLUDED.tenant_id` and raises `LibraryOwnedByAnother` when no row comes back.
+  Without it the second organisation's ingest renamed the first's library and
+  attached its documents to a row *neither* could list, since every listing
+  filters on `tenant_id` and the two then disagree.
+
+- **No column carries a tenant default any more.** Phase 1 used one so the free
+  plane and every activity could keep writing untouched; phase 2 threaded a
+  tenant through `IngestRequest`, `Registered` and the eight `repo.py` writers
+  and took it off. Three of the eight — `run_artifact`, `cost_entry`,
+  `profile_warning` — *derive* it in the INSERT from the run or version they
+  hang off, so an artifact and its run cannot disagree about who owns them.
+
+**Two things tenancy does not cover, and why.** `PROFILE_DIR` and `CACHE_DIR` in
+`docagent` are module constants relative to the process CWD, and the worker runs
+activities concurrently, so a chdir per run is unsafe. The correction cache is
+content-addressed (`sha256(prompt_version + text)`), so sharing an entry requires
+already holding that paragraph — a saving, not a channel. **Profiles are the open
+one**: a profile reused across organisations by structural fingerprint carries
+its `header_patterns`, which derive from a book's running header and are often
+its title. The `evalset` and `scores` do *not* travel — `n_load_profile` drops
+them when `learned_from` names a different file, and across organisations it
+always does. Closing it needs `docagent` to accept an explicit root instead of
+resolving from the CWD; it was judged not to block the paid plane, and this
+paragraph is the record of that judgement.
+
 ### Why the approval gate sits where it does
 
 From `docaget/costo.json`, a real measured run: correction $0.0334, eval-set
@@ -452,9 +580,33 @@ Note the ordering constraint: correction runs *before* chunking because it
 changes the text's length, which would invalidate every `char_span`. Previewed
 chunks are therefore not the final chunks when correction is on.
 
+## The work is not under version control, and one plane is not in git at all
+
+Measured 2026-08-28, and it is first here because it is the only entry on the
+list that cannot be redone from what is on disk.
+
+- **`../yorch-tauri-backend` has no `.git`.** The whole paid plane — the Prisma
+  schema, the three migrations, the 28 routes, the ported template registry, its
+  95 tests — exists in exactly one place, with no history and no second copy.
+- **This checkout has 87 uncommitted files** over `1bb2f95`. Everything tenancy
+  touched, in both planes, is a working-tree change.
+
+That combination is not merely untidy: it removes the ordinary way of undoing an
+experiment. `git checkout -- <file>` here reverts to a commit that predates the
+entire feature rather than to the last edit, and on 2026-08-28 it silently wiped
+every phase-2 change in `worker/brainworker/graph/projection.py` — 25 tenant
+references, `VersionNode.tenant_id` and `backfill_tenant`. It was recovered only
+because the code is baked into `company-brain-worker:dev` and could be read back
+out with `docker exec … cat /usr/local/lib/python3.13/site-packages/…`. That is
+luck standing in for a backup.
+
+Until there is a commit, copy a file to a scratch directory before experimenting
+on it, and restore from there.
+
 ## What is not built yet
 
-Verified against the code on 2026-08-20 and again on 2026-08-21, not remembered.
+Verified against the code on 2026-08-20, again on 2026-08-21, and again against
+the running stores on 2026-08-28, not remembered.
 Ordered by what it costs to leave alone. Details and measurements live in
 `doc/COMPANY_BRAIN.md`.
 
@@ -504,7 +656,8 @@ enabling step is one column written where the profile is resolved; until it
 exists, "per-family would be tighter" is a hypothesis, and `OUTPUT_SPREAD` is what
 the corpus actually supports.
 
-**214 orphan `Claim` nodes are still in the graph.** Left by a removal path that
+**214 orphan `Claim` nodes are still in the graph** — counted again on
+2026-08-28, still 214. Left by a removal path that
 predates the current one — `_DELETE_VERSION` deletes claims before chunks, so
 nothing live produces them. Until 2026-08-21 all 214 were *visible*, across 155
 concepts including "Jesús" and "Pablo": `claims_about_concept` matched on `ABOUT`
@@ -513,6 +666,29 @@ source" and which resolves to nothing. That code is fixed — the template requi
 the chunk, which is how `claims_for_chunks` always reached them — which is why
 this sits here and not in the defect list below. What remains is debris in real
 data, and deleting it is a decision rather than a change.
+
+**The OS keychain holds the session; the provider half has nothing to hold.**
+`app/src-tauri/src/keychain.rs` stores secrets in Secret Service / Keychain
+Services / Credential Manager and falls back to the `0600` file the app used
+before, reporting which one answered rather than inferring it. The PKCE session
+moved there on 2026-08-28, migrating `session.json` on the next write and
+deleting it — the entry is keyed by a digest of the app data directory, because
+a bare `"session"` key is per-user and not per-install, so two installs would
+sign each other out and the test suite clobbered the developer's own entry
+before doing exactly that.
+
+The provider half is **not pending, it is empty**, and that was checked rather
+than assumed: `ensure_secrets_file` creates `secrets.env` and *nothing in the
+codebase ever writes to it*. Vertex has no key at all — it uses ADC, a mounted
+file — so the comment in that function describes a pipe with nothing in it. The
+day a provider with a key exists, it is two `keychain::Entry` calls and the file
+is materialised from the entry at launch.
+
+**`secret_store` is reported and rendered nowhere.** `BackendInfo` carries
+`"keychain"` or `"file"` — a token rather than prose, so the wording can live in
+the two i18n bundles the way an error `kind` does. No screen reads it and neither
+bundle has the key, so the docstring's claim that "the UI can tell the user" is
+currently false. It is one key per bundle and one line on the Services screen.
 
 **The Ask history is persisted; nothing else in the UI is.** It goes to
 localStorage beside the selected library, entries capped at 20, guarded the same
@@ -537,6 +713,23 @@ gate's estimate table — where looking caught two defects `vitest` cannot see, 
 broke with its dash alone on a line. What tests cannot see is
 what is left — three-column sizing at a real window width, the stacked layout
 below 60rem, and dark mode.
+
+**Three more things have never been touched by a person, as of 2026-08-28.** The
+backend switch on the Services screen, the hosted-UI sign-in, and the upload path
+on the Import screen. All three were verified the way the rest of this list was
+not: the switch and the guidance map by component tests, the upload end to end
+over HTTP against the running paid plane, and staging by
+`ImportScreen.staging.test.tsx`, which asserts the ingest is sent the path
+staging *returned* rather than the one the user typed.
+
+**The sign-in is the one that matters, because nothing has exercised its actual
+mechanism.** The PKCE flow has tests for the RFC 7636 vector, for `state`
+validation and for the shape of the authorization URL, and it has never opened a
+browser. The loopback listener on port 8789, the redirect coming back, the code
+exchange against the real hosted UI: none of that has run. Every token used to
+verify the paid plane so far was minted with
+`aws cognito-idp admin-initiate-auth`, which goes nowhere near it. So "login
+works" is currently a claim about three functions, not about signing in.
 
 **Inicio and the library graph are in the same position as of 2026-08-25.** Both
 endpoints were exercised against the running stack — `/project-summary` with
@@ -658,6 +851,23 @@ Distinct from the list above: this is shipped code that is wrong, not features
 that are missing. Each was found by running the thing, and each is recorded
 rather than fixed because the fix is somebody's decision or sits in another
 session's files.
+
+- **`/runs/{id}` reports no terminal state, so a failed run polls forever.**
+  Both planes return `stage` from a Temporal query and nothing else: a query
+  against a *failed* workflow hands back the last stage it recorded, which is
+  indistinguishable from one still running. Observed 2026-08-28 — an ingest died
+  when its activity's retries were exhausted and `/runs/{id}` reported
+  `"stage": "learning"` indefinitely, with `describe().status` already FAILED.
+  The fix is one field from `handle.describe()` in `api/main.py:run_status` and
+  its NestJS counterpart; it is recorded rather than done because it widens a
+  response the Rust client parses and that is its own change.
+
+- **The ingest overwrites a library's name with its id.**
+  `activities/ingest.py` calls `catalog.ensure_library(request.library_id,
+  request.library_id, …)` — the id passed as the name. A library seeded as
+  "Teología" reads as `lib_acme_teologia` in every picker after the first
+  import. The name is not carried on `IngestRequest`, so fixing it is a field,
+  not a line.
 
 - **`ports::revalidate` has no caller, so relaunching the app orphans its own
   containers.** `AppState::stack()` (`app/src-tauri/src/lib.rs:48`) always calls

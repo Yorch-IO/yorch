@@ -25,7 +25,7 @@ use control::{
     Approval, Auth, AskProgress, AskStarted, ChunkContext, ConceptClaims, Control, DocumentDetail,
     GateReport, Health, IngestRequest, Libraries, Library, LibraryGraph, Outline, PingResult,
     ProjectSummary, Question, RebuildReport, RelatedDocuments, Removal, SectionChunks,
-    StageOptions, StagedSource, StartedRun, VersionConcepts,
+    RunState, StageOptions, StagedSource, StartedRun, VersionConcepts,
 };
 use error::{AppError, Result};
 use ports::Ports;
@@ -442,6 +442,12 @@ async fn ingest_gate(state: State<'_, AppState>, workflow_id: String) -> Result<
 }
 
 #[tauri::command]
+async fn run_status(state: State<'_, AppState>, workflow_id: String) -> Result<RunState> {
+    let control = state.control().await?;
+    control.run_status(&workflow_id).await
+}
+
+#[tauri::command]
 async fn ingest_approve(
     state: State<'_, AppState>,
     workflow_id: String,
@@ -706,6 +712,7 @@ pub fn run() {
             stage_source,
             ingest_start,
             ingest_gate,
+            run_status,
             ingest_approve,
             libraries,
             library_documents,

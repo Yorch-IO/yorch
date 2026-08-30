@@ -198,7 +198,17 @@
     "start": "Previsualizar",
     "working": "Trabajando…",
     "waiting": "Extrayendo y fragmentando la ejecución {{id}} — esto no cuesta nada.",
-    "stageLearnProfile": "Aprender las reglas del documento"
+    "stageLearnProfile": "Aprender las reglas del documento",
+    "runEnded": "La ejecución terminó antes de llegar a la compuerta de aprobación: {{state}}. No se ha cobrado ninguna etapa que no llegara a completarse. La API de control conserva lo que registró, así que la ejecución sigue siendo legible allí.",
+    "runState": {
+      "failed": "falló",
+      "cancelled": "se canceló",
+      "canceled": "se canceló",
+      "terminated": "se terminó desde fuera",
+      "timed_out": "agotó su tiempo",
+      "completed": "acabó sin publicar compuerta",
+      "continued_as_new": "se reinició como una ejecución nueva"
+    }
   },
   "gate": {
     "title": "Aprobar antes de gastar",

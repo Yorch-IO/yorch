@@ -40,6 +40,9 @@ class _Handle:
             raise RuntimeError("workflow not found")
         return self.outcome
 
+    async def describe(self):
+        raise RuntimeError("not asked for on this route")
+
 
 class _Client:
     """Just enough Temporal to exercise the two routes."""
@@ -47,9 +50,16 @@ class _Client:
     def __init__(self, outcome: AskOutcome | None):
         self.outcome = outcome
         self.started: list[object] = []
+        self.memos: list[object] = []
 
-    async def start_workflow(self, _run, question, *, id, task_queue):  # noqa: A002
+    async def start_workflow(self, _run, question, *, id, task_queue, memo):  # noqa: A002
         self.started.append(question)
+        # `memo` is keyword-only and required here on purpose. The paid plane
+        # reads it to decide whether a caller may collect an answer at all, and
+        # a question writes no catalog row to fall back on — so a start site
+        # that stopped stamping it would open a cross-organisation read with
+        # nothing failing. This double is what makes that a test failure.
+        self.memos.append(memo)
         return _Handle(id=id, outcome=self.outcome)
 
     def get_workflow_handle(self, workflow_id: str):

@@ -237,6 +237,25 @@ export const DEFAULT_STAGES: StageOptions = {
   reviewCorrection: false,
 };
 
+/**
+ * Whether a run is still going, or what it ended as.
+ *
+ * Distinct from `stage`, and that distinction is the whole point: a stage query
+ * against a failed workflow returns the last one it recorded, so a run whose
+ * activity retries were exhausted reported `stage: "learning"` for as long as
+ * anyone kept asking. Meanwhile the gate answers 409 — "not ready" — forever,
+ * and a screen polling it waits for something that is never coming.
+ *
+ * `state` is `null` when nobody could say: a control plane older than this
+ * field, or a run whose history has aged out of Temporal. Both mean *keep
+ * waiting*, never *it failed*.
+ */
+export interface RunState {
+  workflowId: string;
+  stage: string | null;
+  state: string | null;
+}
+
 export interface StartedRun {
   workflowId: string;
   state: string;
@@ -822,6 +841,8 @@ export const api = {
   /** null while the free stages are still running — a normal first answer. */
   ingestGate: (workflowId: string) =>
     invoke<GateReport | null>("ingest_gate", { workflowId }),
+  /** Where a run *is*, which `ingestGate` alone cannot say. See `RunState`. */
+  runStatus: (workflowId: string) => invoke<RunState>("run_status", { workflowId }),
   ingestApprove: (workflowId: string, approval: Approval) =>
     invoke<void>("ingest_approve", { workflowId, approval }),
   /** Which libraries exist. Free, and what every screen needs before it can

@@ -198,7 +198,17 @@
     "start": "Preview",
     "working": "Working…",
     "waiting": "Extracting and chunking run {{id}} — this costs nothing.",
-    "stageLearnProfile": "Learn the document's rules"
+    "stageLearnProfile": "Learn the document's rules",
+    "runEnded": "The run ended before reaching the approval gate: {{state}}. Nothing was charged for a stage that did not complete. The control API keeps what it recorded, so the run is still readable there.",
+    "runState": {
+      "failed": "it failed",
+      "cancelled": "it was cancelled",
+      "canceled": "it was cancelled",
+      "terminated": "it was terminated",
+      "timed_out": "it timed out",
+      "completed": "it finished without publishing a gate",
+      "continued_as_new": "it was restarted as a new run"
+    }
   },
   "gate": {
     "title": "Approve before spending",

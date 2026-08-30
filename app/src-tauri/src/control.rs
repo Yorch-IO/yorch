@@ -175,6 +175,32 @@ pub struct StartedRun {
     pub state: String,
 }
 
+/// Where a run *is*, which is not the same question as which stage it last
+/// recorded.
+///
+/// A `stage` query against a failed workflow hands back the last value it
+/// reached, so a run whose activity retries were exhausted reported
+/// `"stage": "learning"` indefinitely while Temporal already knew it had
+/// failed. This is the field that tells them apart.
+///
+/// Only the two fields the app acts on are modelled; the response also carries
+/// artifacts, cost and semantics counts, and no screen reads them. Both are
+/// `#[serde(default)]` so a control plane that has not been upgraded loses the
+/// distinction rather than the whole call — the same treatment the cost range's
+/// new fields got.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunState {
+    pub workflow_id: String,
+    #[serde(default)]
+    pub stage: Option<String>,
+    /// `running`, or whatever terminal state it ended in. `None` means nobody
+    /// could say — an old plane, or a run whose history has aged out — and a
+    /// caller must read that as "keep waiting", never as "failed".
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase"))]
 pub struct ChunkKindCount {
@@ -1089,6 +1115,17 @@ impl Control {
             Err(AppError::ControlStatus { status: 409, .. }) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// Whether a run is still going, or what it ended as.
+    ///
+    /// Proxied because the gate alone cannot say. `gate` models a 409 as
+    /// `Ok(None)`, and a run that died before publishing its report answers 409
+    /// forever — so a screen polling the gate on an interval waits for
+    /// something that is never coming unless it can ask this.
+    pub async fn run_status(&self, workflow_id: &str) -> Result<RunState> {
+        self.get(&format!("/runs/{workflow_id}"), HEALTH_TIMEOUT)
+            .await
     }
 
     pub async fn approve(&self, workflow_id: &str, approval: &Approval) -> Result<()> {

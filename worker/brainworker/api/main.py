@@ -68,6 +68,34 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Company Brain control API", version="0.1.0", lifespan=lifespan)
 
+
+#: Stamped on every workflow this plane starts. This plane *is* the legacy
+#: organisation and always has been, so the value is a constant rather than a
+#: parameter — but it has to be written, because the paid plane reads it to
+#: decide whether a caller may see a run at all. A run with no memo forces that
+#: check back onto the catalog, and `AskWorkflow` never writes a catalog row.
+_OWNED_BY_LEGACY = {"tenant_id": LEGACY_TENANT_ID}
+
+
+async def _run_state(handle: Any) -> str | None:
+    """Whether the run is still going, or what it ended as.
+
+    `stage` cannot answer this. A query against a *failed* workflow hands back
+    the last stage it recorded, which is indistinguishable from one still
+    working — observed 2026-08-28, when an ingest whose activity retries were
+    exhausted reported `"stage": "learning"` indefinitely while
+    `describe().status` already read FAILED.
+
+    `None` means Temporal has forgotten the run, which is ordinary once
+    retention expires and is not a failure: the catalog still holds what the run
+    produced. Swallowed for the same reason the stage query is.
+    """
+    try:
+        status = (await handle.describe()).status
+    except Exception:
+        return None
+    return status.name.lower() if status is not None else None
+
 _settings: config.Settings | None = None
 _client: Client | None = None
 
@@ -267,6 +295,7 @@ async def ping() -> dict[str, Any]:
         PingWorkflow.run,
         id=f"ping-{_ulid()}",
         task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
     )
     report = await handle.result()
     return {"workflow_id": handle.id, **asdict(report)}
@@ -317,6 +346,7 @@ async def start_ingest(request: IngestRequest, options: StageOptions | None = No
         args=[request, options or StageOptions()],
         id=f"ingest-{_ulid()}",
         task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
     )
     return {"workflow_id": handle.id, "state": "running"}
 
@@ -339,6 +369,11 @@ async def gate(workflow_id: str) -> dict[str, Any]:
                 "kind": "gate_not_ready",
                 "message": "las etapas gratuitas aún no han terminado",
                 "stage": await handle.query(IngestWorkflow.stage),
+                # Beside the stage, because the Import screen polls this on an
+                # interval and reads a 409 as "keep waiting". A run that died
+                # before publishing its gate answers `None` forever, so without
+                # this the screen spins for a run that is never coming.
+                "run_state": await _run_state(handle),
             },
         )
     return asdict(report)
@@ -419,6 +454,7 @@ async def run_status(workflow_id: str) -> dict[str, Any]:
     body: dict[str, Any] = {
         "workflow_id": workflow_id,
         "stage": stage,
+        "state": await _run_state(handle),
         "artifacts": artifacts,
         "cost": costs,
     }
@@ -477,6 +513,7 @@ async def ask_question(question: Question) -> dict[str, Any]:
         question,
         id=f"ask-{_ulid()}",
         task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
     )
     return {"question_id": handle.id, "state": "running"}
 
@@ -1036,6 +1073,7 @@ async def reindex_document(
         args=[request, options or StageOptions()],
         id=f"reindex-{_ulid()}",
         task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
     )
     return {"workflow_id": handle.id, "state": "running", "kind": "reindex"}
 
@@ -1056,6 +1094,7 @@ async def rebuild_document(library_id: str, document_id: str) -> dict[str, Any]:
         args=[library_id, document_id],
         id=f"rebuild-{_ulid()}",
         task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
     )
     return {"workflow_id": handle.id, "state": "running", "kind": "rebuild"}
 

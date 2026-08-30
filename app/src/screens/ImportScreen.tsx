@@ -85,6 +85,10 @@ export function ImportScreen() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<string | null>(null);
+  /** The terminal state a run ended in, when it ended without reaching its
+   *  gate. Kept apart from `error` because nothing threw: the request that
+   *  found out succeeded, and what it reported is a fact about the run. */
+  const [runFailed, setRunFailed] = useState<string | null>(null);
   /** What the gate should do about rules. Three states rather than two booleans
    *  because they are mutually exclusive choices, and a UI offering
    *  "learn" and "ignore" as independent checkboxes invites setting both. */
@@ -106,6 +110,7 @@ export function ImportScreen() {
     setError(null);
     setGate(null);
     setOutcome(null);
+    setRunFailed(null);
     try {
       // Staging is what makes one screen serve both planes. Local mode hands
       // the path straight back; cloud mode uploads the file and returns the
@@ -128,6 +133,19 @@ export function ImportScreen() {
       timer.current = window.setInterval(async () => {
         try {
           const report = await api.ingestGate(run.workflowId);
+          if (!report) {
+            // The gate is not ready — which is the ordinary answer for the
+            // first few seconds, and is also what a run that *died* before
+            // publishing one answers for as long as anybody asks. Only the run
+            // state tells the two apart, so a poll that never asks spins
+            // forever on a failure. Observed 2026-08-28.
+            const status = await api.runStatus(run.workflowId);
+            if (status.state !== null && status.state !== "running") {
+              setRunFailed(status.state);
+              stopPolling();
+            }
+            return;
+          }
           if (report) {
             setGate(report);
             // Reuse is free, so it is the default whenever a profile exists.
@@ -385,6 +403,16 @@ export function ImportScreen() {
               {t("gate.reject")}
             </button>
           </div>
+        </div>
+      )}
+
+      {runFailed !== null && (
+        <div className="error">
+          <strong>{t("error.title")}</strong>
+          <p>{t("import.runEnded", { state: t(`import.runState.${runFailed}`) })}</p>
+          <button type="button" onClick={() => setRunFailed(null)}>
+            {t("error.dismiss")}
+          </button>
         </div>
       )}
 

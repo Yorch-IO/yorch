@@ -96,8 +96,10 @@ export function StackScreen() {
     // able to see — and change — which backend they are pointed at. Putting it
     // after `stackStatus`'s early return hid the whole section on exactly the
     // machine that needed it.
+    let mode: BackendMode = "local";
     try {
       const chosen = await api.backendSettings();
+      mode = chosen.mode;
       setBackend(chosen);
       setBackendDraft(
         (draft) => draft ?? { mode: chosen.mode, baseUrl: chosen.baseUrl },
@@ -106,22 +108,38 @@ export function StackScreen() {
       setBackend(null);
     }
 
-    try {
-      setStatus(await api.stackStatus());
-      setError(null);
-    } catch (e) {
-      setError(e);
-      return;
-    }
-    // The provider is read from `.env` by Rust, so unlike health it answers
-    // whether or not the stack is running — which is the point: a user should
-    // be able to name their project *before* bringing anything up.
-    try {
-      const settings = await api.providerSettings();
-      setProvider(settings);
-      setProjectDraft((draft) => (draft === "" ? settings.projectId : draft));
-    } catch {
+    // The stack and the provider project belong to the local backend and to
+    // nothing else, so in cloud mode they are not asked about at all.
+    //
+    // Not merely tidier — the commands *refuse* in cloud mode now, and the
+    // `return` below treats a refusal as fatal, so asking anyway skipped the
+    // health read underneath it. That is how the paid plane ended up never
+    // being contacted from a signed-in window: no request, no `last_login_at`,
+    // no health table, and a red panel saying Docker was unavailable to a user
+    // for whom Docker is irrelevant. Docker's absence is already explicitly not
+    // an error further down this file; this is the same rule, one call earlier.
+    if (mode === "local") {
+      try {
+        setStatus(await api.stackStatus());
+        setError(null);
+      } catch (e) {
+        setError(e);
+        return;
+      }
+      // The provider is read from `.env` by Rust, so unlike health it answers
+      // whether or not the stack is running — which is the point: a user should
+      // be able to name their project *before* bringing anything up.
+      try {
+        const settings = await api.providerSettings();
+        setProvider(settings);
+        setProjectDraft((draft) => (draft === "" ? settings.projectId : draft));
+      } catch {
+        setProvider(null);
+      }
+    } else {
+      setStatus(null);
       setProvider(null);
+      setError(null);
     }
     // Health comes from the control API, which is only up once the stack is.
     // A failure here is expected before that and must not surface as an error.

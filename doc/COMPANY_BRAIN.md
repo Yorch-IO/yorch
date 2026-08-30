@@ -2268,3 +2268,141 @@ prueba: los seis `kind` de autenticación y organización mapeados a su clave, u
 cuerpo cortado a media llave, y el `{"detail": "Not Found"}` escueto que devuelve
 una ruta no reconocida — un `kind` que el mapa de guía nunca ha oído sería peor
 que ninguno.
+
+## La comprobación de preproducción, conducida de punta a punta — 2026-08-30
+
+Primera vez que el plano de pago se usa como lo usaría un cliente: organización
+nueva, usuario nuevo, fichero subido por HTTP, compuerta aprobada, pregunta
+respondida. `tnt_f489b4a62220158ef6790c07` (`preprod`), creada con
+`seed-tenant.sh` y `seed-user.sh` siguiendo `doc/RUNBOOK_PREPRODUCCION.md`.
+
+**El identificador de Cognito lo reclama la primera petición autenticada, no el
+inicio de sesión del navegador.** `you@example.com` tenía `cognito_sub` a NULL y
+`last_login_at` vacío; un solo `GET /health` con token dejó los dos puestos. Vale
+la pena saberlo porque el runbook decía «verifica que el primer inicio de sesión
+enlaza el sujeto» y eso es cierto sólo por accidente: enlaza la primera petición,
+venga de donde venga.
+
+### El identificador de una ejecución, comprobado contra la pila real
+
+Con un token real de `preprod`, pidiendo una ejecución de `legacy`:
+
+```
+GET  /runs/{id}          -> 404 {"kind":"run_not_found"}
+GET  /runs/{id}/gate     -> 404 {"kind":"run_not_found"}
+POST /runs/{id}/approve  -> 404 {"kind":"run_not_found"}     <- la que gasta
+GET  /runs/ingest-0000000000000-deadbeef -> 404, cuerpo idéntico
+```
+
+Los cuatro cuerpos son iguales byte a byte, que es la propiedad: un identificador
+ajeno y uno inventado tienen que ser indistinguibles. Un 403 confirmaría que
+existe.
+
+### El aislamiento, medido en los tres almacenes
+
+| | legacy | acme | preprod |
+|---|---|---|---|
+| documentos · versiones (Postgres) | 72 · 71 | 1 · 1 | 1 · 1 |
+| puntos (Qdrant) | **4.721** | **13** | 3 |
+| `Chunk` · `Claim` · `Concept` (Memgraph) | 4.722 · 24.151 · 13.326 | 13 · 67 · 50 | 3 · 7 · 5 |
+
+**Cero filas, cero nodos y cero puntos sin organización** en los tres almacenes.
+Las cifras de `legacy` y `acme` son idénticas a las del 2026-08-28, así que
+«nada más cambió» está medido y no supuesto.
+
+Los almacenes coinciden entre sí: los 3 puntos de Qdrant son los 3 nodos `Chunk`,
+y los 7 claims del artefacto son los 7 nodos `Claim`.
+
+**Y «Dios» son dos nodos.** `con_b33c32cd6d7bbf2078a945a1` en la organización
+heredada, `con_38861f74b783df21ee660577` en `preprod` — mismo nombre canónico,
+identificadores distintos, porque `concept_id` va salado con la organización y
+`_salt()` sólo devuelve vacío para la heredada. Es la comprobación más afilada
+que hay: `project_concepts` fusiona por nombre canónico, así que sin el salado la
+extracción de `preprod` habría entrado en el nodo de `legacy` y habría añadido su
+texto a `description_raw`. Ahora está demostrado sobre datos reales y no sólo en
+`test_the_same_idea_is_two_nodes`.
+
+El plano gratuito, entretanto, sigue sin autenticación y **sólo ve `legacy`**: 72
+documentos, 69 versiones indexadas. Las bibliotecas de las otras dos
+organizaciones no existen para él.
+
+### Lo que costó, contra lo que se dijo que costaría
+
+585 caracteres, 3 fragmentos (2 `cuerpo`, 1 `preguntas`), perfil aprendido en un
+intento.
+
+| etapa | estimado | facturado |
+|---|---|---|
+| profile | $0.02025 | **$0.003273** |
+| correction | $0.0029655 | $0.002538 |
+| embedding | $0.0000324 | $0.000031 |
+| semantics | $0.017703 – $0.030678 | $0.011171 |
+| **total** | **$0.0409 – $0.0539** | **$0.017013** |
+
+Sobre-informa, que es la única dirección en la que puede fallar — pero por 2,4x
+en el extremo bajo, y `test_the_estimate_stays_within_reach_of_the_measurement`
+existe precisamente porque sobre-informar salvajemente empuja a rechazar trabajo
+asequible.
+
+**Casi todo el exceso es una sola etapa, y en parte es política deliberada.**
+`profile` se presupuesta como `PROFILE_CALL_INPUT × PROFILE_MAX_ATTEMPTS` =
+2000 × 3, porque «una propuesta que valida a la primera es el caso bueno y una
+compuerta no puede cotizar el caso bueno». Aquí validó a la primera. El ×3 no es
+el defecto.
+
+Lo que sí es medible es la llamada: **1282 de entrada y 180 de salida contra los
+2000 y 500 supuestos**, y el comentario de esas constantes lleva pidiéndolo desde
+que se escribieron — *«no medido contra una llamada real: enunciado como
+proyección, y deliberadamente generoso. Sustitúyanse ambos por cifras medidas en
+la primera corrida de aprendizaje real.»* Ésta fue esa corrida.
+
+**No se han cambiado, y la razón importa.** La entrada de esa llamada es una
+muestra de evidencia del documento — encabezados, párrafos numerados, líneas
+cortas — así que 1282 es el *suelo* de un documento de 585 caracteres, no una
+cifra representativa. Un libro de 300 páginas manda mucha más. Una medición sobre
+el documento más pequeño posible no puede fijar un techo. Queda anotado, con la
+consulta lista para la próxima corrida de aprendizaje sobre un documento grande.
+
+### Calidad de las citas, cuarta medición independiente
+
+**7 de 7 claims (100%) llevaban una cita que el código localizó en su propio
+fragmento.** Las tres anteriores fueron 98,7%, 99,2% y 99,4%. Es una muestra
+pequeña y en el mismo sentido que las otras tres.
+
+La respuesta llegó con dos citas verificadas y localizadores byte-exactos, con la
+ruta de sección real dentro:
+
+```
+estado: answered
+  Prueba de preproducción · 1.1 De la distinción entre creación y providencia · [309:492]
+  Prueba de preproducción · 1. La providencia de Dios · [27:254]
+```
+
+### Y una biblioteca que conservó su nombre
+
+`lib_preprod` se creó como «Biblioteca de preproducción». La ingesta **no envió
+`library_name`**, y después de indexar sigue llamándose «Biblioteca de
+preproducción». Antes de este arreglo ahora se llamaría `lib_preprod`. Es la
+mitad de la corrección que ninguna prueba unitaria puede demostrar sobre datos
+reales.
+
+### Lo que esta corrida encontró y no estaba buscando
+
+**Una pregunta gasta dinero y nada lo registra.** No es un fallo de esta corrida:
+
+```sql
+SELECT count(*) FROM cost_entry WHERE run_id LIKE 'ask-%';   -- 0
+SELECT stage, count(*), sum(usd) FROM cost_entry GROUP BY stage;
+--  semantics 80 $31.61 | profile 26 $0.29 | embedding 85 $0.23 | correction 7 $0.04
+```
+
+Cuatro etapas, todas de indexación, $32,18 en total. `planning` y `answering` no
+aparecen, y ni `activities/asking.py` ni `workflows/ask.py` contienen una sola
+llamada de registro de coste. Este documento mide una pregunta en ~$0.023 con
+razonamiento activado — que es el ajuste que ship— y ninguna de las que se han
+hecho para verificar el producto está en el libro mayor.
+
+En un producto gratuito eso es una laguna. En uno **de pago** es la factura de
+una organización, porque la factura es `SUM(cost_entry)` filtrado por
+`tenant_id`. Anotado aquí y en la lista de defectos; arreglarlo es una actividad
+nueva y su propia decisión.

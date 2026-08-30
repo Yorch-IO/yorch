@@ -125,10 +125,12 @@ identificador está salado dentro de cada `ver_` y cada `con_` que la
 organización produzca. No hay migración para eso que no sea re-proyectar y
 volver a pagar los embeddings.
 
-`seed-user.sh` deja `app_user.cognito_sub` a NULL a propósito: **lo reclama el
-primer inicio de sesión**. Eso mantiene un solo camino de código para un usuario
-sembrado y para uno que un operador añada más tarde desde una dirección sola.
-Compruébalo después de entrar por primera vez:
+`seed-user.sh` deja `app_user.cognito_sub` a NULL a propósito: **lo reclama la
+primera petición autenticada**, venga del navegador o de un `curl` con un token
+acuñado a mano. Medido el 2026-08-30: un solo `GET /health` con token dejó
+puestos `cognito_sub` y `last_login_at`. Eso mantiene un solo camino de código
+para un usuario sembrado y para uno que un operador añada más tarde desde una
+dirección sola. Compruébalo:
 
 ```sql
 SELECT email, cognito_sub IS NOT NULL AS enlazado, last_login_at FROM app_user;

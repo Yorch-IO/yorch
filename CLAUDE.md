@@ -851,6 +851,19 @@ that are missing. Each was found by running the thing, and each is recorded
 rather than fixed because the fix is somebody's decision or sits in another
 session's files.
 
+- **A question spends money and nothing records it.** `SELECT count(*) FROM
+  cost_entry WHERE run_id LIKE 'ask-%'` is **0** across the whole catalog, and
+  neither `activities/asking.py` nor `workflows/ask.py` contains a cost-recording
+  call. The ledger holds four stages, all of them indexing — semantics, profile,
+  embedding, correction, $32.18 in total. `doc/COMPANY_BRAIN.md` measures a
+  question at ~$0.023 with reasoning on, which is the shipped setting, so every
+  question ever asked is missing from the books. On the free plane that is a gap;
+  on the paid one it is an organisation's **bill**, which is `SUM(cost_entry)`
+  filtered by `tenant_id`. Found 2026-08-30 while verifying preproduction. The
+  fix is an activity that records what `answer` and `plan` already return, plus a
+  `run` row for the question — `run_kind_check` has no `ask`, which is why one
+  does not exist.
+
 - **`ports::revalidate` has no caller, so relaunching the app orphans its own
   containers.** `AppState::stack()` (`app/src-tauri/src/lib.rs:48`) always calls
   `ports::allocate(Ports::default())`. A running stack holds its ports, so the

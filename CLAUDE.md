@@ -580,28 +580,27 @@ Note the ordering constraint: correction runs *before* chunking because it
 changes the text's length, which would invalidate every `char_span`. Previewed
 chunks are therefore not the final chunks when correction is on.
 
-## The work is not under version control, and one plane is not in git at all
+## Both checkouts are in git now, and it is worth knowing why that mattered
 
-Measured 2026-08-28, and it is first here because it is the only entry on the
-list that cannot be redone from what is on disk.
+Resolved 2026-08-29. Kept here rather than deleted, because the reason it was
+urgent is a property of this repository and not of that week.
 
-- **`../yorch-tauri-backend` has no `.git`.** The whole paid plane — the Prisma
-  schema, the three migrations, the 28 routes, the ported template registry, its
-  95 tests — exists in exactly one place, with no history and no second copy.
-- **This checkout has 87 uncommitted files** over `1bb2f95`. Everything tenancy
-  touched, in both planes, is a working-tree change.
+- `../yorch-tauri-backend` is a git repository with a clean tree.
+- This checkout is on `feat/paid-plane-integration`, branched from `main`, with
+  the whole tenancy working tree committed as one "as verified" commit.
 
-That combination is not merely untidy: it removes the ordinary way of undoing an
-experiment. `git checkout -- <file>` here reverts to a commit that predates the
+Before that, `git checkout -- <file>` here reverted to a commit predating the
 entire feature rather than to the last edit, and on 2026-08-28 it silently wiped
 every phase-2 change in `worker/brainworker/graph/projection.py` — 25 tenant
 references, `VersionNode.tenant_id` and `backfill_tenant`. It was recovered only
 because the code is baked into `company-brain-worker:dev` and could be read back
-out with `docker exec … cat /usr/local/lib/python3.13/site-packages/…`. That is
-luck standing in for a backup.
+out with `docker exec … cat /usr/local/lib/python3.13/site-packages/…`. That was
+luck standing in for a backup, and it is the reason the first act of the next
+piece of work was a commit.
 
-Until there is a commit, copy a file to a scratch directory before experimenting
-on it, and restore from there.
+`docaget/cache/embed/` is ignored: 1538 raw float32 blobs, regenerable.
+`cache/correct/` stays tracked beside it — a correction costs generation tokens
+and its cache is what survives an interrupted run.
 
 ## What is not built yet
 
@@ -852,23 +851,6 @@ that are missing. Each was found by running the thing, and each is recorded
 rather than fixed because the fix is somebody's decision or sits in another
 session's files.
 
-- **`/runs/{id}` reports no terminal state, so a failed run polls forever.**
-  Both planes return `stage` from a Temporal query and nothing else: a query
-  against a *failed* workflow hands back the last stage it recorded, which is
-  indistinguishable from one still running. Observed 2026-08-28 — an ingest died
-  when its activity's retries were exhausted and `/runs/{id}` reported
-  `"stage": "learning"` indefinitely, with `describe().status` already FAILED.
-  The fix is one field from `handle.describe()` in `api/main.py:run_status` and
-  its NestJS counterpart; it is recorded rather than done because it widens a
-  response the Rust client parses and that is its own change.
-
-- **The ingest overwrites a library's name with its id.**
-  `activities/ingest.py` calls `catalog.ensure_library(request.library_id,
-  request.library_id, …)` — the id passed as the name. A library seeded as
-  "Teología" reads as `lib_acme_teologia` in every picker after the first
-  import. The name is not carried on `IngestRequest`, so fixing it is a field,
-  not a line.
-
 - **`ports::revalidate` has no caller, so relaunching the app orphans its own
   containers.** `AppState::stack()` (`app/src-tauri/src/lib.rs:48`) always calls
   `ports::allocate(Ports::default())`. A running stack holds its ports, so the
@@ -911,6 +893,29 @@ session's files.
   raises `TypeError: unsupported operand type(s) for -: 'float' and
   'decimal.Decimal'`. Harmless wherever it is only serialised; a trap the first
   time anything compares or sums one. `repo.py:116`.
+
+## Two defects that were recorded here and are now fixed
+
+Kept because each fix carries a rule worth not relearning.
+
+- **A run's terminal state is a different question from its stage**, and
+  `/runs/{id}` now answers both. A `stage` query against a failed workflow hands
+  back the last value it recorded, so an ingest whose retries were exhausted
+  reported `"stage": "learning"` indefinitely while `describe().status` already
+  read FAILED. The half nobody had connected: `ImportScreen` polls the *gate*,
+  reads a 409 as "keep waiting", and a run that died before publishing one
+  answers 409 for as long as anybody asks — so the screen span forever. Both
+  planes report `state`; the Rust client proxies `GET /runs/{workflow_id}`,
+  which was one of three routes it did not; and `state: null` means "nobody
+  could say", which the screen must read as *keep waiting*, never as *failed*.
+- **A library id is not a name.** `ensure_library` was handed the id in both
+  positions, so a library seeded as «Teología» read as `lib_teologia` in every
+  picker from its first import. `IngestRequest.library_name` carries it now, and
+  **empty means "leave it alone"** — tested against the parameter rather than
+  against `EXCLUDED.name`, because the insert folds an empty name into the id
+  and by the `DO UPDATE` the two are indistinguishable. The picker renders the
+  name too: fixing the write without the read would have left the same string
+  on screen.
 
 ## Working on the engine (`docaget/`)
 

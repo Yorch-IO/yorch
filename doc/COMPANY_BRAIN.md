@@ -2147,3 +2147,124 @@ that kept keyboard focus and lost their accessible names. Nothing here is
 tooltip-only: a fixed line under the canvas carries the hovered *or focused*
 node's full name and metrics, because a name available only on hover is not
 available to anyone who cannot hover.
+
+## El identificador de una ejecución deja de ser una autorización — 2026-08-29
+
+Encontrado leyendo el plano de pago para planificar la integración con la
+aplicación, no por una prueba y no por un fallo.
+
+`RunsService.gate`, `.approve` y `.status`, y `AskService.collect`, recibían cada
+uno un `TenantContext` y **no lo usaban**. Direccionaban Temporal sólo por
+identificador, y `status` consultaba `run_artifact` y `cost_entry` con
+`WHERE run_id = …` y ninguna condición de organización, aunque las dos tablas
+llevan un `tenant_id` indexado. Un miembro de A con un identificador de B podía
+leer su informe de compuerta —que contiene la vista previa del documento, el
+recuento de fragmentos y el presupuesto—, sus artefactos y su factura, y **enviar
+la señal `approve`**, que es la llamada que gasta dinero.
+
+`graph/queries.py::validate_template` ya se niega a cargar una plantilla que no
+filtre por `$tenant_id`, y su mensaje de rechazo dice exactamente por qué: *un
+identificador salado no es una autorización, porque el identificador de una
+organización es un valor que tienen sus propios miembros*. La regla estaba
+impuesta en la superficie de lectura del grafo y en ningún sitio cerca de ésta.
+
+**La comprobación vive en un solo lugar y lee un memo.** `TemporalService.startOptions`
+es ahora el único sitio donde este plano acuña un workflow, y estampa
+`memo={"tenant_id": …}` — así un sitio de arranque nuevo no puede olvidarlo, por
+la misma razón que `Control::send` en Rust es el único sitio donde una petición
+recibe sus cabeceras. El catálogo es el respaldo para las ejecuciones anteriores
+al memo. Cuando ninguno de los dos sabe, **rechaza**: toda ruta que recibe un
+identificador lee una ingesta, un reindexado o una reconstrucción —que escriben
+fila en `run`— o una pregunta, que no escribe ninguna (`run_kind_check` no admite
+`ask`) y ahora siempre lleva memo. `ping`, `probe` y `removal` se esperan en la
+propia petición y nunca se direccionan por identificador.
+
+Un cruce responde **404 y no 403**, la misma regla que ya sostenían las rutas de
+documento: un 403 confirma que el identificador existe.
+
+**Comprobado revirtiendo, no razonando.** Con la comprobación anulada fallan 4 de
+las pruebas nuevas de extremo a extremo; con ella, pasan las 30.
+
+### Y la ejecución que giraba para siempre, reproducida al primer intento
+
+El mismo `describe()` responde la otra pregunta que este plano no podía
+contestar, así que las dos van juntas.
+
+Una ingesta de un fichero ya indexado, contra la pila real:
+
+```
+POST /ingest        -> ingest-1788058556391-de1d6652
+GET  /runs/{id}     -> {"stage": "registering", "state": "completed"}
+GET  /runs/{id}/gate-> 409 {"kind": "gate_not_ready",
+                            "message": "las etapas gratuitas aún no han terminado",
+                            "stage": "registering", "run_state": "completed"}
+run: index / succeeded / 91,128 ms / 0 entradas de coste
+```
+
+La ejecución tomó el cortocircuito `already_indexed` y **terminó**, mientras
+`stage` seguía diciendo `registering` y la compuerta seguía respondiendo «las
+etapas gratuitas aún no han terminado» — que es falso, y que no iba a cambiar
+nunca. `ImportScreen` sondea esa compuerta cada 1500 ms y lee un 409 como «sigue
+esperando», así que la pantalla habría girado indefinidamente.
+
+Son los mismos 90 milisegundos que este documento ya registraba del lote del
+2026-08-22, donde *«el script esperó veinte minutos una compuerta que nunca iba a
+existir y anotó un fallo»*. Entonces se anotó como una lección para quien escriba
+un controlador de lotes. Era un defecto del producto, y ahora `state` lo dice.
+
+`state` es `null` cuando nadie puede saberlo —un plano sin actualizar, o una
+ejecución cuyo historial ha caducado— y eso se lee como *sigue esperando*, nunca
+como *falló*. Medido en la misma sesión: una ejecución antigua responde
+`{"stage": null, "state": null}` con sus 5 artefactos intactos, porque el
+catálogo sobrevive a la retención de Temporal.
+
+### La página de OpenAPI estaba abierta, y el primer arreglo la abrió más
+
+`BRAIN_DOCS` existía y `env.ts` lo tenía apagado por defecto. El `"on"` estaba
+puesto en `docker-compose.dev.yaml` — que es el overlay que aplican **por igual**
+quien desarrolla y la pila de preproducción, porque sin él el `--build` es un
+no-op silencioso. Así que `http://127.0.0.1:8788/docs` respondía 200 sin
+autenticar a quien encontrase el puerto, enumerando cada ruta, cada campo y cada
+`kind` de error de una API multi-organización.
+
+Ahora se pasa desde el fichero base como `${BRAIN_DOCS:-}`. Verificado contra la
+imagen reconstruida: `BRAIN_DOCS=` vacío en el contenedor, `/docs` responde 404,
+`/auth/config` sigue siendo público (200) y `/health` sin token sigue devolviendo
+`{"detail":{"kind":"unauthenticated"}}`.
+
+**La lección no es «apágalo», es dónde se apaga.** Un interruptor puesto en el
+overlay que todo el mundo aplica no es un interruptor.
+
+### El nombre de una biblioteca, en los dos sentidos
+
+`ensure_library` recibía el identificador en las dos posiciones. Las dos filas de
+esta instalación lo demuestran: `lib_teologia` se llama `lib_teologia` y
+`lib_acme_teologia` se llama `lib_acme_teologia`. Arreglar sólo la escritura no
+se habría visto — el selector renderizaba `l.id` y no el nombre — así que se
+arreglan las dos mitades o ninguna.
+
+`IngestRequest.library_name` viaja ahora, y **vacío significa «déjalo como
+está»**. Esa parte tiene su propia trampa: el `INSERT` pliega un nombre vacío en
+el identificador, así que para cuando el `ON CONFLICT DO UPDATE` mira
+`EXCLUDED.name` los dos casos son indistinguibles y una segunda importación
+volvía a rebautizar la biblioteca con su propio id. Se comprueba contra el
+parámetro.
+
+### Lo que el arreglo del truncamiento reveló del contrato de errores
+
+`api.ts` sacaba `detail.kind` del mensaje del error, y ese mensaje llega al
+webview **cortado a 500 caracteres** con una expresión regular que necesita un
+`{…}` equilibrado. Un cuerpo largo perdía la etiqueta en silencio, y con ella la
+única línea accionable. `tenant_required` es el caso que lo provoca: lleva los
+identificadores de organización de quien llama como campo hermano, así que su
+longitud crece con la cuenta.
+
+Rust la extrae ahora del cuerpo entero antes de cortarlo y la envía como
+`controlKind`. El camino viejo se conserva como respaldo, para un webview
+corriendo contra un binario anterior.
+
+`app/src/lib/api.test.ts` cubre por fin ese contrato, que no tenía ninguna
+prueba: los seis `kind` de autenticación y organización mapeados a su clave, un
+cuerpo cortado a media llave, y el `{"detail": "Not Found"}` escueto que devuelve
+una ruta no reconocida — un `kind` que el mapa de guía nunca ha oído sería peor
+que ninguno.

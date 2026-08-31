@@ -56,6 +56,7 @@ ACTIVITIES = [
     paid.build_evalset,
     paid.evaluate_index,
     paid.propose_tuning,
+    paid.promote_candidate_scores,
     paid.persist_profile_scores,
     paid.extract_semantics,
     rebuild.load_rebuild_inputs,

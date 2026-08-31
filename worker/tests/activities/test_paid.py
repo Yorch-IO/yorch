@@ -1173,3 +1173,73 @@ async def test_tuning_declines_rather_than_inventing_a_margin(
     )
 
     assert outcome.kind == "none"
+
+
+async def test_a_candidates_measurement_is_kept_apart_from_the_baselines(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch, qdrant: str
+):
+    """One run measures twice, and the two must not land on one artifact.
+
+    Found by running a real tuning round: both evaluations wrote `scores.json`,
+    so a candidate that was measured and then reverted left the run describing an
+    index that had already been thrown away — 676 chunks in the artifact against
+    600 in the collection and in `chunks.jsonl`. `/runs/{id}` reads that
+    artifact, so the product would have reported a recall for an index nobody
+    could query.
+    """
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    registered, staged = _ids()
+    decision = ProfileDecision(fingerprint="fp")
+
+    baseline_chunks = _chunked(workspace, "two", 4)
+    await paid.embed_and_index("two", "lib_t", registered, staged, baseline_chunks)
+    evalset = await paid.build_evalset(
+        "two", _extraction("libros/x.pdf"), baseline_chunks, decision
+    )
+
+    baseline = await paid.evaluate_index(
+        "two", registered, baseline_chunks, evalset, decision
+    )
+    candidate_chunks = _chunked(workspace, "two", 6)
+    candidate = await paid.evaluate_index(
+        "two", registered, candidate_chunks, evalset, decision, "scores_candidate"
+    )
+
+    assert baseline.report.kind == "scores"
+    assert candidate.report.kind == "scores_candidate"
+    assert baseline.report.path != candidate.report.path
+
+    store = ArtifactStore(workspace, "two")
+    assert store.read_json(baseline.report)["scores"]["chunks"] == 4, (
+        "the candidate overwrote the baseline's measurement"
+    )
+    assert store.read_json(candidate.report)["scores"]["chunks"] == 6
+
+
+async def test_a_kept_candidate_is_promoted_over_the_baseline(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch, qdrant: str
+):
+    """When it wins, its measurement is the one describing the index that
+    stands, so `scores` has to become it."""
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    registered, staged = _ids()
+    decision = ProfileDecision(fingerprint="fp")
+
+    chunks = _chunked(workspace, "promo", 4)
+    await paid.embed_and_index("promo", "lib_t", registered, staged, chunks)
+    evalset = await paid.build_evalset(
+        "promo", _extraction("libros/x.pdf"), chunks, decision
+    )
+    await paid.evaluate_index("promo", registered, chunks, evalset, decision)
+    candidate = await paid.evaluate_index(
+        "promo", registered, _chunked(workspace, "promo", 7), evalset, decision,
+        "scores_candidate",
+    )
+
+    promoted = await paid.promote_candidate_scores("promo", candidate)
+
+    assert promoted.report.kind == "scores"
+    store = ArtifactStore(workspace, "promo")
+    assert store.read_json(promoted.report)["scores"]["chunks"] == 7

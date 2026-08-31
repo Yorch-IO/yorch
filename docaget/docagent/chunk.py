@@ -302,6 +302,19 @@ def classify_kind(text: str, rules: ChunkRules) -> str:
       *optional* dot — as ``HEADING_RE`` does — tags nine footnotes as questions.
       That was a real bug, and it only surfaced by printing the classifier's
       output over the whole document rather than trusting the rule.
+
+      **Known to not hold on every editorial.** ``05-CodigoJesus-_int-S.pdf``
+      (Editorial Vida / Hechos & Crónicas) numbers its own footnotes *with* a
+      dot too ("1. Paul Johnson, Historia del cristianismo…", "4. Ibidem."),
+      which tags 46 of them `preguntas` on a 24-chapter essay with none —
+      the same family of defect as the "9 capítulos falsos" already recorded
+      for ``01_RetoDeDios_INT-S.pdf`` in ``doc/CLAUDE.md``. A fix requiring
+      ¿/?/an imperative to corroborate the dot (mirroring the check
+      ``heading_level`` already runs) was tried and reverted: on the real
+      corpus it left every footnote chunk with no ``section``, breaking
+      ``test_invariants.py::test_inv11_footnotes_keep_their_section_path`` —
+      a fix that moves that test is not a fix by this project's own rule.
+      Reported, not fixed, same as the sibling defect.
     * The ¿-density rule catches the one question paragraph that does not begin
       with a number at all: "Freud\\n27. ¿Hasta dónde…".
     * Body prose asks rhetorical questions too — seven paragraphs carried 2 to 5

@@ -632,6 +632,7 @@ async def evaluate_index(
     chunked: Chunked,
     evalset: EvalSet,
     decision: ProfileDecision,
+    artifact_kind: str = "scores",
 ) -> Scores:
     """Ask the index the questions and report what came back.
 
@@ -698,7 +699,10 @@ async def evaluate_index(
             for q_, want, rank in (outcome.baseline.misses if outcome.baseline else [])
         ],
     }
-    ref = _record(run_id, "scores", store.write_json("scores", report))
+    # A tuning candidate writes its own artifact. Both measurements happen in
+    # one run, and writing both to `scores` left a reverted candidate describing
+    # an index that had already been thrown away.
+    ref = _record(run_id, artifact_kind, store.write_json(artifact_kind, report))
 
     spend = _charge(
         run_id,
@@ -920,6 +924,27 @@ def _baseline_from(store: ArtifactStore, scores: Scores) -> object | None:
         reciprocal_ranks=list(ranks),
         questions=n,
     )
+
+
+@activity.defn(name="promote_candidate_scores")
+async def promote_candidate_scores(run_id: str, scores: Scores) -> Scores:
+    """Make a kept candidate's measurement the run's measurement. Free.
+
+    Only reached when the candidate beat the noise margin, which means the index
+    it describes is the one that stands. On a revert this never runs and `scores`
+    is still the baseline's, untouched — which is the whole reason the two are
+    separate artifacts.
+    """
+    settings = _settings()
+    store = ArtifactStore(settings.workspace, run_id)
+    if scores.report is None:
+        return scores
+    ref = _record(
+        run_id, "scores", store.write_json("scores", store.read_json(scores.report))
+    )
+    from dataclasses import replace as dc_replace
+
+    return dc_replace(scores, report=ref)
 
 
 @activity.defn(name="persist_profile_scores")

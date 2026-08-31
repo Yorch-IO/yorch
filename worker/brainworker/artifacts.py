@@ -63,6 +63,16 @@ KINDS: dict[str, str] = {
     "profile": "profile.json",
     "evalset": "evalset.json",
     "scores": "scores.json",
+    #: A *tuning candidate's* measurement, kept apart from the baseline's.
+    #:
+    #: Both are produced by the same activity in the same run, and writing both
+    #: to `scores` meant the second overwrote the first — so a candidate that was
+    #: measured and then reverted left the run describing an index that no longer
+    #: existed. Found by running a real tuning round: `scores.json` said 676
+    #: chunks and recall@5 0.8375 while the collection and `chunks.jsonl` both
+    #: held the reverted 600. Promoted over `scores` only when the candidate is
+    #: kept, which is the one case where it describes the index that stands.
+    "scores_candidate": "scores.candidate.json",
     #: What a tuning round tried and what it concluded. Written even when the
     #: conclusion is "nothing beat the noise margin", because that *is* the
     #: result: a round that refused every candidate has measured something, and

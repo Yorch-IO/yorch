@@ -676,7 +676,14 @@ class IngestWorkflow:
         spent.append(candidate_indexed.spend)
         candidate_scores: Scores = await workflow.execute_activity(
             paid.evaluate_index,
-            args=[run_id, registered, candidate_chunked, evalset, decision],
+            # Its own artifact. Both measurements happen in this one run, and
+            # writing both to `scores` left a reverted candidate describing an
+            # index that had already been thrown away — the artifact said 676
+            # chunks while the collection held the reverted 600.
+            args=[
+                run_id, registered, candidate_chunked, evalset, decision,
+                "scores_candidate",
+            ],
             start_to_close_timeout=PAID_TIMEOUT,
             retry_policy=_PAID_RETRY,
         )
@@ -688,7 +695,16 @@ class IngestWorkflow:
         # would be between two things that both changed.
         gain = candidate_scores.mrr_at_10 - outcome.baseline_objective
         if gain > outcome.margin:
-            return candidate_chunked, candidate_indexed, candidate_scores
+            # Kept, so its measurement describes the index that stands and
+            # becomes the run's. On a revert this does not run and `scores` is
+            # still the baseline's, untouched.
+            promoted: Scores = await workflow.execute_activity(
+                paid.promote_candidate_scores,
+                args=[run_id, candidate_scores],
+                start_to_close_timeout=WRITE_TIMEOUT,
+                retry_policy=_RETRY,
+            )
+            return candidate_chunked, candidate_indexed, promoted
 
         reverted = await workflow.execute_activity(
             paid.chunk_final,

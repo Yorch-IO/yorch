@@ -49,6 +49,7 @@ TASK_QUEUE = "test-ingest"
 #: nobody approved.
 SPENT: list[str] = []
 PERSISTED: list[str] = []
+PROMOTED: list[str] = []
 
 REF = ArtifactRef(kind="raw_text", path="runs/r/raw.txt", sha256="a" * 64, bytes=10)
 CHUNK_REF = ArtifactRef(
@@ -256,9 +257,13 @@ async def build_evalset(*_args) -> EvalSet:
     )
 
 
+EVALUATED_INTO: list[str] = []
+
+
 @activity.defn(name="evaluate_index")
-async def evaluate_index(*_args) -> Scores:
+async def evaluate_index(*args) -> Scores:
     SPENT.append("evaluation")
+    EVALUATED_INTO.append(args[5] if len(args) > 5 else "scores")
     return Scores(
         recall_at_1=0.675, recall_at_5=0.9, mrr_at_10=0.7642,
         recall_at_5_dense_only=1.0, noise_floor=0.6232,
@@ -280,6 +285,12 @@ async def propose_tuning(*_args) -> TuneOutcome:
         ),
         notes=["the free knobs are exhausted"],
     )
+
+
+@activity.defn(name="promote_candidate_scores")
+async def promote_candidate_scores(run_id: str, scores: Scores) -> Scores:
+    PROMOTED.append(run_id)
+    return scores
 
 
 @activity.defn(name="persist_profile_scores")
@@ -322,6 +333,7 @@ def activities(**kw):
         kw.get("build_evalset", build_evalset),
         kw.get("evaluate_index", evaluate_index),
         kw.get("propose_tuning", propose_tuning),
+        promote_candidate_scores,
         persist_profile_scores,
         extract_semantics,
     ]
@@ -337,6 +349,8 @@ async def env():
 def _clear():
     SPENT.clear()
     PERSISTED.clear()
+    PROMOTED.clear()
+    EVALUATED_INTO.clear()
     LINKED.clear()
     OUTCOMES.clear()
     yield
@@ -1271,3 +1285,67 @@ async def test_a_learned_profile_is_never_blocked_by_its_own_rules(
         result = await handle.result()
 
     assert result.state == "indexed"
+
+
+async def test_a_reverted_candidate_does_not_overwrite_the_baselines_measurement(
+    env: WorkflowEnvironment,
+):
+    """Found by running a real tuning round, not by reading the code.
+
+    Both measurements happen inside one run, and both were writing `scores.json`.
+    So a candidate that was measured and then reverted left the artifact
+    describing an index that had already been thrown away: `scores.json` said 676
+    chunks and recall@5 0.8375 while the collection and `chunks.jsonl` both held
+    the reverted 600. `/runs/{id}` and the Library screen read that artifact, so
+    the product would have reported a recall for an index nobody could query.
+
+    Same shape as the engine's own measured bug at the other end — reverting the
+    profile while leaving the collection holding the candidate's chunks.
+    """
+    opts = StageOptions(generate_evalset=True, tune=True)
+    acts = activities()
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts,
+    ):
+        handle = await _start(env, request(), opts, acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve, Approval(approved=True, options=opts)
+        )
+        await handle.result()
+
+    # The default double proposes a candidate that scores 0.7642 against a 0.700
+    # baseline: +0.064, inside the ±0.077 margin, so it is reverted.
+    assert EVALUATED_INTO == ["scores", "scores_candidate"]
+    assert PROMOTED == [], "a reverted candidate was promoted over the baseline"
+
+
+async def test_a_kept_candidate_becomes_the_runs_measurement(env: WorkflowEnvironment):
+    """The other half: when it wins, its measurement *is* the one that describes
+    the index that stands, so it is promoted over the baseline's."""
+
+    @activity.defn(name="evaluate_index")
+    async def better(*args) -> Scores:
+        SPENT.append("evaluation")
+        EVALUATED_INTO.append(args[5] if len(args) > 5 else "scores")
+        return Scores(
+            recall_at_1=0.9, recall_at_5=0.98, mrr_at_10=0.95,
+            recall_at_5_dense_only=0.9, noise_floor=0.6, chunks=3,
+            eval_questions=40, margin=0.05,
+            spend=Spend("evaluation", "gemini-embedding-2", 400, 0, 0.00008),
+        )
+
+    opts = StageOptions(generate_evalset=True, tune=True)
+    acts = activities(evaluate_index=better)
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts,
+    ):
+        handle = await _start(env, request(), opts, acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve, Approval(approved=True, options=opts)
+        )
+        await handle.result()
+
+    assert EVALUATED_INTO == ["scores", "scores_candidate"]
+    assert PROMOTED, "a kept candidate left the run describing the old index"

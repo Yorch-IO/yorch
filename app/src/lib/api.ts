@@ -279,6 +279,23 @@ export interface RunState {
   workflowId: string;
   stage: string | null;
   state: string | null;
+  /** How far the running activity has got, when it reports one.
+   *
+   *  Null for every honest absence and they are deliberately not told apart:
+   *  nothing pending, an activity that does not heartbeat, a run older than the
+   *  code that emits it. All of them mean "no progress to show". */
+  progress: RunProgress | null;
+}
+
+/** Chunks done out of chunks total, off the activity's heartbeat.
+ *
+ *  Only semantic extraction reports, and it is the one worth reporting: one
+ *  generation call per chunk, so this counts calls and spend at the same time —
+ *  which is what somebody deciding whether to stop a run is weighing. */
+export interface RunProgress {
+  activity: string;
+  done: number;
+  total: number;
 }
 
 export interface StartedRun {
@@ -708,6 +725,14 @@ export interface RunSummary {
    *  document it was spent on, deliberately. */
   title: string | null;
   libraryId: string | null;
+  /** Billed so far. Null, never zero: a run in its free stages and one whose
+   *  model has no known price are both "no figure", and zero would claim free.
+   *
+   *  **It lags through the stage that costs most.** Semantic extraction records
+   *  its spend when the activity ends, not per chunk, so a run 260 calls in
+   *  still reports only what embedding cost — which is why progress is shown
+   *  beside it rather than instead of it. */
+  usdSoFar: number | null;
 }
 
 // -- the library graph -------------------------------------------------------
@@ -883,6 +908,9 @@ export const api = {
   runStatus: (workflowId: string) => invoke<RunState>("run_status", { workflowId }),
   ingestApprove: (workflowId: string, approval: Approval) =>
     invoke<void>("ingest_approve", { workflowId, approval }),
+  /** Stop a run that is already spending. The counterpart of `ingestApprove`:
+   *  a spend gate that can only be opened is half a gate. */
+  cancelRun: (workflowId: string) => invoke<void>("cancel_run", { workflowId }),
   /** Which libraries exist. Free, and what every screen needs before it can
    *  ask anything: a library id is not something a person can be expected to
    *  type from memory. */

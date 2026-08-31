@@ -452,5 +452,34 @@
       "keychain": "The session is kept in this computer system keychain.",
       "file": "There is no system keychain here, so the session is kept in an owner-only file under the app data directory. It works, and it is protected by the file permissions rather than by the operating system."
     }
+  },
+  "activity": {
+    "title": "In progress",
+    "progress": "{{done}} of {{total}} fragments",
+    "spent": "{{usd}} billed so far",
+    "spentLags": "The stage that costs most records its spend when it ends, so this figure lags while it runs.",
+    "view": "Open",
+    "cancel": "Stop",
+    "confirmCancel": "Stop it",
+    "keepGoing": "Let it finish",
+    "cancelling": "Stopping…",
+    "cancelFailed": "It could not be stopped. It is still running.",
+    "stage": {
+      "staging": "staging the file",
+      "registering": "registering",
+      "extracting": "extracting text",
+      "profiling": "reading the structure",
+      "previewing": "building the preview",
+      "awaiting_approval": "waiting for approval",
+      "awaiting_correction_review": "waiting for the correction to be reviewed",
+      "learning": "learning the rules",
+      "correcting": "correcting the text",
+      "chunking": "chunking",
+      "projecting": "projecting the graph",
+      "embedding": "embedding",
+      "semantics": "extracting concepts",
+      "activating": "activating",
+      "done": "finishing"
+    }
   }
 }

@@ -173,6 +173,13 @@ class RunSummary:
     error_kind: str | None
     title: str | None
     library_id: str | None
+    #: What this run has been billed so far, summed from `cost_entry`.
+    #:
+    #: `None`, never zero, when no stage has recorded a price — the same rule
+    #: `Cost.usd` follows, and for the same reason: a run whose model has no
+    #: price and a run that has not spent yet are different facts, and zero
+    #: claims the second. A run still in its free stages legitimately has none.
+    usd_so_far: float | None
 
 
 @dataclass
@@ -405,11 +412,25 @@ class Catalog:
         `LEFT JOIN`, not an inner one: `run.document_id` is `ON DELETE SET NULL`
         and removal deliberately keeps the run and its costs, so an inner join
         would quietly drop exactly the history that was kept on purpose.
+
+        `usd_so_far` is a correlated subquery rather than a join with a GROUP BY,
+        because the row is already one per run and grouping would make every
+        other column an aggregate for no gain. It reads only the catalog, which
+        is what keeps `/project-summary` free of a dependency on Temporal — the
+        landing screen has to degrade rather than fail, so what a run is *doing*
+        belongs to `/runs/{id}`, and what it has *cost* belongs here.
         """
         sql = """
             SELECT r.id, r.workflow_id, r.kind, r.state, r.stage,
                    r.started_at, r.finished_at, r.error_kind,
-                   d.title, d.library_id
+                   d.title, d.library_id,
+                   -- Cast in SQL, not in Python: `cost_entry.usd` is
+                   -- `numeric(12, 6)`, so psycopg hands back a `Decimal` and the
+                   -- annotation would be a lie the way `Cost.usd`'s already is —
+                   -- harmless while it is only serialised, a `TypeError` the
+                   -- first time anything sums or compares it against a float.
+                   (SELECT sum(ce.usd) FROM cost_entry ce
+                     WHERE ce.run_id = r.id)::float8 AS usd_so_far
               FROM run r
               LEFT JOIN document d ON d.id = r.document_id
              WHERE r.tenant_id = %s

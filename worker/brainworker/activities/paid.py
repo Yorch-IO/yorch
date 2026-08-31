@@ -809,7 +809,26 @@ async def extract_semantics(
     #: hides behind a count of claims that all look equally good.
     unverified = 0
 
-    for row in rows:
+    for done, row in enumerate(rows):
+        # One heartbeat per chunk, which is the only unit of progress this stage
+        # has: extraction is deliberately one call per chunk, so a count of
+        # chunks is a count of calls and of spend. `/runs/{workflow_id}` reads it
+        # back off `describe().pending_activities`, which is what turns "this is
+        # running" into "598 chunks, 96 done" for somebody deciding whether to
+        # let it finish.
+        #
+        # **No `heartbeat_timeout` is set on this activity, deliberately.** One
+        # would let Temporal notice a hang — but it would also fail and retry the
+        # activity on a heartbeat that merely arrived late, and a retry of this
+        # stage re-runs every generation call from the start. Detecting a stall
+        # is worth less than never paying twice for a slow one.
+        # Guarded because every test in `tests/activities/` calls these as plain
+        # functions rather than through a worker — which is the pattern that
+        # keeps them cheap to test — and `heartbeat` raises outside an activity
+        # context. `in_activity()` is the SDK's own answer for code that has to
+        # run both ways.
+        if activity.in_activity():
+            activity.heartbeat(done, len(rows))
         chunk = make_chunk_id(registered.version_id, row["index"])
         try:
             passes = _extract_passes(

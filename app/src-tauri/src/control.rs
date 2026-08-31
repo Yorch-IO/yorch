@@ -207,6 +207,27 @@ pub struct RunState {
     /// caller must read that as "keep waiting", never as "failed".
     #[serde(default)]
     pub state: Option<String>,
+    /// How far the running activity has got, when it reports.
+    ///
+    /// `None` for every honest absence, and they are not told apart on purpose:
+    /// nothing pending, an activity that does not heartbeat, a run older than
+    /// the code that emits it. All of them mean "no progress to show", which is
+    /// one thing for a screen to render rather than four.
+    #[serde(default)]
+    pub progress: Option<RunProgress>,
+}
+
+/// Chunks done out of chunks total, off the activity's heartbeat.
+///
+/// Only semantic extraction reports today, and it is the one worth reporting:
+/// one generation call per chunk, so this is simultaneously a count of calls and
+/// of spend — which is what a person stopping a run is actually weighing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunProgress {
+    pub activity: String,
+    pub done: u32,
+    pub total: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -753,6 +774,16 @@ pub struct RunSummary {
     /// the document it was spent on, deliberately.
     pub title: Option<String>,
     pub library_id: Option<String>,
+    /// Billed so far, summed from the ledger. `None`, never zero: a run still in
+    /// its free stages and a run whose model has no known price are both "no
+    /// figure", and zero would claim the run was free.
+    ///
+    /// **It lags during the stage that costs most.** Semantic extraction records
+    /// its spend when the activity finishes, not per chunk, so a run 260 calls
+    /// into it still reports only what embedding cost. That is the reason
+    /// `RunProgress` earns its place beside this rather than duplicating it.
+    #[serde(default)]
+    pub usd_so_far: Option<f64>,
 }
 
 /// A whole library as nodes and weighted edges.
@@ -1139,6 +1170,26 @@ impl Control {
             .post_json(
                 &format!("/runs/{workflow_id}/approve"),
                 approval,
+                START_TIMEOUT,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Stop a run that is already spending.
+    ///
+    /// The counterpart of `approve`. A gate that can only be opened is half a
+    /// gate: before this the only way to stop an ingest 260 generation calls into
+    /// semantic extraction was `temporal workflow cancel` from a shell.
+    ///
+    /// `POST` with no body, because the workflow id in the path is the whole
+    /// request — there is nothing to decide, unlike an approval which carries the
+    /// stage switches.
+    pub async fn cancel_run(&self, workflow_id: &str) -> Result<()> {
+        let _: serde_json::Value = self
+            .post_json(
+                &format!("/runs/{workflow_id}/cancel"),
+                &serde_json::json!({}),
                 START_TIMEOUT,
             )
             .await?;
@@ -1873,6 +1924,57 @@ mod estimate_range {
         assert_eq!(out["totalUsdHigh"], 0.1209);
         assert_eq!(out["stages"][0]["usdHigh"], 0.1199);
         assert_eq!(out["stages"][0]["outputTokensHigh"], 12882);
+    }
+
+    #[test]
+    fn a_run_carries_its_spend_and_a_plane_without_it_still_parses() {
+        // `usd_so_far` is `#[serde(default)]` for the reason `RunState`'s fields
+        // are: a control plane that has not been upgraded must lose the figure,
+        // not the whole call. Both directions are asserted because only one of
+        // them is obvious.
+        let with: RunSummary = serde_json::from_str(
+            r#"{"id":"r1","workflow_id":"w1","kind":"index","state":"running",
+                "stage":"semantics","started_at":"2026-08-31T02:50:14Z",
+                "finished_at":null,"error_kind":null,"title":"Un libro",
+                "library_id":"lib_teologia","usd_so_far":0.025}"#,
+        )
+        .unwrap();
+        assert_eq!(with.usd_so_far, Some(0.025));
+
+        let without: RunSummary = serde_json::from_str(
+            r#"{"id":"r1","workflow_id":"w1","kind":"index","state":"running",
+                "stage":"semantics","started_at":"2026-08-31T02:50:14Z",
+                "finished_at":null,"error_kind":null,"title":null,
+                "library_id":null}"#,
+        )
+        .unwrap();
+        assert_eq!(without.usd_so_far, None);
+
+        // Serialised camelCase, because the webview reads `usdSoFar`.
+        let out = serde_json::to_value(&with).unwrap();
+        assert_eq!(out["usdSoFar"], 0.025);
+    }
+
+    #[test]
+    fn progress_is_read_when_the_activity_reports_and_absent_when_it_does_not() {
+        // The absence is the common case and must not be an error: only
+        // `extract_semantics` heartbeats, and no run older than that code does.
+        let live: RunState = serde_json::from_str(
+            r#"{"workflow_id":"w1","stage":"semantics","state":"running",
+                "progress":{"activity":"extract_semantics","done":260,"total":598}}"#,
+        )
+        .unwrap();
+        let progress = live.progress.as_ref().expect("a reported progress must survive");
+        assert_eq!((progress.done, progress.total), (260, 598));
+
+        let quiet: RunState = serde_json::from_str(
+            r#"{"workflow_id":"w1","stage":"correcting","state":"running"}"#,
+        )
+        .unwrap();
+        assert!(quiet.progress.is_none());
+
+        let out = serde_json::to_value(&live).unwrap();
+        assert_eq!(out["progress"]["done"], 260);
     }
 
     // -- the overview endpoints --------------------------------------------

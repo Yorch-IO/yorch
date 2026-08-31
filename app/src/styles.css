@@ -95,6 +95,66 @@ body {
   overflow-y: auto;
 }
 
+/* What is happening right now, in the sidebar under the tabs.
+   Absent most of the time — `ActivityIndicator` returns null when nothing runs —
+   so nothing here may reserve space. */
+.activity {
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.activity-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0;
+}
+
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.activity-run {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  /* The sidebar is narrow and a document title is not. Without this the flex
+     item refuses to shrink and the whole sidebar widens. */
+  min-width: 0;
+}
+
+.activity-name {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.activity-run progress {
+  flex: 1 1 100%;
+  width: 100%;
+  height: 0.4rem;
+}
+
+.activity-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex: 1 1 100%;
+}
+
 .workspace {
   display: grid;
   grid-template-rows: auto 1fr;

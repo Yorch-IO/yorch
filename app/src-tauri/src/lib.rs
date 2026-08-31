@@ -637,6 +637,16 @@ async fn ingest_approve(
         .await
 }
 
+/// Stop a run that is already spending.
+///
+/// Explicit like every other proxy — no generic pass-through — which is what
+/// keeps the webview on a `default-src 'self'` CSP with no localhost exception.
+#[tauri::command]
+async fn cancel_run(state: State<'_, AppState>, workflow_id: String) -> Result<()> {
+    let control = state.control().await?;
+    control.cancel_run(&workflow_id).await
+}
+
 #[tauri::command]
 async fn libraries(state: State<'_, AppState>) -> Result<Libraries> {
     let control = state.control().await?;
@@ -893,6 +903,7 @@ pub fn run() {
             ingest_start,
             ingest_gate,
             run_status,
+            cancel_run,
             ingest_approve,
             libraries,
             library_documents,

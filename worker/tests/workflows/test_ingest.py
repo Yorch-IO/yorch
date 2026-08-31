@@ -185,8 +185,16 @@ async def activate_version(*_args) -> None:
     return None
 
 
+#: Terminal states the workflow told the catalog about. A no-op mock could not
+#: tell "recorded cancelled" from "recorded nothing", which is the whole point of
+#: the cancellation test below.
+OUTCOMES: list[str] = []
+
+
 @activity.defn(name="record_run_outcome")
-async def record_run_outcome(*_args) -> None:
+async def record_run_outcome(*args) -> None:
+    if len(args) >= 2:
+        OUTCOMES.append(args[1])
     return None
 
 
@@ -271,8 +279,10 @@ async def env():
 def _clear():
     SPENT.clear()
     LINKED.clear()
+    OUTCOMES.clear()
     yield
     SPENT.clear()
+    OUTCOMES.clear()
 
 
 async def _start(env: WorkflowEnvironment, req: IngestRequest, opts: StageOptions, acts):
@@ -706,3 +716,78 @@ async def test_activation_happens_after_every_projection(env: WorkflowEnvironmen
                               StageOptions(correct=False, extract_semantics=False), acts)
         await handle.result()
     assert order == ["embed", "activate"]
+
+
+async def test_a_cancelled_run_records_the_outcome_rather_than_reading_running(
+    env: WorkflowEnvironment,
+):
+    """Cancelling has to reach the catalog, and the write has to be shielded.
+
+    Without the handler the run row keeps whatever state it had — `running`, now
+    that `_set_stage` is honest — and stays there for ever, which is the exact
+    lie the state column was fixed to stop telling. Without the *shield* the
+    handler runs and still records nothing: the cancellation that triggered it
+    cancels the bookkeeping activity too. This test fails in both cases, which is
+    why it asserts the recorded value rather than merely that the run ended.
+    """
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE,
+        workflows=[IngestWorkflow], activities=activities(),
+    ):
+        handle = await _start(env, request(), StageOptions(), activities())
+        await _wait_for_gate(handle)
+
+        await handle.cancel()
+        with pytest.raises(Exception):
+            await handle.result()
+
+    assert OUTCOMES == ["cancelled"], (
+        "a cancelled run must tell the catalog it was cancelled"
+    )
+    assert SPENT == [], "cancelling at the gate must not have spent anything"
+
+
+async def test_cancelling_while_a_paid_activity_runs_still_records_the_outcome(
+    env: WorkflowEnvironment,
+):
+    """The case the shield is actually for.
+
+    Cancelling at the gate is the easy half: nothing is in flight, so the
+    bookkeeping activity starts cleanly. This cancels with a paid activity
+    already running, which is the situation a person is in when they stop a run
+    — 598 chunks into semantic extraction, watching the money — and it is where
+    an unshielded cleanup would be cancelled along with everything else.
+    """
+    import asyncio as _asyncio
+
+    running = _asyncio.Event()
+
+    @activity.defn(name="embed_and_index")
+    async def slow_embed(*_args) -> Indexed:
+        SPENT.append("embedding")
+        running.set()
+        await _asyncio.sleep(10)
+        return Indexed(
+            collection="brain", points=3, dimensions=3072,
+            spend=Spend("embedding", "gemini-embedding-001", 3000, 0, 0.00045),
+        )
+
+    acts = [a for a in activities() if getattr(a, "__temporal_activity_definition", None)
+            and a.__temporal_activity_definition.name != "embed_and_index"]
+    acts.append(slow_embed)
+
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(env, request(), StageOptions(), acts)
+        await _wait_for_gate(handle)
+        await handle.signal(IngestWorkflow.approve, Approval(approved=True))
+        await _asyncio.wait_for(running.wait(), timeout=30)
+
+        await handle.cancel()
+        with pytest.raises(Exception):
+            await handle.result()
+
+    assert OUTCOMES == ["cancelled"], (
+        "a run cancelled mid-activity must still tell the catalog"
+    )

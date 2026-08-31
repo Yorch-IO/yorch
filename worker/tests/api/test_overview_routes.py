@@ -337,6 +337,7 @@ def test_a_run_outlives_the_document_it_was_spent_on(client, monkeypatch):
         error_kind=None,
         title=None,
         library_id=None,
+        usd_so_far=0.75,
     )
     _catalog(monkeypatch, _FakeCatalog(runs=[orphan]))
     _graph_rows(monkeypatch, {}, {})
@@ -344,6 +345,41 @@ def test_a_run_outlives_the_document_it_was_spent_on(client, monkeypatch):
     assert len(runs) == 1
     assert runs[0]["workflow_id"] == "wf_1"
     assert runs[0]["title"] is None
+    # The spend outlives the document too — that is the half of this the
+    # ON DELETE SET NULL was chosen for, and it is what a person looks for when
+    # asking why a bill is what it is.
+    assert runs[0]["usd_so_far"] == 0.75
+
+
+def test_a_run_that_has_not_been_billed_reports_no_spend_rather_than_zero(
+    client, monkeypatch
+):
+    """None and 0 are different claims: nothing priced yet, against free.
+
+    A run still inside its free stages has no `cost_entry` row at all, and the
+    approval gate exists precisely so that state is common. Rendering it as
+    `0.00` would say the run *is* free, which is the opposite of what it means.
+    Same rule `Cost.usd` follows for a model with no known price.
+    """
+    from datetime import datetime, timezone
+
+    unbilled = RunSummary(
+        id="run_2",
+        workflow_id="wf_2",
+        kind="index",
+        state="awaiting_approval",
+        stage="awaiting_approval",
+        started_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+        finished_at=None,
+        error_kind=None,
+        title="Un libro",
+        library_id="lib_teologia",
+        usd_so_far=None,
+    )
+    _catalog(monkeypatch, _FakeCatalog(runs=[unbilled]))
+    _graph_rows(monkeypatch, {}, {})
+    runs = client.get("/project-summary").json()["recent_runs"]
+    assert runs[0]["usd_so_far"] is None
 
 
 def test_the_degree_filter_reaches_the_query_and_is_echoed(client, called):

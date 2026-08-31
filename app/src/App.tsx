@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { LANGUAGES, setLanguage, type Language } from "./i18n";
 import { BackendProvider, useBackend } from "./lib/backend";
 import { LibrariesProvider, LibraryPicker } from "./lib/libraries";
+import { ActivityIndicator } from "./ActivityIndicator";
 import { AskScreen } from "./screens/AskScreen";
 import { ImportScreen } from "./screens/ImportScreen";
 import { ExploreScreen } from "./screens/ExploreScreen";
@@ -103,6 +104,11 @@ function Shell() {
               </button>
             ))}
           </nav>
+
+          {/* Below the tabs, not above them: it is news, not navigation, and it
+              is absent most of the time — anchoring it under a fixed list keeps
+              the tabs from moving when a run starts. */}
+          <ActivityIndicator go={setTab} />
         </aside>
 
         <div className="workspace">

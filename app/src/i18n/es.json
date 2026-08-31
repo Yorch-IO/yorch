@@ -452,5 +452,34 @@
       "keychain": "La sesión se guarda en el llavero del sistema de este ordenador.",
       "file": "Aquí no hay llavero del sistema, así que la sesión se guarda en un fichero de sólo-propietario dentro del directorio de datos de la aplicación. Funciona, y lo protegen los permisos del fichero en lugar del sistema operativo."
     }
+  },
+  "activity": {
+    "title": "En curso",
+    "progress": "{{done}} de {{total}} fragmentos",
+    "spent": "{{usd}} facturado hasta ahora",
+    "spentLags": "La etapa más cara registra su gasto al terminar, así que esta cifra se queda corta mientras corre.",
+    "view": "Abrir",
+    "cancel": "Detener",
+    "confirmCancel": "Detenerla",
+    "keepGoing": "Que termine",
+    "cancelling": "Deteniendo…",
+    "cancelFailed": "No se pudo detener. Sigue en marcha.",
+    "stage": {
+      "staging": "preparando el fichero",
+      "registering": "registrando",
+      "extracting": "extrayendo el texto",
+      "profiling": "leyendo la estructura",
+      "previewing": "construyendo la vista previa",
+      "awaiting_approval": "esperando aprobación",
+      "awaiting_correction_review": "esperando revisión de la corrección",
+      "learning": "aprendiendo las reglas",
+      "correcting": "corrigiendo el texto",
+      "chunking": "fragmentando",
+      "projecting": "proyectando el grafo",
+      "embedding": "vectorizando",
+      "semantics": "extrayendo conceptos",
+      "activating": "activando",
+      "done": "terminando"
+    }
   }
 }

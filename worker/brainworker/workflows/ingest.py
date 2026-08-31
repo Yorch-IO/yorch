@@ -19,12 +19,14 @@ a day to answer cannot live in a process that a laptop lid closing would end.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
+from temporalio.exceptions import CancelledError as TemporalCancelledError
 
 with workflow.unsafe.imports_passed_through():
     from ..activities import ingest as act
@@ -126,7 +128,46 @@ class IngestWorkflow:
 
         try:
             return await self._run(request, options, run_id)
+        except asyncio.CancelledError:
+            # A cancellation is an outcome, not a crash, and it has to reach the
+            # catalog or the run reads `running` for ever — the same lie
+            # `_set_stage` used to tell, arrived at from the other direction.
+            #
+            # This is the quiet half: cancelled with nothing in flight, which in
+            # practice means at a gate. The half that matters is in the
+            # `ActivityError` branch below.
+            #
+            # Re-raised, so Temporal still records the execution as CANCELED:
+            # swallowing it would report success for a run somebody stopped.
+            #
+            # The bookkeeping write is deliberately *not* wrapped in
+            # `asyncio.shield`. That is the usual Python-SDK answer for cleanup
+            # after cancellation, and it was tried here — but on temporalio
+            # 1.31.0 the write completes without it in both paths, checked by
+            # removing it and watching the two tests still pass. Defensive code no
+            # test exercises is code that rots; if a later SDK does cancel this
+            # write, `test_a_cancelled_run_records_the_outcome_rather_than_reading_running`
+            # and its mid-activity sibling fail, and the shield goes back in with
+            # a reason.
+            await self._finish(run_id, "cancelled")
+            raise
         except ActivityError as e:
+            # **A cancellation arrives here, not above, whenever an activity was
+            # running** — which is every interesting case, because a person stops
+            # a run while it is spending, not while it waits at a gate. The
+            # activity is cancelled first, so what propagates is an
+            # `ActivityError` wrapping a cancellation rather than a bare
+            # `CancelledError`, and without this branch the run was recorded as
+            # `failed`. Measured by writing the test before the branch: it
+            # asserted `cancelled` and got `failed`.
+            #
+            # They are different outcomes with different fixes. A failure sends
+            # somebody to a log; a cancellation is the thing the person just
+            # asked for, and — like the gate timeout — it costs nothing and
+            # leaves the document importable, so it is not a failure.
+            if isinstance(e.cause, TemporalCancelledError):
+                await self._finish(run_id, "cancelled")
+                raise
             # The catalog has to record the failure even though the workflow is
             # about to fail: a run that vanished without a row is indistinguishable
             # from one that never started, and the UI has nothing to show the user.
@@ -465,8 +506,23 @@ class IngestWorkflow:
         )
 
     async def _set_stage(
-        self, run_id: str, stage: str, state: str | None = None
+        self, run_id: str, stage: str, state: str = "running"
     ) -> None:
+        """Record the stage, and say the run is running unless it is waiting.
+
+        **The default is `"running"`, and it used to be `None`.** `set_run_stage`
+        writes `state = COALESCE(%s, state)`, so passing nothing left whatever was
+        there — and the only call that ever set a state was the gate. A run
+        therefore reported `awaiting_approval` for the whole paid pipeline, from
+        approval to `finish_run`: correcting, embedding and semantics all reported
+        as waiting for a person. Observed on a real run that was 96 calls into
+        semantic extraction and $3.87 deep while every screen said it was waiting
+        for approval, which is the opposite of the one thing that display is for.
+
+        Inverting the default is what makes the column honest, because a run
+        executing a stage *is* running, and the two states that are not are the
+        two gates — which name themselves already.
+        """
         await workflow.execute_activity(
             act.set_run_stage,
             args=[run_id, stage, state],

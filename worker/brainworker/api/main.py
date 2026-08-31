@@ -41,6 +41,16 @@ log = logging.getLogger(__name__)
 
 PROBE_TIMEOUT = 5.0
 
+#: How long to wait for a workflow to answer a `stage` query before giving up.
+#:
+#: Short on purpose. A workflow inside a long activity does not answer at all —
+#: measured against a real ingest mid-semantics, where `describe()` came back in
+#: 0.00s and the query had not answered after 15 — so this is not "how long the
+#: query takes" but "how long to block a route that has better sources for the
+#: same fact". `state` comes from `describe()` and the catalog keeps a `stage`;
+#: the query is the nicety, not the answer.
+STAGE_QUERY_TIMEOUT = 2.0
+
 #: Why the catalog schema is not usable, or None when it is. Startup does not
 #: fail on a database that is still coming up — /health has to stay answerable
 #: for exactly that case — so the failure is recorded and retried instead.
@@ -77,7 +87,20 @@ app = FastAPI(title="Company Brain control API", version="0.1.0", lifespan=lifes
 _OWNED_BY_LEGACY = {"tenant_id": LEGACY_TENANT_ID}
 
 
-async def _run_state(handle: Any) -> str | None:
+async def _describe(handle: Any) -> Any | None:
+    """One `describe()`, swallowed, so a caller wanting two facts pays once.
+
+    `None` means Temporal has forgotten the run, which is ordinary once
+    retention expires and is not a failure: the catalog still holds what the run
+    produced. Swallowed for the same reason the stage query is.
+    """
+    try:
+        return await handle.describe()
+    except Exception:
+        return None
+
+
+def _state_of(description: Any | None) -> str | None:
     """Whether the run is still going, or what it ended as.
 
     `stage` cannot answer this. A query against a *failed* workflow hands back
@@ -85,16 +108,50 @@ async def _run_state(handle: Any) -> str | None:
     working — observed 2026-08-28, when an ingest whose activity retries were
     exhausted reported `"stage": "learning"` indefinitely while
     `describe().status` already read FAILED.
-
-    `None` means Temporal has forgotten the run, which is ordinary once
-    retention expires and is not a failure: the catalog still holds what the run
-    produced. Swallowed for the same reason the stage query is.
     """
-    try:
-        status = (await handle.describe()).status
-    except Exception:
-        return None
+    status = getattr(description, "status", None)
     return status.name.lower() if status is not None else None
+
+
+async def _run_state(handle: Any) -> str | None:
+    return _state_of(await _describe(handle))
+
+
+async def _run_progress(client: Any, description: Any | None) -> dict[str, Any] | None:
+    """How far the running activity has got, when it says.
+
+    Read off `pending_activities`, where `activity.heartbeat` leaves it. Only
+    `extract_semantics` reports today, and it is the one worth reporting: it is
+    one generation call per chunk, so a chunk count is a call count and a spend
+    count, and it is the stage long enough that a person wonders whether to wait.
+
+    `None` covers every honest absence, and they are deliberately not told apart:
+    nothing pending, an activity that does not heartbeat, a run older than this
+    code, or details that will not decode. All four mean the same thing to a
+    reader — this run is not reporting progress — and inventing four ways to say
+    it would be four things for a screen to handle.
+    """
+    raw = getattr(description, "raw_description", None)
+    if raw is None:
+        return None
+    for pending in raw.pending_activities:
+        if not pending.HasField("heartbeat_details"):
+            continue
+        try:
+            details = await client.data_converter.decode(
+                list(pending.heartbeat_details.payloads)
+            )
+        except Exception:
+            continue
+        if len(details) >= 2:
+            done, total = details[0], details[1]
+            if isinstance(done, int) and isinstance(total, int) and total > 0:
+                return {
+                    "activity": pending.activity_type.name,
+                    "done": done,
+                    "total": total,
+                }
+    return None
 
 _settings: config.Settings | None = None
 _client: Client | None = None
@@ -393,6 +450,38 @@ async def approve(workflow_id: str, approval: Approval) -> dict[str, str]:
     return {"workflow_id": workflow_id, "approved": str(approval.approved).lower()}
 
 
+@app.post("/runs/{workflow_id}/cancel")
+async def cancel_run(workflow_id: str) -> dict[str, Any]:
+    """Stop a run that is already spending.
+
+    **Cancel, not terminate.** Cancellation is delivered to the workflow, which
+    unwinds — `record_run_outcome` still writes `cancelled`, the artifacts it has
+    already produced stay, and the version is left importable. Terminating kills
+    it where it stands and the catalog keeps whatever state it happened to be in,
+    which is how a run ends up reading `running` forever.
+
+    The reason this route exists at all is that the alternative was the Temporal
+    CLI. A real ingest ran 598 chunks of semantic extraction — one generation
+    call each, projected at ~$3.87 from this corpus's own measured rate — and the
+    only way to stop it was `temporal workflow cancel` from a shell. A spend gate
+    that can only be opened, never closed, is half a gate.
+
+    Idempotent by nature: cancelling a workflow that has already finished is not
+    an error here, because the caller's intent — "do not let this spend more" —
+    is already true. A workflow Temporal has forgotten is a 404, which is the
+    same thing every other route on this path says.
+    """
+    handle = (await temporal()).get_workflow_handle(workflow_id)
+    try:
+        await handle.cancel()
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail={"kind": "run_not_found", "message": f"{type(e).__name__}: {e}"},
+        ) from e
+    return {"workflow_id": workflow_id, "cancelled": True}
+
+
 def _semantics_counts(
     workspace: pathlib.Path, run_id: str, artifacts: list[dict[str, Any]]
 ) -> dict[str, int] | None:
@@ -441,9 +530,23 @@ async def run_status(workflow_id: str) -> dict[str, Any]:
     outlives the workflow's retention period.
     """
     s = settings()
-    handle = (await temporal()).get_workflow_handle(workflow_id)
+    client = await temporal()
+    handle = client.get_workflow_handle(workflow_id)
+    # **Bounded, because an unbounded query hangs this whole route.** A query is
+    # answered by the workflow, and a workflow sitting inside a long activity does
+    # not answer: measured 2026-08-31 against a real ingest 260 generation calls
+    # into semantic extraction, where `describe()` returned in 0.00s and
+    # `query("stage")` had still not answered after 15 — so `GET /runs/{id}`
+    # returned nothing at all, for the whole hour that stage lasts. The import
+    # screen polls this route to tell a dead run from a slow one, so the hang
+    # landed on exactly the screen that exists to say what is happening.
+    #
+    # Losing the query costs little: `state` comes from `describe()`, `progress`
+    # from the activity's heartbeat, and the catalog holds a `stage` of its own.
     try:
-        stage = await handle.query(IngestWorkflow.stage)
+        stage = await asyncio.wait_for(
+            handle.query(IngestWorkflow.stage), timeout=STAGE_QUERY_TIMEOUT
+        )
     except Exception:
         stage = None
 
@@ -451,13 +554,21 @@ async def run_status(workflow_id: str) -> dict[str, Any]:
         artifacts = catalog.artifacts(workflow_id)
         costs = catalog.total_cost(workflow_id)
 
+    # One `describe()` for both the state and the progress: they come off the
+    # same response, and this endpoint is polled once per active run.
+    description = await _describe(handle)
+
     body: dict[str, Any] = {
         "workflow_id": workflow_id,
         "stage": stage,
-        "state": await _run_state(handle),
+        "state": _state_of(description),
         "artifacts": artifacts,
         "cost": costs,
     }
+    # Omitted, never zeroed, for the same reason `semantics` is below: "not
+    # reporting progress" and "0 of 598 done" are different claims.
+    if (progress := await _run_progress(client, description)) is not None:
+        body["progress"] = progress
     # Omitted rather than zeroed when there is nothing to count: "this run
     # extracted no semantics" and "0 of 0 claims are verifiable" are different
     # statements, and only one of them is true of a structure-only run.

@@ -148,6 +148,19 @@ class RebuildWorkflow:
 
         spent: list[Spend] = []
 
+        # Rebuild sets `self._stage` for the query handler but persisted nothing
+        # after its gate, so the catalog read `awaiting_approval` until the run
+        # finished — the same lie `IngestWorkflow._set_stage` used to tell, and
+        # the reason anything listing runs cannot trust `state` without this.
+        # One write rather than five: the stages below are short and a person
+        # watching needs "this is running", not a play-by-play.
+        await workflow.execute_activity(
+            act.set_run_stage,
+            args=[run_id, "embedding", "running"],
+            start_to_close_timeout=WRITE_TIMEOUT,
+            retry_policy=_RETRY,
+        )
+
         self._stage = "embedding"
         indexed: Indexed = await workflow.execute_activity(
             paid.embed_and_index,

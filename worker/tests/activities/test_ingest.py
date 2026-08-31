@@ -103,6 +103,40 @@ async def test_a_missing_file_says_so(tmp_path: pathlib.Path, workspace):
         await act.stage_source(request_for(tmp_path / "ausente.txt"))
 
 
+async def test_the_title_comes_from_the_key_not_from_where_the_file_landed(
+    tmp_path: pathlib.Path, workspace
+):
+    """The staged filename is chosen by the server, so it is never a name.
+
+    In cloud mode `/uploads` stores the file as `randomUUID() + suffix`,
+    deliberately: a name arriving over HTTP must not become a path segment. The
+    title used to come from that path's stem, which labelled every document
+    imported through the paid plane with a UUID — seen on screen on 2026-08-31 as
+    "1f9c2599-2ffe-43f3-a386-eddd928c82c5" where the book's name belonged.
+    """
+    stored = tmp_path / "1f9c2599-2ffe-43f3-a386-eddd928c82c5.txt"
+    stored.write_text(TEXTO, encoding="utf-8")
+
+    request = IngestRequest(
+        library_id="lib_1",
+        source_path=str(stored),
+        source_key="01_RetoDeDios_INT-S.pdf.corrected.txt",
+    )
+    staged = await act.stage_source(request)
+    assert staged.title == "01_RetoDeDios_INT-S.pdf.corrected"
+
+    # An explicit title still wins: this is a fallback, not an override.
+    titled = await act.stage_source(
+        IngestRequest(
+            library_id="lib_1",
+            source_path=str(stored),
+            source_key="01_RetoDeDios_INT-S.pdf.corrected.txt",
+            title="El reto de Dios",
+        )
+    )
+    assert titled.title == "El reto de Dios"
+
+
 # -- extraction and preview -------------------------------------------------
 
 

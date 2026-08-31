@@ -407,12 +407,26 @@ async def stage_source(request: IngestRequest) -> Staged:
         )
 
     digest, size = _sha256_file(path)
+    # **The title falls back to `source_key`, not to the staged path.**
+    #
+    # `path` is where the file *landed*, and in cloud mode the server named it
+    # itself — `randomUUID() + suffix` — precisely so that a name arriving over
+    # HTTP never becomes a path segment. So `path.stem` is by construction not a
+    # human name, and using it labelled every document imported through the paid
+    # plane with a UUID: seen on screen 2026-08-31 as
+    # "1f9c2599-2ffe-43f3-a386-eddd928c82c5" where the book's name belonged.
+    #
+    # `source_key` is the library-relative name a person reads, and it is what
+    # the document's identity already derives from. Its stem drops the extension
+    # the way `path.stem` did; a key with directories in it keeps only the last
+    # segment, since the folder is not part of the book's name.
+    fallback = pathlib.PurePosixPath(request.source_key).stem or path.stem
     return Staged(
         content_sha256=digest,
         byte_size=size,
         fmt=suffix.lstrip("."),
         extractor=extractor_name(str(path)),
-        title=request.title or path.stem,
+        title=request.title or fallback,
     )
 
 

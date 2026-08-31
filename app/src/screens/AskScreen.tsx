@@ -15,8 +15,8 @@ import {
   loadSession,
   saveSession,
   selectedEntry,
-  EMPTY_SESSION,
 } from "../lib/askSession";
+import { useBackend } from "../lib/backend";
 import { useLibraries } from "../lib/libraries";
 
 /**
@@ -76,7 +76,11 @@ export function AskScreen() {
 
   const { selected: libraryId } = useLibraries();
   const [text, setText] = useState("");
-  const [session, dispatch] = useReducer(askReducer, EMPTY_SESSION, loadSession);
+  // The screen is remounted when the plane changes (see `App`), so the identity
+  // read here is always the one whose history belongs on screen, and the lazy
+  // initialiser runs again rather than carrying the other plane's questions.
+  const { identity } = useBackend();
+  const [session, dispatch] = useReducer(askReducer, identity, loadSession);
   const nextId = useRef(lastId(session));
   const [now, setNow] = useState(() => Date.now());
 
@@ -87,8 +91,8 @@ export function AskScreen() {
   const busy = session.entries.some((e) => e.status === "pending");
 
   useEffect(() => {
-    saveSession(session);
-  }, [session]);
+    saveSession(session, identity);
+  }, [session, identity]);
 
   /** The questions in flight, as a string so the effects below re-run when the
    *  set changes rather than on every unrelated dispatch. */

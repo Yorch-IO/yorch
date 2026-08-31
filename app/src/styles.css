@@ -1580,3 +1580,44 @@ button.link.active {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* The drop zone.
+ *
+ * Every colour here is a token, so the dark theme follows without a second
+ * rule — the lesson from `--accent-soft`, a token defined nowhere whose
+ * plausible-looking fallback painted the same light blue in both themes.
+ *
+ * `dragging` is a state Rust reports, not a CSS one: `:hover` and `:-moz-drag-
+ * over` describe the webview's own drag, and this drag belongs to the OS. It is
+ * an outline rather than a border so the box does not change size under the
+ * pointer, which reads as the layout jumping. */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.dropzone.dragging {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The path under the name is long and must not push the panel wider than the
+   column. It breaks anywhere because a filesystem path has no word boundaries
+   a browser recognises — the same reason the estimate table needed its
+   `nowrap` removed. */
+.dropzone .chosen {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dropzone .muted {
+  margin: 0;
+}

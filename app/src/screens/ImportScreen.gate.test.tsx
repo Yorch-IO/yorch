@@ -26,7 +26,8 @@ const TICK = 1500;
 const settle = { timeout: 4 * TICK, interval: 50 };
 const oneMoreTick = () => new Promise((r) => setTimeout(r, TICK + 200));
 
-const { stageSource, ingestStart, ingestGate, runStatus } = vi.hoisted(() => ({
+const { pickSource, stageSource, ingestStart, ingestGate, runStatus } = vi.hoisted(() => ({
+  pickSource: vi.fn(),
   stageSource: vi.fn(),
   ingestStart: vi.fn(),
   ingestGate: vi.fn(),
@@ -37,7 +38,7 @@ vi.mock("../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/api")>();
   return {
     ...actual,
-    api: { ...actual.api, stageSource, ingestStart, ingestGate, runStatus },
+    api: { ...actual.api, pickSource, stageSource, ingestStart, ingestGate, runStatus },
   };
 });
 
@@ -67,22 +68,31 @@ beforeEach(async () => {
     byteSize: 10,
   });
   ingestStart.mockResolvedValue({ workflowId: "ingest-1", state: "running" });
+  pickSource.mockResolvedValue("/home/a/libros/x/libro.pdf");
   ingestGate.mockResolvedValue(null);
 });
 
-const start = (container: HTMLElement) => {
-  const input = container.querySelector("input:not([type=checkbox])");
-  fireEvent.change(input as HTMLInputElement, {
-    target: { value: "/home/a/libros/x/libro.pdf" },
-  });
-  fireEvent.click(container.querySelector("button") as HTMLButtonElement);
+const start = async (container: HTMLElement) => {
+  // No path field any more: a path typed by hand cannot work in either mode, so
+  // the only paths that reach `stage_source` are ones the OS produced. The
+  // screen is therefore driven the way a person drives it — press the chooser,
+  // which is the first button, then Preview, which is the last.
+  const buttons = () => Array.from(container.querySelectorAll("button"));
+  fireEvent.click(buttons()[0] as HTMLButtonElement);
+  await waitFor(() => expect(pickSource).toHaveBeenCalled());
+
+  const preview = buttons()[buttons().length - 1] as HTMLButtonElement;
+  // Disabled until a file *and* a library are set, which is why the pick above
+  // has to land first.
+  expect(preview.disabled).toBe(false);
+  fireEvent.click(preview);
 };
 
 describe("waiting for a gate that may never arrive", () => {
   it("stops and says so when the run ended without reaching its gate", async () => {
     runStatus.mockResolvedValue({ workflowId: "ingest-1", stage: "learning", state: "failed" });
     const { container } = render(<ImportScreen />);
-    start(container);
+    await start(container);
 
     // The message names the state rather than saying "something went wrong":
     // a run that failed and one that was cancelled have different causes.
@@ -97,7 +107,7 @@ describe("waiting for a gate that may never arrive", () => {
   it("keeps waiting while the run is still running", async () => {
     runStatus.mockResolvedValue({ workflowId: "ingest-1", stage: "extracting", state: "running" });
     const { container } = render(<ImportScreen />);
-    start(container);
+    await start(container);
 
     await waitFor(() => expect(runStatus.mock.calls.length).toBeGreaterThan(0), settle);
     expect(container.querySelector(".error")).toBeNull();
@@ -109,7 +119,7 @@ describe("waiting for a gate that may never arrive", () => {
     // run that is still working.
     runStatus.mockResolvedValue({ workflowId: "ingest-1", stage: null, state: null });
     const { container } = render(<ImportScreen />);
-    start(container);
+    await start(container);
 
     await waitFor(() => expect(runStatus.mock.calls.length).toBeGreaterThan(0), settle);
     expect(container.querySelector(".error")).toBeNull();
@@ -141,7 +151,7 @@ describe("waiting for a gate that may never arrive", () => {
       profile: null,
     });
     const { container } = render(<ImportScreen />);
-    start(container);
+    await start(container);
 
     await waitFor(() => expect(ingestGate.mock.calls.length).toBeGreaterThan(0), settle);
     await oneMoreTick();

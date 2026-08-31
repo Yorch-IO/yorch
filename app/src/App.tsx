@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { LANGUAGES, setLanguage, type Language } from "./i18n";
+import { BackendProvider, useBackend } from "./lib/backend";
 import { LibrariesProvider, LibraryPicker } from "./lib/libraries";
 import { AskScreen } from "./screens/AskScreen";
 import { ImportScreen } from "./screens/ImportScreen";
@@ -54,7 +55,18 @@ const NEEDS_LIBRARY: ReadonlySet<Tab> = new Set<Tab>([
   "ask",
 ]);
 
+/** The provider has to sit above what it invalidates, and `App` is what reads
+ *  the identity, so the two cannot be the same component. */
 export default function App() {
+  return (
+    <BackendProvider>
+      <Shell />
+    </BackendProvider>
+  );
+}
+
+function Shell() {
+  const { identity } = useBackend();
   const { t, i18n } = useTranslation();
   const [tab, setTab] = useState<Tab>("home");
   const content = useRef<HTMLElement>(null);
@@ -142,8 +154,23 @@ export default function App() {
           <main className="content" ref={content}>
             {TABS.map((name) => {
               const Screen = SCREENS[name];
+              // Changing plane changes what every one of these can read, and a
+              // screen that stays mounted keeps what it read from the other one
+              // — Home's project-wide figures, the graph's laid-out canvas,
+              // Import's poll of a run belonging to a different API process.
+              // Putting the identity in the key remounts them, which is the
+              // same reset the comment above is careful *not* to do on a tab
+              // change, and is right here for the opposite reason: leaving a
+              // tab must not throw work away, and switching plane must.
+              //
+              // Services is deliberately excluded. It is the screen holding the
+              // switch, so remounting it under the user's own hand would take
+              // away the draft they just saved, the error panel and the ping
+              // they are reading; `refresh()` there already re-reads everything
+              // that went stale.
+              const key = name === "stack" ? name : `${identity}:${name}`;
               return (
-                <div key={name} hidden={name !== tab}>
+                <div key={key} hidden={name !== tab}>
                   <Screen go={setTab} />
                 </div>
               );

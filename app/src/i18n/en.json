@@ -135,7 +135,7 @@
     "userInactive": "This account has been disabled.",
     "noMembership": "This account does not belong to that organisation.",
     "tenantRequired": "This account belongs to more than one organisation, and this release works with one. An operator has to leave a single active membership in place.",
-    "tenantScopePending": "That view is not segmented by organisation yet, so it is only available for the original one."
+    "tenantScopePending": "This organisation's corpus is managed by the local backend, which writes to the volume directly, so the paid service has no inbox to put a file in. Switch to the local backend to import into it, or sign in to an organisation of your own."
   },
   "library": {
     "title": "Library",
@@ -188,8 +188,6 @@
   "import": {
     "title": "Import a document",
     "intro": "Everything up to the approval gate is free: the document is extracted and chunked so you can see what would be indexed before anything is paid for.",
-    "path": "File path",
-    "pathHint": "/path/to/document.pdf",
     "stages": "Paid stages",
     "stageCorrect": "Correct the text (the most expensive stage)",
     "stageEmbed": "Embed and index for search",
@@ -208,7 +206,13 @@
       "timed_out": "it timed out",
       "completed": "it finished without publishing a gate",
       "continued_as_new": "it was restarted as a new run"
-    }
+    },
+    "file": "File",
+    "dropHint": "Drag a document here, or choose one with the button.",
+    "choose": "Choose a file…",
+    "chooseOther": "Choose another…",
+    "picking": "Opening…",
+    "oneAtATime": "Took the first. Files ignored: {{count}}. One at a time for now."
   },
   "gate": {
     "title": "Approve before spending",

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "../../i18n";
 import type { LibraryGraph as Data } from "../../lib/api";
+import { BackendProvider } from "../../lib/backend";
 import { LibrariesProvider } from "../../lib/libraries";
 import { LibraryGraph } from "./LibraryGraph";
 
@@ -81,9 +82,11 @@ function nodeNames(): string[] {
 
 async function mounted() {
   const view = render(
-    <LibrariesProvider>
+    <BackendProvider>
+      <LibrariesProvider>
       <LibraryGraph onOpenDocument={open} />
-    </LibrariesProvider>,
+    </LibrariesProvider>
+    </BackendProvider>,
   );
   await waitFor(() => expect(libraryGraph).toHaveBeenCalled());
   await screen.findByText(t("graph.allNodes"));
@@ -292,9 +295,11 @@ describe("when there is nothing, or something failed", () => {
       data({ documents: [], concepts: [], edges: [] }),
     );
     render(
+      <BackendProvider>
       <LibrariesProvider>
         <LibraryGraph />
-      </LibrariesProvider>,
+      </LibrariesProvider>
+    </BackendProvider>,
     );
     await screen.findByText(t("graph.libraryEmpty"));
     expect(document.querySelector(".error")).toBeNull();
@@ -306,9 +311,11 @@ describe("when there is nothing, or something failed", () => {
       message: "error sending request for url",
     });
     render(
+      <BackendProvider>
       <LibrariesProvider>
         <LibraryGraph />
-      </LibrariesProvider>,
+      </LibrariesProvider>
+    </BackendProvider>,
     );
     await screen.findByText(t("graph.failed"));
     await screen.findByText(t("error.controlUnreachable"));

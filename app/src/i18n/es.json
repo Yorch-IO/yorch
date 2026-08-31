@@ -135,7 +135,7 @@
     "userInactive": "Esta cuenta está deshabilitada.",
     "noMembership": "Esta cuenta no pertenece a esa organización.",
     "tenantRequired": "Esta cuenta pertenece a más de una organización, y esta versión trabaja con una. Un operador tiene que dejar una sola membresía activa.",
-    "tenantScopePending": "Esa vista todavía no está segmentada por organización, así que solo está disponible para la original."
+    "tenantScopePending": "El corpus de esta organización lo gestiona el backend local, que escribe directamente en el volumen, así que el servicio de pago no tiene bandeja donde dejar el fichero. Cambia al backend local para importar en él, o inicia sesión en una organización propia."
   },
   "library": {
     "title": "Biblioteca",
@@ -188,8 +188,6 @@
   "import": {
     "title": "Importar un documento",
     "intro": "Todo lo anterior a la compuerta de aprobación es gratuito: el documento se extrae y se fragmenta para que veas qué se indexaría antes de pagar nada.",
-    "path": "Ruta del archivo",
-    "pathHint": "/ruta/al/documento.pdf",
     "stages": "Etapas de pago",
     "stageCorrect": "Corregir el texto (la etapa más cara)",
     "stageEmbed": "Generar embeddings e indexar",
@@ -208,7 +206,13 @@
       "timed_out": "agotó su tiempo",
       "completed": "acabó sin publicar compuerta",
       "continued_as_new": "se reinició como una ejecución nueva"
-    }
+    },
+    "file": "Archivo",
+    "dropHint": "Arrastra aquí un documento, o elígelo con el botón.",
+    "choose": "Elegir archivo…",
+    "chooseOther": "Elegir otro…",
+    "picking": "Abriendo…",
+    "oneAtATime": "Se tomó el primero. Archivos ignorados: {{count}}. Por ahora se importa de uno en uno."
   },
   "gate": {
     "title": "Aprobar antes de gastar",

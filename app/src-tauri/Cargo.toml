@@ -30,11 +30,28 @@ rand = "0.8"
 # primitive an authorization code is bound to.
 sha2 = "0.10"
 keyring = { version = "3.6.3", default-features = false, features = ["linux-native", "apple-native", "windows-native"] }
+tauri-plugin-dialog = "2"
 
 [profile.release]
 codegen-units = 1
 lto = true
 strip = true
+
+[profile.dev]
+# The dev loop pays for `[profile.release]`'s `codegen-units = 1` + fat LTO on
+# every rebuild, and both of those are serial: one core at 100%, the other
+# fifteen idle. Building unoptimized instead keeps this crate's rebuilds cheap,
+# and optimizing the dependencies — compiled once, then cached — keeps the app
+# feeling like the release build while running `tauri dev`.
+opt-level = 0
+# Full debuginfo is what filled this disk, not the optimization level: the debug
+# `staticlib` alone was 845 MB and `target/debug` 5.8 G. Line tables keep
+# backtraces pointing at file and line, which is all this crate's panics are
+# ever read for, and drop the DWARF that costs the gigabytes.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
 
 [dev-dependencies]
 # Already in the lock file transitively via tauri; declared so the stack tests

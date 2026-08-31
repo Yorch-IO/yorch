@@ -1,3 +1,4 @@
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -74,11 +75,31 @@ const PROFILE_SWITCHES: Record<
   defaults: { learnProfile: false, ignoreProfile: true },
 };
 
+/** The last component of a path, for the two separators the app can be handed.
+ *  Exported for its own test, for the reason `libraryLabel` gives: the property
+ *  is a decision about a string and asserting it directly beats rendering a
+ *  screen to find out. */
+export function fileName(path: string): string {
+  const parts = path.split(/[/\\]/).filter((p) => p !== "");
+  return parts[parts.length - 1] ?? path;
+}
+
 export function ImportScreen() {
   const { t } = useTranslation();
 
   const { selected: libraryId } = useLibraries();
+  /** The file the person chose, as an absolute path on *their* machine. Empty
+   *  until they choose one. It is not a text field any more: a path typed by
+   *  hand could not work in either mode — the local worker reads `/workspace`
+   *  and the cloud one is on another machine — so the only paths that reach
+   *  here are ones the OS handed us, from the chooser or from a drop. */
   const [path, setPath] = useState("");
+  /** Set when a drop carried more than one file. One import is one approval
+   *  gate, so the extras are ignored rather than queued, and saying so is the
+   *  difference between a decision and a file that vanished. */
+  const [ignoredExtras, setIgnoredExtras] = useState(0);
+  const [picking, setPicking] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [stages, setStages] = useState<StageOptions>(DEFAULT_STAGES);
   const [workflowId, setWorkflowId] = useState<string | null>(null);
   const [gate, setGate] = useState<GateReport | null>(null);
@@ -94,6 +115,10 @@ export function ImportScreen() {
    *  "learn" and "ignore" as independent checkboxes invites setting both. */
   const [profileChoice, setProfileChoice] = useState<ProfileChoice>("learn");
   const timer = useRef<number | undefined>(undefined);
+  const dropZone = useRef<HTMLDivElement>(null);
+  /** Whether the pointer was last seen inside the drop zone. See the drop
+   *  branch below for why this cannot be the `dragging` state. */
+  const inside = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (timer.current !== undefined) {
@@ -103,6 +128,90 @@ export function ImportScreen() {
   }, []);
 
   useEffect(() => stopPolling, [stopPolling]);
+
+  /** Accept one path from either source. Extension is not checked here: the
+   *  chooser already filters, a drop cannot be filtered, and the server refuses
+   *  an unsupported suffix with an error that names what it does support —
+   *  which is a better message than one this screen could invent. */
+  const choose = useCallback((paths: string[]) => {
+    const [first, ...rest] = paths;
+    if (first === undefined) return;
+    setPath(first);
+    setIgnoredExtras(rest.length);
+    setError(null);
+  }, []);
+
+  const pick = useCallback(async () => {
+    setPicking(true);
+    setError(null);
+    try {
+      const picked = await api.pickSource();
+      // `null` is a dismissed dialog. Leave the previous choice alone: the
+      // person opened the chooser and changed their mind, which is not a
+      // reason to take away what they had already selected.
+      if (picked !== null) choose([picked]);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setPicking(false);
+    }
+  }, [choose]);
+
+  // The webview's own drag events carry a `File` with no path — the browser
+  // withholds it, and a path is the only thing either plane can use. Tauri's
+  // native drag-drop is the one that reports real paths, so the listener is
+  // bound to the webview rather than to a React `onDrop`.
+  //
+  // Bound once for the screen's lifetime, and the screen stays mounted while
+  // other tabs are shown, so `over` is filtered on the pointer being inside
+  // this drop zone. Without that, dragging a file anywhere over the window
+  // would light up a target the person cannot see.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      // The webview API is only there inside a Tauri window. Under a component
+      // test — and under any host that does not provide it — subscribing
+      // throws, and dropping files is a convenience: the chooser button does
+      // the same job. So the screen degrades to "no drag and drop" rather than
+      // to a blank panel.
+      let fn: (() => void) | undefined;
+      try {
+        fn = await getCurrentWebview().onDragDropEvent((event) => {
+          const zone = dropZone.current;
+          if (!zone) return;
+          if (event.payload.type === "over") {
+            const { x, y } = event.payload.position;
+            const box = zone.getBoundingClientRect();
+            inside.current =
+              x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+            setDragging(inside.current);
+            return;
+          }
+          if (event.payload.type === "drop") {
+            // The drop payload carries no position, so whether it landed on the
+            // zone is decided by the last `over` — a ref rather than the state,
+            // because this closure is bound once and would otherwise read the
+            // value `dragging` had when it was created.
+            setDragging(false);
+            if (inside.current) choose(event.payload.paths);
+            inside.current = false;
+            return;
+          }
+          inside.current = false;
+          setDragging(false);
+        });
+      } catch {
+        return;
+      }
+      if (cancelled) fn();
+      else unlisten = fn;
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [choose]);
 
   const start = useCallback(async () => {
     if (!libraryId) return;
@@ -197,14 +306,33 @@ export function ImportScreen() {
       <h2>{t("import.title")}</h2>
       <p className="intro">{t("import.intro")}</p>
 
-      <label className="field">
-        <span>{t("import.path")}</span>
-        <input
-          value={path}
-          placeholder={t("import.pathHint")}
-          onChange={(e) => setPath(e.target.value)}
-        />
-      </label>
+      {/* No text field. A path typed by hand cannot work in either mode — the
+          local worker opens `/workspace` and the cloud worker is on another
+          machine — so the only paths that may reach `stage_source` are ones the
+          OS produced. `aria-label` rather than a visible one: the zone's own
+          text is the label, and repeating it above would read it twice. */}
+      <div
+        ref={dropZone}
+        className={dragging ? "dropzone dragging" : "dropzone"}
+        role="group"
+        aria-label={t("import.file")}
+      >
+        {path === "" ? (
+          <p className="muted">{t("import.dropHint")}</p>
+        ) : (
+          <p className="chosen">
+            <strong>{fileName(path)}</strong>
+            <br />
+            <span className="muted">{path}</span>
+          </p>
+        )}
+        <button type="button" onClick={() => void pick()} disabled={picking}>
+          {picking ? t("import.picking") : t(path === "" ? "import.choose" : "import.chooseOther")}
+        </button>
+        {ignoredExtras > 0 && (
+          <p className="warn">{t("import.oneAtATime", { count: ignoredExtras })}</p>
+        )}
+      </div>
 
       <fieldset className="stages">
         <legend>{t("import.stages")}</legend>

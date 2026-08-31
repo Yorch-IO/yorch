@@ -16,7 +16,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "../i18n";
 import { ImportScreen } from "./ImportScreen";
 
-const { stageSource, ingestStart, ingestGate } = vi.hoisted(() => ({
+const { pickSource, stageSource, ingestStart, ingestGate } = vi.hoisted(() => ({
+  pickSource: vi.fn(),
   stageSource: vi.fn(),
   ingestStart: vi.fn(),
   ingestGate: vi.fn(),
@@ -26,7 +27,7 @@ vi.mock("../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/api")>();
   return {
     ...actual,
-    api: { ...actual.api, stageSource, ingestStart, ingestGate },
+    api: { ...actual.api, pickSource, stageSource, ingestStart, ingestGate },
   };
 });
 
@@ -50,22 +51,25 @@ afterEach(cleanup);
 beforeEach(async () => {
   vi.clearAllMocks();
   await i18n.changeLanguage("es");
+  pickSource.mockResolvedValue("/home/a/libros/x/libro.pdf");
   ingestGate.mockResolvedValue(null);
   ingestStart.mockResolvedValue({ workflowId: "ingest-1", state: "running" });
 });
 
-const typePathAndStart = (container: HTMLElement) => {
-  // The path field carries no `type`, so it is the first input on the screen;
-  // everything after it is a stage checkbox.
-  const input = container.querySelector("input:not([type=checkbox])");
-  fireEvent.change(input as HTMLInputElement, {
-    target: { value: "/home/a/libros/x/libro.pdf" },
-  });
-  // Disabled until a path *and* a library are set, which is why the change
-  // above has to land first.
-  const start = container.querySelector("button") as HTMLButtonElement;
-  expect(start.disabled).toBe(false);
-  fireEvent.click(start);
+const typePathAndStart = async (container: HTMLElement) => {
+  // No path field any more: a path typed by hand cannot work in either mode, so
+  // the only paths that reach `stage_source` are ones the OS produced. The
+  // screen is therefore driven the way a person drives it — press the chooser,
+  // which is the first button, then Preview, which is the last.
+  const buttons = () => Array.from(container.querySelectorAll("button"));
+  fireEvent.click(buttons()[0] as HTMLButtonElement);
+  await waitFor(() => expect(pickSource).toHaveBeenCalled());
+
+  const preview = buttons()[buttons().length - 1] as HTMLButtonElement;
+  // Disabled until a file *and* a library are set, which is why the pick above
+  // has to land first.
+  expect(preview.disabled).toBe(false);
+  fireEvent.click(preview);
 };
 
 describe("staging a source before the ingest starts", () => {
@@ -78,7 +82,7 @@ describe("staging a source before the ingest starts", () => {
       byteSize: 2048,
     });
     const { container } = render(<ImportScreen />);
-    typePathAndStart(container);
+    await typePathAndStart(container);
 
     await waitFor(() => expect(ingestStart).toHaveBeenCalled());
     expect(stageSource).toHaveBeenCalledWith("/home/a/libros/x/libro.pdf");
@@ -93,7 +97,7 @@ describe("staging a source before the ingest starts", () => {
     // failure as an ingest error rather than an upload one.
     stageSource.mockRejectedValue({ kind: "io", message: "no se pudo leer" });
     const { container } = render(<ImportScreen />);
-    typePathAndStart(container);
+    await typePathAndStart(container);
 
     await waitFor(() => expect(stageSource).toHaveBeenCalled());
     expect(ingestStart).not.toHaveBeenCalled();

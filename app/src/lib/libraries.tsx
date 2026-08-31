@@ -28,23 +28,24 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { api, errorMessage, type LibraryRow } from "./api";
+import { scopedKey, useBackend } from "./backend";
 
 const REMEMBERED = "companyBrain.libraryId";
 
 /** localStorage throws outright in some webview configurations, so every access
  *  is guarded and a failure degrades to "nothing remembered" rather than a
  *  blank screen. */
-function remembered(): string | null {
+function remembered(identity: string): string | null {
   try {
-    return window.localStorage.getItem(REMEMBERED);
+    return window.localStorage.getItem(scopedKey(REMEMBERED, identity));
   } catch {
     return null;
   }
 }
 
-function remember(id: string): void {
+function remember(id: string, identity: string): void {
   try {
-    window.localStorage.setItem(REMEMBERED, id);
+    window.localStorage.setItem(scopedKey(REMEMBERED, identity), id);
   } catch {
     /* not worth telling the user about */
   }
@@ -63,6 +64,7 @@ interface LibrariesState {
 const Ctx = createContext<LibrariesState | null>(null);
 
 export function LibrariesProvider({ children }: { children: ReactNode }) {
+  const { identity } = useBackend();
   const [rows, setRows] = useState<LibraryRow[]>([]);
   const [selected, setSelected] = useState("");
   const [loading, setLoading] = useState(false);
@@ -80,7 +82,7 @@ export function LibrariesProvider({ children }: { children: ReactNode }) {
         // by indexed content, so the first row is the one that can answer.
         const ids = new Set(libraries.map((l) => l.id));
         if (current && ids.has(current)) return current;
-        const saved = remembered();
+        const saved = remembered(identity);
         if (saved && ids.has(saved)) return saved;
         return libraries[0]?.id ?? "";
       });
@@ -89,19 +91,31 @@ export function LibrariesProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [identity]);
 
   // One fetch for the whole app. The stack may not be up yet on first paint,
   // in which case this fails and the picker offers a retry rather than the
   // screens each failing on their own.
+  //
+  // It runs again on every change of plane, and the rows it replaces are the
+  // defect: the two planes hold different libraries and the picker used to keep
+  // whichever set it had fetched at launch. The selection is dropped *before*
+  // the fetch, because `reload`'s first branch keeps an id that exists in the
+  // new list — and an id existing in both planes is precisely the case that
+  // must not be silently carried across. What survives instead is whatever this
+  // identity remembered on its own, which `reload` reads next.
   useEffect(() => {
+    setSelected("");
     void reload();
-  }, [reload]);
+  }, [identity, reload]);
 
-  const select = useCallback((id: string) => {
-    setSelected(id);
-    remember(id);
-  }, []);
+  const select = useCallback(
+    (id: string) => {
+      setSelected(id);
+      remember(id, identity);
+    },
+    [identity],
+  );
 
   const value = useMemo<LibrariesState>(
     () => ({ rows, selected, select, reload, loading, error }),

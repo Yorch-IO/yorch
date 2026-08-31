@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "../i18n";
 import type { BackendInfo } from "../lib/api";
+import { BackendProvider } from "../lib/backend";
 import { StackScreen } from "./StackScreen";
 
 /**
@@ -85,7 +86,11 @@ afterEach(cleanup);
 
 describe("choosing a backend", () => {
   it("opens on the local plane, which needs no address and no sign-in", async () => {
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     await waitFor(() => expect(backendSettings).toHaveBeenCalled());
 
     const select = await screen.findByLabelText(t("backend.mode"));
@@ -96,7 +101,11 @@ describe("choosing a backend", () => {
   });
 
   it("asks for an address only for the paid plane", async () => {
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     const select = await screen.findByLabelText(t("backend.mode"));
     fireEvent.change(select, { target: { value: "cloud" } });
 
@@ -110,7 +119,11 @@ describe("choosing a backend", () => {
     // would be a choice with one option and a way to get it wrong. The header
     // itself stays in Rust — three tests in `control.rs` pin it — because that
     // is what a picker would use the day several memberships exist.
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     fireEvent.change(await screen.findByLabelText(t("backend.mode")), {
       target: { value: "cloud" },
     });
@@ -123,7 +136,11 @@ describe("choosing a backend", () => {
   });
 
   it("passes the whole choice to Rust, which is what validates it", async () => {
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     const select = await screen.findByLabelText(t("backend.mode"));
     fireEvent.change(select, { target: { value: "cloud" } });
     fireEvent.change(screen.getByLabelText(t("backend.baseUrl")), {
@@ -150,7 +167,11 @@ describe("choosing a backend", () => {
     stackStatus.mockRejectedValue({ kind: "config", message: "es del backend local" });
     controlHealth.mockResolvedValue({ ok: true, services: {} });
 
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     await waitFor(() => expect(controlHealth).toHaveBeenCalled());
     // And the local stack is not asked about at all, rather than asked and
     // forgiven: a command that refuses is one that should not have been called.
@@ -167,7 +188,11 @@ describe("choosing a backend", () => {
       info({ mode: "cloud", baseUrl: "https://b.example.com", signedIn: true }),
     );
     controlHealth.mockResolvedValue({ ok: true, services: {} });
-    const { container } = render(<StackScreen />);
+    const { container } = render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     await waitFor(() => expect(controlHealth).toHaveBeenCalled());
     expect(container.querySelector(".error")).toBeNull();
   });
@@ -180,7 +205,11 @@ describe("choosing a backend", () => {
       ports: { qdrantHttp: 6433, qdrantGrpc: 6434, postgres: 5532, temporal: 7333, temporalUi: 8380, api: 8787 },
       devMode: true, services: [],
     });
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     await waitFor(() => expect(stackStatus).toHaveBeenCalled());
     expect(providerSettings).toHaveBeenCalled();
   });
@@ -192,7 +221,11 @@ describe("choosing a backend", () => {
     backendSettings.mockResolvedValue(
       info({ mode: "cloud", baseUrl: "https://b.example.com", signedIn: true, secretStore: "file" }),
     );
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     expect(await screen.findByText(t("backend.secretStore.file"))).toBeTruthy();
     expect(screen.queryByText(t("backend.secretStore.keychain"))).toBeNull();
   });
@@ -201,7 +234,11 @@ describe("choosing a backend", () => {
     // Every request would be refused, and a screen that showed nothing would
     // leave the user reading a 401 on some other tab.
     backendSettings.mockResolvedValue(info({ mode: "cloud", baseUrl: "https://x", signedIn: false }));
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     expect(await screen.findByText(t("backend.signedOut"))).toBeTruthy();
   });
 
@@ -210,14 +247,22 @@ describe("choosing a backend", () => {
     // the whole screen with an install prompt, so the one user for whom Docker
     // is irrelevant had no way to switch away from the backend that needs it.
     dockerProbe.mockRejectedValue(new Error("Docker no está instalado"));
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     expect(await screen.findByLabelText(t("backend.mode"))).toBeTruthy();
   });
 
   it("does not treat a missing Docker as an error once the paid plane is chosen", async () => {
     backendSettings.mockResolvedValue(info({ mode: "cloud", baseUrl: "https://x", signedIn: true }));
     dockerProbe.mockRejectedValue(new Error("Docker no está instalado"));
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     await screen.findByLabelText(t("backend.mode"));
     // Not an error: Docker is a requirement of the local backend and nothing else.
     expect(screen.queryByText(t("docker.missingTitle"))).toBeNull();
@@ -225,7 +270,11 @@ describe("choosing a backend", () => {
 
   it("offers a sign-in when the paid plane has no session, and names who signed in", async () => {
     backendSettings.mockResolvedValue(info({ mode: "cloud", baseUrl: "https://x" }));
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     fireEvent.click(await screen.findByRole("button", { name: t("backend.signIn") }));
     await waitFor(() => expect(signIn).toHaveBeenCalled());
     // The email is a label, read from the token's claim. It authorizes nothing.
@@ -243,7 +292,11 @@ describe("choosing a backend", () => {
     backendSettings.mockResolvedValue(info({ mode: "cloud", baseUrl: "https://x" }));
     let release: (v: unknown) => void = () => {};
     signIn.mockImplementation(() => new Promise((r) => (release = r)));
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     const button = await screen.findByRole("button", { name: t("backend.signIn") });
     fireEvent.click(button);
     // Plain DOM assertions: this project does not install jest-dom, so
@@ -259,14 +312,22 @@ describe("choosing a backend", () => {
 
   it("says that signing out is local, because it is", async () => {
     backendSettings.mockResolvedValue(info({ mode: "cloud", baseUrl: "https://x", signedIn: true }));
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     expect(await screen.findByText(t("backend.signOutNote"))).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: t("backend.signOut") }));
     await waitFor(() => expect(signOut).toHaveBeenCalled());
   });
 
   it("does not nag about a session in local mode, which has no accounts", async () => {
-    render(<StackScreen />);
+    render(
+      <BackendProvider>
+        <StackScreen />
+      </BackendProvider>,
+    );
     await waitFor(() => expect(backendSettings).toHaveBeenCalled());
     expect(screen.queryByText(t("backend.signedOut"))).toBeNull();
     expect(screen.queryByText(t("backend.signedIn"))).toBeNull();

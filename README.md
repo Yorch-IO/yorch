@@ -215,15 +215,24 @@ For the development loop, with hot reload on the frontend:
 ```bash
 source ~/.local/tauri-sysroot/env.sh   # sysroot only
 cd app
-COMPANY_BRAIN_REPO_ROOT=/path/to/this/checkout npm run tauri dev -- --release
+COMPANY_BRAIN_REPO_ROOT=/path/to/this/checkout npm run tauri dev
 ```
 
 `tauri dev` recompiles Rust on every change under `src-tauri/`, so it needs
 `PKG_CONFIG_PATH` exactly as the bundle build does — the failure looks identical
-and arrives minutes into what seemed like a working session. Pass `--release`:
-the default debug profile builds a second full copy of the dependency graph
-including a `staticlib`, which is the ~4 GB noted below. Vite serves the
-frontend on 5173 and the window opens once the first Rust build finishes.
+and arrives minutes into what seemed like a working session. **Do not pass
+`--release` here.** It was the advice while the debug profile built a second
+full copy of the dependency graph including a `staticlib`, and the fix for that
+turned out to be tuning the profile rather than abandoning it: `[profile.dev]`
+now sets `debug = "line-tables-only"`, which cut that `staticlib` from 845 MB to
+352 MB and the `cdylib` from 244 MB to 82 MB, and `opt-level = 3` for
+`[profile.dev.package."*"]`, so the dependency graph is optimized once, cached,
+and the window still feels like the release build. What `--release` buys in the
+dev loop is `codegen-units = 1` and fat LTO on *every* rebuild, and both are
+serial — one core at 100% for minutes while the rest idle. Measured on a
+16-thread machine: a full dev build is 51 s at 654% CPU with 13 `rustc`
+processes at once. Vite serves the frontend on 5173 and the window opens once
+the first Rust build finishes.
 
 `COMPANY_BRAIN_REPO_ROOT` makes the app use `infra/` in place and build the
 worker from local source instead of pulling an image that is not published.
@@ -257,9 +266,9 @@ Re-measured 2026-08-21.
 | `docaget` — `uv sync && uv run pytest -q` | 142 passed, 13 skipped |
 | `worker` — `uv sync && uv run pytest -q` | 310 passed, 48 skipped |
 | `app` — `npm run typecheck` | clean |
-| `app` — `npx vitest run` | 44 passed, 6 files |
+| `app` — `npx vitest run` | 230 passed, 20 files (re-measured 2026-08-30) |
 | `app` — `npm run build` | clean, 261 kB JS |
-| `app/src-tauri` — `cargo test --release` | 45 passed |
+| `app/src-tauri` — `cargo test` | 91 passed (re-measured 2026-08-30, on the tuned dev profile) |
 | `docker build -f worker/Dockerfile` | `company-brain-worker:dev`, 873 MB, imports verified on Python 3.13 |
 | `npx tauri build --bundles deb` | `Company Brain_0.1.0_amd64.deb`, 4.1 MB |
 | `npx tauri build --bundles appimage` | `Company Brain_0.1.0_amd64.AppImage`, 79 MB |
@@ -299,10 +308,14 @@ outlives the machine, and those hold provider keys and the Postgres password.
 - **Check real exit codes.** `npm run typecheck | tail -6 && echo CLEAN` reports
   the status of `tail`, not `tsc`, and will happily print CLEAN over a failure.
   Redirect to a file and test `$?`.
-- **`cargo test` in the debug profile needs ~4 GB of `target/`**, because
-  `crate-type` includes `staticlib`. It can fill a disk and fail with `No space
-  left on device` from `ar` rather than from rustc — an error easy to misread as
-  a build defect. `cargo test --release` reuses the release artifacts.
+- **`cargo test` belongs in the debug profile, and that is now the fast path.**
+  It used to need ~4 GB of `target/` because `crate-type` includes `staticlib`,
+  and could fill a disk and fail with `No space left on device` from `ar` rather
+  than from rustc — an error easy to misread as a build defect. Full DWARF, not
+  the optimization level, was what made it that large; `[profile.dev]`'s
+  `debug = "line-tables-only"` cut the `staticlib` to 352 MB. Plain `cargo test`
+  runs the 91 tests in 60 s at 412% CPU, where `--release` pays fat LTO for the
+  same result.
 - **Rebuild both halves, or neither.** The app and the control API are two
   artifacts that ship one protocol between them, and nothing checks that they
   agree. Rebuilding the binary without recreating the stack — or the reverse —
@@ -978,7 +991,7 @@ a typo, and it is now load-bearing.
 cd docaget && uv sync && uv run pytest -q   # engine — 142 passed, 13 skipped
 cd worker  && uv sync && uv run pytest -q   # workflows, graph, catalog, API
 cd app     && npm install && npm run typecheck && npx vitest run   # 170 passed
-cd app/src-tauri && cargo test --release     # 52 — see Building on Linux for the libraries
+cd app/src-tauri && cargo test               # 91 — see Building on Linux for the libraries
 ```
 
 The worker's graph and catalog suites are integration tests: they skip, naming

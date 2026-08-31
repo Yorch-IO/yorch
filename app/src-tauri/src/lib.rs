@@ -12,7 +12,7 @@ mod keychain;
 mod ports;
 mod stack;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -402,20 +402,35 @@ async fn control_ping(state: State<'_, AppState>) -> Result<PingResult> {
 /// Put a file where the worker can read it, and say what to call it.
 ///
 /// **The two planes disagree about what a path is, and this is where that is
-/// settled.** In local mode the app and the worker share a filesystem through
-/// the compose volume, so the path the user picked is already the path the
-/// worker will open and this copies nothing. In cloud mode the worker is on
-/// somebody else's machine and the file has to be sent; the server decides
-/// where it lands and hands back a container path.
+/// settled.** Both modes hand back a path *the worker* can open, and in neither
+/// mode is that the path the user picked.
+///
+/// Local mode used to return it unchanged, on the reasoning that the volume
+/// makes one filesystem out of two. It does not make one *namespace*: the app
+/// sees the workspace at its app-data directory and the container sees the same
+/// bytes at `/workspace`, so a host path fails the worker's containment check
+/// and a container path fails the `metadata` read here. Nothing translated
+/// between them — `IngestRequest` claims the API does and it does not — so the
+/// import screen could not succeed with any string a person typed. It copies
+/// into the workspace inbox now and returns the container path, which is the
+/// same shape cloud mode has always returned.
+///
+/// In cloud mode the worker is on somebody else's machine and the file has to
+/// be sent; the server decides where it lands and hands back a container path.
 ///
 /// The frontend calls this before `ingest_start` in both modes and uses what
 /// comes back. That is the point of doing it here rather than branching in the
 /// UI: the import screen has no business knowing which plane it is talking to,
 /// and a branch there is one somebody adds a second, inconsistent copy of.
 ///
-/// `source_key` is the library-relative name a person reads. Local mode keeps
-/// the last two path components, which is what the import screen did before
-/// this existed; cloud mode takes what the server recorded, which is the
+/// `source_key` is the library-relative name a person reads, and local mode
+/// still derives it from the path the user *picked*, not from where the copy
+/// landed. Every staged file lands in the same inbox, so keying on the copy
+/// would make `inbox/` the first half of every document's name and would give
+/// two unrelated books the same key. It also matters more than a label: the
+/// graph derives a document's id from `document_id(library, source_key)`, so a
+/// second import of the same file must produce the same key or it becomes a
+/// second document. Cloud mode takes what the server recorded, which is the
 /// original filename. Neither is the stored filename — in cloud mode the
 /// server names the file itself, because a name arriving over HTTP is a name
 /// an attacker chose.
@@ -425,15 +440,146 @@ async fn stage_source(state: State<'_, AppState>, path: String) -> Result<Staged
     let p = std::path::Path::new(&path);
     match settings.mode {
         BackendMode::Local => {
-            let meta = std::fs::metadata(p).map_err(|e| AppError::io(p.display(), e))?;
+            let (source_path, byte_size) = stage_into_inbox(&state.workspace, p)?;
             Ok(StagedSource {
-                source_path: path.clone(),
+                source_path,
                 source_key: local_source_key(&path),
-                byte_size: meta.len(),
+                byte_size,
             })
         }
         BackendMode::Cloud => state.control().await?.upload_source(p).await,
     }
+}
+
+/// Where the containers see the workspace. The compose file mounts
+/// `BRAIN_WORKSPACE` here (`BRAIN_WORKSPACE_DIR: /workspace`), and the worker
+/// refuses a path outside its organisation's tree, so this prefix is not
+/// cosmetic — it is the half of the path that makes the file reachable at all.
+const CONTAINER_WORKSPACE: &str = "/workspace";
+
+/// Formats the pipeline accepts, mirroring `SUPPORTED_FORMATS` in
+/// `brainworker/pipeline.py`. Duplicated rather than fetched: this only
+/// pre-filters a file dialog, and the server refuses an unsupported suffix
+/// anyway with an error naming what it does support. A stale entry here costs a
+/// worse dialog, never a wrong import.
+const PICKABLE: [&str; 8] = ["pdf", "txt", "md", "docx", "pptx", "xlsx", "xlsm", "csv"];
+
+/// Copy a chosen file into the workspace inbox and return the path *the worker*
+/// will open, with the copy's size.
+///
+/// The copy is the point. A person picks a file from wherever it lives —
+/// Downloads, a memory stick, a synced folder — and none of those are inside
+/// the volume the container can read. Copying makes the pick work from
+/// anywhere, and leaves the original where the person left it.
+///
+/// A name that is already taken is resolved rather than overwritten, and
+/// identical content is reused rather than duplicated: staging the same book
+/// twice is an ordinary thing to do (a failed run, a second attempt) and it
+/// should not grow the inbox each time. Content, not the name, decides — two
+/// different books can honestly be called `capitulo 1.pdf`.
+fn stage_into_inbox(workspace: &Path, source: &Path) -> Result<(String, u64)> {
+    let meta = std::fs::metadata(source).map_err(|e| AppError::io(source.display(), e))?;
+    let inbox = workspace.join("inbox");
+    std::fs::create_dir_all(&inbox).map_err(|e| AppError::io(inbox.display(), e))?;
+
+    let name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "documento".to_string());
+    let target = free_inbox_name(&inbox, source, &name)?;
+
+    // Only when it is not already there, byte for byte.
+    if !target.exists() {
+        std::fs::copy(source, &target).map_err(|e| AppError::io(target.display(), e))?;
+    }
+
+    let file_name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or(name);
+    Ok((
+        format!("{CONTAINER_WORKSPACE}/inbox/{file_name}"),
+        meta.len(),
+    ))
+}
+
+/// The name to stage under: the file's own, unless something different already
+/// holds it.
+///
+/// Returns an existing path when its content matches, so the caller can skip
+/// the copy. Comparison is by length first because that settles almost every
+/// case without reading either file.
+fn free_inbox_name(inbox: &Path, source: &Path, name: &str) -> Result<PathBuf> {
+    let (stem, suffix) = match name.rsplit_once('.') {
+        // A leading dot is the whole name of a dotfile, not an extension.
+        Some((s, ext)) if !s.is_empty() => (s.to_string(), format!(".{ext}")),
+        _ => (name.to_string(), String::new()),
+    };
+
+    for attempt in 1..=99u32 {
+        let candidate = if attempt == 1 {
+            inbox.join(name)
+        } else {
+            inbox.join(format!("{stem} ({attempt}){suffix}"))
+        };
+        if !candidate.exists() || same_bytes(source, &candidate)? {
+            return Ok(candidate);
+        }
+    }
+    Err(AppError::io(
+        inbox.join(name).display(),
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "no free name in the inbox after 99 attempts",
+        ),
+    ))
+}
+
+fn same_bytes(a: &Path, b: &Path) -> Result<bool> {
+    let (ma, mb) = (
+        std::fs::metadata(a).map_err(|e| AppError::io(a.display(), e))?,
+        std::fs::metadata(b).map_err(|e| AppError::io(b.display(), e))?,
+    );
+    if ma.len() != mb.len() {
+        return Ok(false);
+    }
+    let (da, db) = (
+        std::fs::read(a).map_err(|e| AppError::io(a.display(), e))?,
+        std::fs::read(b).map_err(|e| AppError::io(b.display(), e))?,
+    );
+    Ok(da == db)
+}
+
+/// Open the OS file chooser and return what was picked, or `None` if the person
+/// dismissed it.
+///
+/// The dialog is opened *here* rather than from the webview, which is why no
+/// new capability appears in `capabilities/default.json`: a capability grants
+/// the webview the right to invoke a plugin command, and the webview never
+/// invokes one. It invokes this, an explicit `#[tauri::command]` like every
+/// other thing Rust does on its behalf.
+///
+/// Cancelling is `None`, not an error. It is the ordinary way to leave a file
+/// dialog and the screen must not paint a red panel over it.
+#[tauri::command]
+async fn pick_source(app: tauri::AppHandle) -> Result<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+    app.dialog()
+        .file()
+        .add_filter("Documentos", &PICKABLE)
+        .pick_file(move |picked| {
+            // Capacity is 1 and this fires once; a failure here means the
+            // receiver is gone, which is nothing to report.
+            let _ = tx.try_send(picked);
+        });
+
+    let picked = match rx.recv().await {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    Ok(picked.and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()))
 }
 
 /// The last two components of a path, which is what a library-relative key has
@@ -718,6 +864,7 @@ async fn ask_result(state: State<'_, AppState>, question_id: String) -> Result<A
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -741,6 +888,7 @@ pub fn run() {
             stack_logs,
             control_health,
             control_ping,
+            pick_source,
             stage_source,
             ingest_start,
             ingest_gate,
@@ -773,7 +921,95 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::local_source_key;
+    use super::{free_inbox_name, local_source_key, stage_into_inbox};
+
+    /// Staging copies into the inbox and hands back the path **the worker**
+    /// opens, not the one the person picked.
+    ///
+    /// This is the whole reason the function exists. The volume makes one set
+    /// of bytes out of two filesystems, and two namespaces out of one: the app
+    /// sees the workspace at its app-data directory, the container sees it at
+    /// `/workspace`, and nothing between them translates. Before this, a host
+    /// path failed the worker's containment check and a container path failed
+    /// the app's own `metadata` read — so the import screen could not succeed
+    /// with any string at all.
+    #[test]
+    fn staging_returns_a_path_the_container_can_open() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let picked = home.path().join("El reto de Dios.txt");
+        std::fs::write(&picked, b"contenido").unwrap();
+
+        let (path, size) = stage_into_inbox(workspace.path(), &picked).unwrap();
+
+        assert_eq!(path, "/workspace/inbox/El reto de Dios.txt");
+        assert_eq!(size, 9);
+        // Copied, not moved: the file the person picked stays where they left it.
+        assert!(picked.is_file());
+        assert_eq!(
+            std::fs::read(workspace.path().join("inbox/El reto de Dios.txt")).unwrap(),
+            b"contenido"
+        );
+    }
+
+    /// Staging the same file twice is ordinary — a failed run, a second
+    /// attempt — and must not grow the inbox by a copy each time.
+    #[test]
+    fn staging_the_same_file_twice_reuses_the_one_already_there() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let picked = home.path().join("libro.pdf");
+        std::fs::write(&picked, b"igual").unwrap();
+
+        let (first, _) = stage_into_inbox(workspace.path(), &picked).unwrap();
+        let (second, _) = stage_into_inbox(workspace.path(), &picked).unwrap();
+
+        assert_eq!(first, second);
+        let staged: Vec<_> = std::fs::read_dir(workspace.path().join("inbox"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(staged.len(), 1);
+    }
+
+    /// Content decides, never the name. Two different books can honestly both
+    /// be called `capitulo 1.pdf`, and overwriting one with the other would
+    /// index the wrong document under the first one's identity.
+    #[test]
+    fn a_different_file_with_a_taken_name_is_not_overwritten() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let inbox = workspace.path().join("inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        std::fs::write(inbox.join("capitulo 1.pdf"), b"el primero").unwrap();
+
+        let picked = home.path().join("capitulo 1.pdf");
+        std::fs::write(&picked, b"otro distinto").unwrap();
+        let (path, _) = stage_into_inbox(workspace.path(), &picked).unwrap();
+
+        assert_eq!(path, "/workspace/inbox/capitulo 1 (2).pdf");
+        assert_eq!(
+            std::fs::read(inbox.join("capitulo 1.pdf")).unwrap(),
+            b"el primero"
+        );
+    }
+
+    /// A dotfile's leading dot is its whole name, not an extension, so a
+    /// collision must not produce `` (2).gitignore``.
+    #[test]
+    fn a_leading_dot_is_not_an_extension() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let inbox = workspace.path().join("inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        std::fs::write(inbox.join(".notas"), b"uno").unwrap();
+        let picked = home.path().join(".notas");
+        std::fs::write(&picked, b"dos").unwrap();
+
+        let chosen = free_inbox_name(&inbox, &picked, ".notas").unwrap();
+        assert_eq!(chosen.file_name().unwrap(), ".notas (2)");
+    }
+
 
     /// The key is what a person reads in the library list, and it is
     /// library-relative so that moving a library root does not orphan a row.

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "../../i18n";
 import type { Claim, Concept, DocumentRow, RelatedDocument } from "../../lib/api";
+import { BackendProvider } from "../../lib/backend";
 import { LibrariesProvider } from "../../lib/libraries";
 import { DocumentGraph } from "./DocumentGraph";
 
@@ -111,9 +112,11 @@ const RELATED = Array.from({ length: 8 }, (_, i) => relatedDoc(i));
  *  there is no selected library and the shelf is never asked for. */
 async function mounted() {
   render(
-    <LibrariesProvider>
+    <BackendProvider>
+      <LibrariesProvider>
       <DocumentGraph />
-    </LibrariesProvider>,
+    </LibrariesProvider>
+    </BackendProvider>,
   );
   await waitFor(() => expect(libraryDocuments).toHaveBeenCalled());
 }

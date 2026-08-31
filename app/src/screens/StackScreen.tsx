@@ -2,11 +2,11 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useBackend } from "../lib/backend";
 import {
   api,
   errorGuidanceKey,
   errorMessage,
-  type BackendInfo,
   type BackendMode,
   type DockerInfo,
   type Health,
@@ -53,7 +53,11 @@ export function StackScreen() {
   const [dockerError, setDockerError] = useState<string | null>(null);
   const [status, setStatus] = useState<StackStatus | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
-  const [backend, setBackend] = useState<BackendInfo | null>(null);
+  // Held above this screen, not in it. Which plane the app talks to decides
+  // what every other screen may read, so the four writes below — the initial
+  // read, a saved mode, a sign-in and a sign-out — are what invalidates the
+  // library list and remounts the rest of the app. See `lib/backend.tsx`.
+  const { info: backend, publish: setBackend, reload: reloadBackend } = useBackend();
   /** No organisation here on purpose. This release supports an account with a
    *  single membership, and the server resolves that one from the token — so
    *  offering a field would be offering a choice with one option and a way to
@@ -96,16 +100,16 @@ export function StackScreen() {
     // able to see — and change — which backend they are pointed at. Putting it
     // after `stackStatus`'s early return hid the whole section on exactly the
     // machine that needed it.
-    let mode: BackendMode = "local";
-    try {
-      const chosen = await api.backendSettings();
-      mode = chosen.mode;
-      setBackend(chosen);
+    // Read through the provider rather than calling Rust here. It is the one
+    // owner of this value now, because the rest of the app is invalidated by
+    // it; two reads would be two chances for this screen and everything else to
+    // disagree about which plane is selected.
+    const chosen = await reloadBackend();
+    const mode: BackendMode = chosen?.mode ?? "local";
+    if (chosen) {
       setBackendDraft(
         (draft) => draft ?? { mode: chosen.mode, baseUrl: chosen.baseUrl },
       );
-    } catch {
-      setBackend(null);
     }
 
     // The stack and the provider project belong to the local backend and to
@@ -148,7 +152,7 @@ export function StackScreen() {
     } catch {
       setHealth(null);
     }
-  }, []);
+  }, [reloadBackend]);
 
   /**
    * Save the chosen plane.

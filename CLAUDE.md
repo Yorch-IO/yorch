@@ -40,8 +40,10 @@ are the test suites and `tsc`.
 
 `cargo` additionally needs `PKG_CONFIG_PATH` pointed at the local Tauri sysroot
 (`~/.local/tauri-sysroot/prefix/usr/lib/x86_64-linux-gnu/pkgconfig`) or the build
-fails at `javascriptcoregtk-4.1`, and `--release` because the debug profile's
-`staticlib` output has filled this disk.
+fails at `javascriptcoregtk-4.1`. `--release` used to be the second requirement,
+because the debug profile's `staticlib` output had filled this disk; it is not
+any more, and reaching for it in the dev loop is now the expensive mistake — see
+*The dev profile is tuned; the release profile is deliberately not* below.
 
 ```bash
 # Engine
@@ -66,7 +68,10 @@ npx vitest run -t "define no key"                  # single test by name
 COMPANY_BRAIN_REPO_ROOT=/home/jjimenez/yorch npm run tauri dev
 
 # Rust — needs the Linux system libraries (see doc/COMPANY_BRAIN.md, Blocked)
-cd app/src-tauri && cargo test --release           # 52 passed
+# and PKG_CONFIG_PATH set, or the `soup3-sys` build script fails first. No
+# `--release`: the tuned dev profile runs this gate in 60s at 412% CPU.
+export PKG_CONFIG_PATH=~/.local/tauri-sysroot/prefix/usr/lib/x86_64-linux-gnu/pkgconfig
+cd app/src-tauri && cargo test                     # 91 passed
 
 # Rebuild the image the API and worker actually run. The dev overlay is not
 # optional: without it `--build` recreates the containers and changes nothing.
@@ -713,13 +718,28 @@ broke with its dash alone on a line. What tests cannot see is
 what is left — three-column sizing at a real window width, the stacked layout
 below 60rem, and dark mode.
 
-**Three more things have never been touched by a person, as of 2026-08-28.** The
-backend switch on the Services screen, the hosted-UI sign-in, and the upload path
-on the Import screen. All three were verified the way the rest of this list was
-not: the switch and the guidance map by component tests, the upload end to end
-over HTTP against the running paid plane, and staging by
-`ImportScreen.staging.test.tsx`, which asserts the ingest is sent the path
-staging *returned* rather than the one the user typed.
+**Three things had never been touched by a person as of 2026-08-28** — the
+backend switch on the Services screen, the hosted-UI sign-in, and the upload
+path on the Import screen — and **one of them was on 2026-08-30**. A file was
+chosen in a real window through the new chooser, and the Import screen rendered
+its name and path; pressing Preview reached the paid plane and came back
+`409 tenant_scope_pending`, which the error panel rendered with its guidance.
+So the chooser, the staging call and the error path are exercised. The upload
+has still never *succeeded* from the window, because the account driving it
+belongs to the legacy organisation and that is precisely the case the paid
+plane refuses — see the defect below on that kind carrying two meanings.
+
+**The backend switch is still unwitnessed.** The library picker's refetch on a
+change of plane (`lib/backend.tsx`) is covered by
+`lib/backend.test.tsx`, whose three switching tests fail when the fix is
+removed — checked by removing it — and nobody has yet watched the picker change
+from `lib_teologia · 72 documentos` to another plane's shelf in a window.
+
+**Drag and drop is in the same position, and cannot leave it by testing.** The
+handler is bound to Tauri's own webview event, which neither jsdom nor a static
+screenshot can fire — the same limitation as the graph's wheel handler. What
+`ImportScreen.choose.test.tsx` can assert, and does, is that the screen renders
+whole when the subscription fails.
 
 **The sign-in is the one that matters, because nothing has exercised its actual
 mechanism.** The PKCE flow has tests for the RFC 7636 vector, for `state`
@@ -729,6 +749,13 @@ exchange against the real hosted UI: none of that has run. Every token used to
 verify the paid plane so far was minted with
 `aws cognito-idp admin-initiate-auth`, which goes nowhere near it. So "login
 works" is currently a claim about three functions, not about signing in.
+
+One data point arrived on 2026-08-30 and is deliberately not called a
+verification: a user created with `admin-create-user` moved from
+`FORCE_CHANGE_PASSWORD` to `CONFIRMED`, which means somebody completed a
+password change in Cognito. Whether that went through this app's loopback
+listener or through the hosted UI opened by hand is not recorded anywhere, and
+the difference is the whole question.
 
 **Inicio and the library graph are in the same position as of 2026-08-25.** Both
 endpoints were exercised against the running stack — `/project-summary` with
@@ -864,6 +891,21 @@ session's files.
   `run` row for the question — `run_kind_check` has no `ask`, which is why one
   does not exist.
 
+- **`tenant_scope_pending` carries two opposite meanings, so its guidance is
+  wrong for one of them.** The kind was minted for "this view is not segmented
+  by organisation yet, so it answers only for the legacy one" — a refusal aimed
+  at *other* tenants. The paid plane's `uploads.controller` reuses it for the
+  reverse: `ctx.tenantId === LEGACY_TENANT_ID` is refused, because that
+  organisation's corpus lives at the root of the volume rather than under
+  `tenants/<id>/` and is written by the local plane directly. `GUIDANCE` in
+  `app/src/lib/api.ts` keys on the kind alone, so a member of the legacy
+  organisation is told the thing is "only available for the original one" —
+  which is the organisation that was just refused. The server's own message is
+  accurate; the advice layered over it is not, and the advice is read first.
+  Found 2026-08-30 by importing a file with the paid plane selected. The fix is
+  a distinct kind in the paid plane (`../yorch-tauri-backend`) with its own key
+  in both i18n bundles; nothing in this checkout can do better than make the
+  string vaguer.
 - **`ports::revalidate` has no caller, so relaunching the app orphans its own
   containers.** `AppState::stack()` (`app/src-tauri/src/lib.rs:48`) always calls
   `ports::allocate(Ports::default())`. A running stack holds its ports, so the
@@ -984,6 +1026,29 @@ maps them to localised labels.
 
 ## Working on the app
 
+- **The dev profile is tuned; the release profile is deliberately not.** The
+  symptom was a build pinning one core at 100% while the other fifteen idled,
+  and the cause was `[profile.release]`'s `codegen-units = 1` and `lto = true`
+  being paid on every rebuild of `tauri dev --release`. Neither is a defect:
+  one codegen unit means LLVM optimizes each crate on a single thread, and fat
+  LTO pulls the bitcode of all 513 locked packages into one serial process. They
+  are simply the wrong settings for a loop you run all day, and they stay on
+  `release` because that is where the shipped binary is made. `[profile.dev]`
+  now sets `opt-level = 0` for this crate with `opt-level = 3` for
+  `package."*"`, so the dependencies are optimized once and cached while this
+  crate stays cheap to rebuild — the app feels like the release build under a
+  plain `tauri dev`. Measured on the 16-thread box: a full dev build is
+  **50.8 s at 654% CPU with 13 `rustc` processes running at once**, against a
+  single `rustc` for minutes before. Do not "fix" the release profile to match.
+- **`debug = "line-tables-only"` is what keeps the dev profile off this disk.**
+  Full DWARF, not the optimization level, is what made the debug `staticlib`
+  845 MB and `target/debug` 5.8 G — the reason `--release` was once mandatory
+  here. Line tables still put file and line in every backtrace, which is all
+  this crate's panics are ever read for, and cut the `staticlib` to **352 MB**
+  and the `cdylib` from 244 MB to **82 MB**. `target/debug` still measures 6.8 G
+  because it holds the pre-change artifacts alongside the new ones; a
+  `cargo clean` in `app/src-tauri` reclaims that once, and is the only reason to
+  run one.
 - All Tauri logic lives in `lib.rs`; `main.rs` is a passthrough, because Tauri
   replaces `main()` on mobile targets. Every command must appear in
   `generate_handler![]` or it 404s silently from the frontend.
@@ -1033,6 +1098,47 @@ maps them to localised labels.
   not re-run the simulation and leaving it must not throw away a pan, which is
   the same reason the tabs are hidden rather than unmounted. The shell owns the
   heading and the intro, because it is what knows which view is showing.
+- **Switching backend mode invalidates the whole app, and until 2026-08-30 it
+  invalidated nothing.** `LibrariesProvider` fetched once, in its mount effect,
+  so after a switch the picker still held the other plane's libraries and every
+  screen still showed the other plane's data. `lib/backend.tsx` now owns the
+  chosen plane and derives an `identity` from mode, address, organisation **and
+  email** — a different person signing in must not inherit the previous one's
+  questions — and `App` puts that identity in each screen's `key`, so changing
+  plane remounts them. Services is deliberately excluded: it is the screen
+  holding the switch, and remounting it under the user's own hand would take
+  away the draft they just saved. Stored keys are scoped on the identity, and
+  **the local plane's key stays bare** — the same decision as `_salt()` returning
+  nothing for the legacy tenant, and for the same reason: scoping
+  unconditionally would orphan every history and remembered library that exists
+  today. The selection is dropped *before* the refetch, because an id that
+  exists in both planes is exactly the case that must not cross silently.
+- **A path typed by hand could never import anything, in either mode.** The
+  volume makes one set of bytes out of two filesystems and two *namespaces* out
+  of one: the app sees the workspace at its app-data directory, the container
+  sees it at `/workspace`. So a host path passed Rust's `metadata` read and died
+  at the worker's containment check, and a container path died at `metadata`
+  first. Nothing translated between them — `IngestRequest`'s comment claims the
+  API does, and the FastAPI `/ingest` passes `source_path` straight through — so
+  the import screen could not succeed with any string. The 72 legacy documents
+  all record `/workspace/inbox/libros/…`; they were imported over HTTP, never
+  through this screen. `stage_source` copies into the workspace inbox now and
+  returns the container path, which is the shape cloud mode always returned.
+  `source_key` still derives from the path the user *picked*, not from where the
+  copy landed: every staged file lands in the same inbox, and the graph takes a
+  document's identity from `document_id(library, source_key)`.
+- **The file chooser is opened by Rust, which is why no capability was added.**
+  A capability grants the *webview* the right to invoke a plugin command, and
+  the webview never invokes one — it invokes `pick_source`, an explicit
+  `#[tauri::command]` like everything else Rust does on its behalf. The npm
+  half of `@tauri-apps/plugin-dialog` is therefore not a dependency; only the
+  crate is. Drag and drop goes through Tauri's own webview event rather than
+  React's `onDrop`, because the browser's `File` carries no path and a path is
+  the only thing either plane can use — and the subscription is allowed to fail,
+  so a host without a Tauri webview degrades to "no drag and drop" rather than
+  to a blank panel. A name already taken in the inbox is resolved by *content*,
+  never overwritten: two different books can honestly both be called
+  `capitulo 1.pdf`.
 - **The wheel handler is bound imperatively, with `{ passive: false }`.** React's
   `onWheel` is passive and cannot `preventDefault`, so the page scrolls out from
   under the canvas instead of the canvas zooming. Buttons cover zoom in, out and

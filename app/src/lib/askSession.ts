@@ -15,6 +15,7 @@
  * window was shut be collected on the next launch rather than paid for twice.
  */
 import { errorMessage, isAppError, type Answer, type EvidenceItem } from "./api";
+import { scopedKey } from "./backend";
 
 export interface AskEntry {
   /** Supplied by the caller, so the reducer needs no clock and no counter of
@@ -167,14 +168,19 @@ function storableError(error: unknown): { kind: string; message: string } | null
   return { kind: "io", message: errorMessage(error) };
 }
 
-export function saveSession(state: AskSession): void {
+/** Scoped on the plane, because a question is asked of one corpus and answered
+ *  by one organisation's data. Signing out of the paid service and back in as
+ *  somebody else must not leave their questions — and their retrieved passages —
+ *  on screen. `scopedKey` leaves the local plane's key alone, so no existing
+ *  history is orphaned by this. */
+export function saveSession(state: AskSession, identity: string): void {
   const entries = state.entries.slice(0, KEEP);
   const payload = {
     entries: entries.map((e) => ({ ...e, error: storableError(e.error) })),
     selected: entries.some((e) => e.id === state.selected) ? state.selected : null,
   };
   try {
-    window.localStorage.setItem(STORED, JSON.stringify(payload));
+    window.localStorage.setItem(scopedKey(STORED, identity), JSON.stringify(payload));
   } catch {
     // Over quota, or storage denied. Losing the history is not worth an error
     // in front of an answer the user is reading.
@@ -182,10 +188,10 @@ export function saveSession(state: AskSession): void {
 }
 
 /** Restore a previous window's history, or an empty session. */
-export function loadSession(): AskSession {
+export function loadSession(identity: string): AskSession {
   let raw: string | null = null;
   try {
-    raw = window.localStorage.getItem(STORED);
+    raw = window.localStorage.getItem(scopedKey(STORED, identity));
   } catch {
     return EMPTY_SESSION;
   }

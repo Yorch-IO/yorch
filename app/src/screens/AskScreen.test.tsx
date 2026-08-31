@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "../i18n";
 import type { Answer, Citation, EvidenceItem } from "../lib/api";
+import { BackendProvider } from "../lib/backend";
 import { LibrariesProvider } from "../lib/libraries";
 import { AskScreen } from "./AskScreen";
 
@@ -78,9 +79,11 @@ function willAnswer(a: Answer) {
 async function mounted() {
   libraries.mockClear();
   render(
-    <LibrariesProvider>
+    <BackendProvider>
+      <LibrariesProvider>
       <AskScreen />
-    </LibrariesProvider>,
+    </LibrariesProvider>
+    </BackendProvider>,
   );
   await waitFor(() => expect(libraries).toHaveBeenCalled());
 }

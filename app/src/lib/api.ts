@@ -29,10 +29,14 @@ export type AppErrorKind =
  * inside it to offer the right advice.
  */
 export type ControlErrorKind =
-  // The paid plane adds these. `tenant_scope_pending` is phase-1 only: the
-  // graph and the pipeline are not segmented by organisation yet, so they
-  // answer only for the legacy one — a refusal that names the reason rather
-  // than an empty result that would claim the corpus is empty.
+  // The paid plane adds these. `tenant_scope_pending` had a phase-1 meaning —
+  // the graph and the pipeline answered only for the legacy organisation — and
+  // phase 2 left it exactly one use: that organisation has no inbox on this
+  // plane, because its workspace root *is* the volume and this plane's mount is
+  // read-only there. So it is a refusal on a *write*, not a narrower read, and
+  // the guidance says which backend does own that corpus. Writing the file to
+  // `tenants/<legacy>/inbox` instead returned 200 and a path `stage_source`
+  // then refused, which is the dead end the refusal replaced.
   | "unauthenticated"
   | "unknown_user"
   | "user_inactive"
@@ -865,6 +869,10 @@ export const api = {
    *  path the worker will open. The screen calls this in both cases and uses
    *  what it gets, so nothing in the UI has to know which plane is in use.
    */
+  /** Open the OS file chooser. `null` means the person dismissed it, which is
+   *  the ordinary way to leave a dialog and must not read as a failure. */
+  pickSource: () => invoke<string | null>("pick_source"),
+
   stageSource: (path: string) => invoke<StagedSource>("stage_source", { path }),
   ingestStart: (request: IngestRequest, options: StageOptions = DEFAULT_STAGES) =>
     invoke<StartedRun>("ingest_start", { request, options }),

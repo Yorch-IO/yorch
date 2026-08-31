@@ -205,6 +205,7 @@ def measure(
     per_section: int,
     dense_only: bool,
     doc_id: str | None = None,
+    filters: dict[str, str] | None = None,
     top_k: int = 10,
     query_vectors: dict[str, list[float]] | None = None,
 ) -> EvalRun:
@@ -213,9 +214,16 @@ def measure(
     ``query_vectors`` lets the caller embed each question once and reuse it across
     configurations — otherwise a four-way comparison pays for the same embeddings
     four times, and the comparison would also be muddied by embedding nondeterminism.
+
+    ``doc_id`` is the CLI's way of scoping to one document in a collection this
+    engine owns. ``filters`` is the general form, and it exists because the
+    product's collection is scoped by ``tenant_id`` and ``version_id`` instead —
+    the engine has no concept of either and must not acquire one. Passing both
+    merges them, with ``filters`` losing to nothing: the caller that supplies
+    them is the one that knows what the collection is keyed on.
     """
     run = EvalRun(questions=len(evalset))
-    filters = {"doc_id": doc_id} if doc_id else {}
+    filters = _scope(doc_id, filters)
 
     for item in evalset:
         vec = (query_vectors or {}).get(item.question)
@@ -251,13 +259,32 @@ def measure(
     return run
 
 
+def _scope(
+    doc_id: str | None, filters: "dict[str, str] | None"
+) -> dict[str, str]:
+    """The payload filter a measurement runs under.
+
+    Both forms are accepted because the two collections this engine writes are
+    keyed differently: `docagent_*` on `doc_id`, the product's `brain` on
+    `tenant_id` + `version_id`. A measurement that forgot the scope would search
+    the whole collection and score a document against another one's chunks.
+    """
+    scope = dict(filters or {})
+    if doc_id:
+        scope["doc_id"] = doc_id
+    return scope
+
+
 def noise_floor(
-    vertex: Vertex, qdrant: Qdrant, doc_id: str | None = None
+    vertex: Vertex,
+    qdrant: Qdrant,
+    doc_id: str | None = None,
+    filters: "dict[str, str] | None" = None,
 ) -> float:
     """Highest dense score any off-topic query achieves — what "no match" looks
     like. Measured on the dense leg because RRF scores are not comparable to a
     cosine (invariant #8)."""
-    filters = {"doc_id": doc_id} if doc_id else {}
+    filters = _scope(doc_id, filters)
     best = 0.0
     for q in NOISE_QUERIES:
         vec = vertex.embed(q, TASK_QUERY, stage="eval_noise").values
@@ -388,3 +415,23 @@ CHUNK_CANDIDATES = (
     Candidate("overlap=300", overlap_chars=300),
     Candidate("overlap=0", overlap_chars=0),
 )
+
+
+def next_chunk_candidate(profile, history: list[dict]) -> "Candidate | None":
+    """The next chunking candidate not already tried, and not a no-op.
+
+    A candidate whose value already matches the current profile would spend a
+    full re-embed to measure something already known — and a chunking change is
+    the expensive half of tuning: every chunk is embedded again.
+    """
+    tried = {h["candidate"] for h in history}
+    rules = profile.chunk_rules
+    for cand in CHUNK_CANDIDATES:
+        if cand.label in tried:
+            continue
+        if cand.target_chars is not None and cand.target_chars == rules.target_chars:
+            continue
+        if cand.overlap_chars is not None and cand.overlap_chars == rules.overlap_chars:
+            continue
+        return cand
+    return None

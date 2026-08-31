@@ -26,7 +26,7 @@ import hashlib
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Sequence
 
 import httpx
 
@@ -283,6 +283,48 @@ class Qdrant:
             {"filter": self._filter(filters)},
         )
         return removed
+
+    def prune_tail(self, doc_id: str, keep: int) -> int:
+        """Delete any point for `doc_id` whose `chunk_index` is >= `keep`.
+
+        A rejected chunk-tuning candidate re-indexes fewer chunks than it just
+        wrote, and `upsert` only overwrites the ids the new run actually
+        produces (`0..keep-1`) — it never deletes ids beyond them. Observed on
+        `07-LlavesDelPoder-INT.pdf` (2026-08-30): a 625-chunk candidate was
+        rejected in favour of a 502-chunk one, and ids `502..624` — still
+        carrying the rejected candidate's `char_span` — survived in the
+        collection, silently duplicating the back third of the book under two
+        incompatible sets of chunk boundaries.
+
+        Point ids are deterministic (`point_id(doc_id, i)`), so the stale
+        range is exactly `[keep, old_count)` and needs no range filter — a
+        plain equality filter cannot express ">=" and `count`/`delete_by_filter`
+        both require one.
+        """
+        old_count = self.count({"doc_id": doc_id})
+        if old_count <= keep:
+            return 0
+        return self.delete_by_ids(
+            [point_id(doc_id, i) for i in range(keep, old_count)]
+        )
+
+    def delete_by_ids(self, ids: "Sequence[str]") -> int:
+        """Delete exactly these points.
+
+        Separate from `delete_by_filter` because a filter here is equality-only
+        and cannot express a range. The caller that knows the ids is the one that
+        derived them, and the two hosts derive them differently: this engine from
+        `doc_id`, the product from a content-derived `version_id`. Hence a
+        primitive rather than a second `prune_tail`.
+        """
+        if not ids:
+            return 0
+        self._ok(
+            "POST",
+            f"/collections/{self.collection}/points/delete?wait=true",
+            {"points": list(ids)},
+        )
+        return len(ids)
 
     def set_payload(self, filters: dict[str, str], payload: dict[str, Any]) -> int:
         """Overwrite the named payload keys on every matching point.

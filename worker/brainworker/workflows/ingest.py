@@ -35,9 +35,12 @@ with workflow.unsafe.imports_passed_through():
         Chunked,
         Correction,
         Estimate,
+        EvalSet,
         Extraction,
         Indexed,
+        Scores,
         Semantics,
+        TuneOutcome,
         GateReport,
         IngestRequest,
         IngestResult,
@@ -355,8 +358,21 @@ class IngestWorkflow:
             self._correction = correction
 
             if approved.review_correction:
-                decision = await self._second_gate(run_id)
-                if not decision.approved:
+                # **`review`, not `decision`.** This used to reassign `decision`,
+                # which is the `ProfileDecision` every later stage reads — so a
+                # run that went through the second gate handed an `Approval` to
+                # `chunk_final` in its place. Temporal's converter coerced it to
+                # a `ProfileDecision` with defaults rather than failing, so the
+                # document was silently chunked with the engine's built-in rules
+                # and the profile it had just paid to learn was discarded. No
+                # test saw it: the run still succeeded and still produced chunks.
+                #
+                # It surfaced only when a later stage read `decision.source` and
+                # got an attribute that is not on an `Approval` — which failed
+                # the workflow task, which Temporal retries for ever, which is a
+                # hung run rather than a wrong one.
+                review = await self._second_gate(run_id)
+                if not review.approved:
                     await self._finish(run_id, "cancelled")
                     return IngestResult(
                         run_id=run_id,
@@ -364,9 +380,9 @@ class IngestWorkflow:
                         version_id=registered.version_id,
                         state="rejected_after_correction",
                         total_usd=_total(spent),
-                        detail=decision.reason or "corrección no aceptada",
+                        detail=review.reason or "corrección no aceptada",
                     )
-                approved = decision.options
+                approved = review.options
 
         # The chunks that actually get indexed. Always recomputed rather than
         # reused from the preview: after correction the preview's offsets index
@@ -404,6 +420,53 @@ class IngestWorkflow:
             )
             spent.append(indexed.spend)
 
+        # Measured *before* semantics, and only when there is an index to
+        # measure. Semantics is the longest paid stage and the one most likely to
+        # be cut short; losing the measurement to it would mean paying for the
+        # questions and never asking them.
+        scores: Scores | None = None
+        if approved.generate_evalset and approved.embed:
+            self._stage = "evaluating"
+            await self._set_stage(run_id, "evaluating")
+            evalset: EvalSet = await workflow.execute_activity(
+                paid.build_evalset,
+                args=[
+                    run_id, extraction, chunked, decision,
+                    # Tuning needs the bigger sample or its own comparison
+                    # cannot resolve the effect it is looking for.
+                    paid.EVAL_SAMPLE_TUNING if approved.tune else paid.EVAL_SAMPLE,
+                ],
+                start_to_close_timeout=PAID_TIMEOUT,
+                retry_policy=_PAID_RETRY,
+            )
+            if evalset.questions:
+                # Reusing this family's questions costs nothing, and a `Spend`
+                # of zero is not the same claim as no spend at all.
+                if not evalset.reused:
+                    spent.append(evalset.spend)
+                scores = await workflow.execute_activity(
+                    paid.evaluate_index,
+                    args=[run_id, registered, chunked, evalset, decision],
+                    start_to_close_timeout=PAID_TIMEOUT,
+                    retry_policy=_PAID_RETRY,
+                )
+                if scores.spend is not None:
+                    spent.append(scores.spend)
+                if approved.tune:
+                    chunked, indexed, scores = await self._tune_once(
+                        run_id, request, registered, staged, chunked, evalset,
+                        decision, scores, text_kind, spent, indexed,
+                    )
+
+                # Free, and last: the artifact is the authority, so a failure to
+                # write the profile copy must not cost the run its measurement.
+                await workflow.execute_activity(
+                    paid.persist_profile_scores,
+                    args=[run_id, extraction, decision, evalset, scores],
+                    start_to_close_timeout=WRITE_TIMEOUT,
+                    retry_policy=_RETRY,
+                )
+
         semantics: Semantics | None = None
         if approved.extract_semantics:
             self._stage = "semantics"
@@ -421,6 +484,41 @@ class IngestWorkflow:
             spent.append(semantics.spend)
             if semantics.condense_spend is not None:
                 spent.append(semantics.condense_spend)
+
+        # **A structural collision withholds activation.** The fingerprint that
+        # selects a profile is structural, and structure is not subject matter:
+        # a hermeneutics chapter and a church-history book landed on one
+        # fingerprint on the real corpus, and the second was chunked with the
+        # first's heading rules. Retrieval metrics cannot see that — the eval
+        # questions are generated from the very chunks the wrong rules produced —
+        # so the only automatic signal is that the two rule sets disagree about
+        # how many chapters this document has.
+        #
+        # Everything else already ran. The index exists, the graph is projected,
+        # the artifacts are kept and the *previous* version stays answerable —
+        # which is the point: the cost of being wrong here is a document nobody
+        # can find, and that is worse than a document one click from being
+        # findable. Only `activate_version` is skipped.
+        #
+        # A rule-learning fallback is deliberately **not** in this list. After
+        # three failed attempts the engine adopts its built-in defaults, which
+        # were themselves measured on a real book; treating that as a blocker
+        # would refuse to publish documents whose only fault is being ordinary.
+        blocked = self._structural_block(decision, approved)
+        if blocked:
+            await self._finish(run_id, "blocked", "structural_mismatch", blocked)
+            self._stage = "blocked"
+            return IngestResult(
+                run_id=run_id,
+                document_id=registered.document_id,
+                version_id=registered.version_id,
+                state="blocked_structural",
+                indexed_chunks=indexed.points if indexed else chunked.count,
+                projected=projected,
+                total_usd=_total(spent),
+                scores=scores,
+                detail=blocked,
+            )
 
         # Activation is last, and only reached once every projection completed.
         # A version that became answerable halfway through would return chunks
@@ -441,6 +539,7 @@ class IngestWorkflow:
             document_id=registered.document_id,
             version_id=registered.version_id,
             state="indexed" if indexed else "structure_indexed",
+            scores=scores,
             indexed_chunks=indexed.points if indexed else chunked.count,
             projected=projected
             | ({"concepts": semantics.concepts, "claims": semantics.claims,
@@ -504,6 +603,110 @@ class IngestWorkflow:
         assert self._approval is not None
         return self._approval
 
+    @staticmethod
+    def _structural_block(decision: ProfileDecision, approved: StageOptions) -> str:
+        """Why activation is being withheld, or empty.
+
+        Only a `heading_disagreement` blocks. A plain `collision` is ordinary —
+        sharing a fingerprint is what makes the second document of a family
+        cheaper than the first — and blocking on it would fire on every
+        successful reuse, which is how a warning becomes something an operator
+        clicks past.
+
+        `ignore_profile` is already the person's way out: it declines the
+        inherited rules and chunks with the measured defaults, so there is no
+        disagreement left to act on and nothing to withhold.
+        """
+        if decision is None or decision.source != "reused" or approved.ignore_profile:
+            return ""
+        for warning in decision.warnings:
+            if warning.kind == "heading_disagreement":
+                return warning.detail
+        return ""
+
+    async def _tune_once(
+        self, run_id, request, registered, staged, chunked, evalset, decision,
+        scores, text_kind, spent, indexed,
+    ):
+        """One bounded tuning round, and never a loop.
+
+        A loop is what the engine's CLI runs, and it is the right shape there:
+        three rounds against a corpus a person is watching. Here every round is a
+        full second embedding pass — ~100 minutes for a 600-chunk book against
+        the measured per-minute quota — and each one would also be an entry in a
+        workflow history kept for the namespace's whole retention period. So this
+        is a single conditional block: try, measure, keep or put it back.
+
+        **The revert re-chunks and re-indexes rather than only rewriting the
+        profile.** That was a measured bug in the engine: reverting the profile
+        left the *collection* holding the candidate's chunks, so the next round's
+        baseline belonged to a configuration already rejected, and three rounds
+        drifted 0.729 → 0.762 → 0.700 while each had reverted. Going back through
+        chunking is what makes the comparison honest, and the writer's tail prune
+        is what stops the longer chunking's leftovers surviving the trip.
+        """
+        self._stage = "tuning"
+        await self._set_stage(run_id, "tuning")
+        outcome: TuneOutcome = await workflow.execute_activity(
+            paid.propose_tuning,
+            args=[run_id, registered, chunked, evalset, decision, scores],
+            start_to_close_timeout=PAID_TIMEOUT,
+            retry_policy=_PAID_RETRY,
+        )
+        if outcome.kind != "chunking" or outcome.candidate is None:
+            # `retrieval` was adopted inside the activity and costs nothing more;
+            # `none` means there was nothing left worth a full re-embed. Either
+            # way the index is the one `embed_and_index` already wrote, so its
+            # `Indexed` is handed straight back — replacing it with `None` here
+            # would report a structure-only run for a document that has vectors.
+            return chunked, indexed, scores
+
+        candidate_chunked = await workflow.execute_activity(
+            paid.chunk_final,
+            args=[run_id, text_kind, outcome.candidate],
+            start_to_close_timeout=FREE_TIMEOUT,
+            retry_policy=_RETRY,
+        )
+        candidate_indexed = await workflow.execute_activity(
+            paid.embed_and_index,
+            args=[run_id, request.library_id, registered, staged, candidate_chunked],
+            start_to_close_timeout=PAID_TIMEOUT,
+            retry_policy=_PAID_RETRY,
+        )
+        spent.append(candidate_indexed.spend)
+        candidate_scores: Scores = await workflow.execute_activity(
+            paid.evaluate_index,
+            args=[run_id, registered, candidate_chunked, evalset, decision],
+            start_to_close_timeout=PAID_TIMEOUT,
+            retry_policy=_PAID_RETRY,
+        )
+        if candidate_scores.spend is not None:
+            spent.append(candidate_scores.spend)
+
+        # Judged against the margin computed *before* the candidate ran. One
+        # derived from the candidate's own run moves with it, and the comparison
+        # would be between two things that both changed.
+        gain = candidate_scores.mrr_at_10 - outcome.baseline_objective
+        if gain > outcome.margin:
+            return candidate_chunked, candidate_indexed, candidate_scores
+
+        reverted = await workflow.execute_activity(
+            paid.chunk_final,
+            args=[run_id, text_kind, decision],
+            start_to_close_timeout=FREE_TIMEOUT,
+            retry_policy=_RETRY,
+        )
+        reverted_indexed = await workflow.execute_activity(
+            paid.embed_and_index,
+            args=[run_id, request.library_id, registered, staged, reverted],
+            start_to_close_timeout=PAID_TIMEOUT,
+            retry_policy=_PAID_RETRY,
+        )
+        spent.append(reverted_indexed.spend)
+        # The original scores stand: they measured this exact index, and the
+        # candidate's did not.
+        return reverted, reverted_indexed, scores
+
     async def _reextract(
         self,
         request: IngestRequest,
@@ -560,10 +763,34 @@ class IngestWorkflow:
 
     # -- bookkeeping -------------------------------------------------------
 
-    async def _finish(self, run_id: str, state: str) -> None:
+    async def _finish(
+        self,
+        run_id: str,
+        state: str,
+        error_kind: str | None = None,
+        error_detail: str | None = None,
+    ) -> None:
+        """Record the run's lifecycle outcome, and optionally why.
+
+        **`blocked` is a real state, added because none of the other five was
+        honest for a withheld activation.** The run did every stage and paid for
+        them, so it did not fail; it deliberately withheld the last step, so it
+        was not a plain success either; and nobody cancelled it. Pairing
+        `succeeded` with an `error_kind` was what this did before the migration
+        existed, and a succeeded row carrying an error kind is a contradiction a
+        reader has to already know about to interpret.
+
+        It is the same distinction this workflow already makes at the other end:
+        a gate that times out is `cancelled` rather than `failed`, because
+        "it stopped short and that is not a fault" is a different outcome from
+        "it broke".
+
+        The value is constrained in `run_state_check`, which Prisma owns in the
+        sibling checkout — `20260831140000_run_blocked`.
+        """
         await workflow.execute_activity(
             act.record_run_outcome,
-            args=[run_id, state, None, None],
+            args=[run_id, state, error_kind, error_detail],
             start_to_close_timeout=WRITE_TIMEOUT,
             retry_policy=_RETRY,
         )

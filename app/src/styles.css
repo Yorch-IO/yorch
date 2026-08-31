@@ -1681,3 +1681,72 @@ button.link.active {
 .dropzone .muted {
   margin: 0;
 }
+
+/* -- measured retrieval quality, on a version row ---------------------------
+ *
+ * Five figures that only mean anything together. `recall@5` alone flatters the
+ * index — the eval set's questions are written *from* the chunks they must
+ * find, so they leak vocabulary to the lexical leg — and the noise floor is
+ * what a *wrong* answer scores. So they share one block with one caption rather
+ * than being scattered where a reader could quote one of them alone.
+ *
+ * `auto-fit` rather than a fixed column count, and its own 76rem query below
+ * its own rule: this grid is declared *after* the shared query at line 822, and
+ * at equal specificity the later rule wins. A media query is not a stronger
+ * rule, only a conditional one — which is how `.graph-layout` once stayed
+ * two-column down to a 96px canvas.
+ */
+.scores {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.35rem 1rem;
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.75rem;
+  /* Capped, and the caption is the reason. At a 1440px window the block filled
+     the row and the sentence under it ran to about 1,300px — a measure nobody
+     reads. Seen in a screenshot; `vitest` cannot see a line length. */
+  max-width: 48rem;
+  /* `--line` and `--panel`, which are the tokens this stylesheet actually
+     ships. The first draft of this rule used `--border` and
+     `--surface-2, transparent`; neither exists, so the border painted as the
+     initial value and the background as nothing at all — in both themes. That
+     is the failure the palette block at the top of this file already records:
+     a fallback that looks plausible is how a missing token survives. */
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.scores div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.scores dt {
+  font-size: 0.78rem;
+  color: var(--muted);
+  /* No `nowrap`: at 520px that is what pushed the estimate table past the
+     viewport, and these labels are short enough to wrap harmlessly. */
+}
+
+.scores dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.05rem;
+}
+
+.scores .basis {
+  /* Spans every column, because it is the caption for all five figures and not
+     for the last one. */
+  grid-column: 1 / -1;
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 76rem) {
+  .scores {
+    grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr));
+  }
+}

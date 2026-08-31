@@ -341,6 +341,8 @@ export function ImportScreen() {
             ["correct", "import.stageCorrect"],
             ["embed", "import.stageEmbed"],
             ["extractSemantics", "import.stageSemantics"],
+            ["generateEvalset", "import.stageEvalset"],
+            ["tune", "import.stageTune"],
             ["learnProfile", "import.stageLearnProfile"],
             ["reviewCorrection", "import.stageReview"],
           ] as const

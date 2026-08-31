@@ -168,7 +168,8 @@
       "active": "active",
       "sharedWith": "shared with {{count}} other document(s)",
       "noArtifacts": "no artifacts to replay",
-      "removeVersion": "Remove this version"
+      "removeVersion": "Remove this version",
+      "activateVersion": "Make this the active version"
     },
     "confirm": {
       "title": "Permanently remove “{{title}}”",
@@ -183,7 +184,15 @@
     "startedRebuild": "Rebuild started ({{id}}). Only embedding can spend, and it asks first.",
     "removed": "Removed: {{points}} Qdrant points, {{chunks}} graph chunks, {{versions}} version(s).",
     "removedKeptVersions": "{{count}} version(s) still exist because another document shares them.",
-    "removedKept": "The run history, the costs and the file on disk are kept."
+    "removedKept": "The run history, the costs and the file on disk are kept.",
+    "scores": {
+      "recall5": "recall@5",
+      "recall1": "recall@1",
+      "mrr": "MRR@10",
+      "denseOnly": "dense only",
+      "noiseFloor": "noise floor",
+      "basis": "{{questions}} generated questions over {{chunks}} chunks · {{misses}} did not find their own chunk. The questions are written from the passages they must find, so the dense-only figure is what the lexical leg is worth without that leakage; the noise floor is what an off-topic query scores."
+    }
   },
   "import": {
     "title": "Import a document",
@@ -212,7 +221,9 @@
     "choose": "Choose a file…",
     "chooseOther": "Choose another…",
     "picking": "Opening…",
-    "oneAtATime": "Took the first. Files ignored: {{count}}. One at a time for now."
+    "oneAtATime": "Took the first. Files ignored: {{count}}. One at a time for now.",
+    "stageEvalset": "Measure retrieval quality",
+    "stageTune": "Tune retrieval (re-embeds the document)"
   },
   "gate": {
     "title": "Approve before spending",
@@ -238,7 +249,9 @@
       "embedding": "Embedding",
       "semantics": "Concepts and relations",
       "evalset": "Evaluation set",
-      "profile": "Learning the document's rules"
+      "profile": "Learning the document's rules",
+      "tuning": "Tuning — a second embedding pass",
+      "evaluation": "Measuring — embedding the questions"
     },
     "profileTitle": "Rules",
     "profileReused": "Reusing the profile «{{slug}}», learned from {{learnedFrom}} (revision {{revisions}}).",

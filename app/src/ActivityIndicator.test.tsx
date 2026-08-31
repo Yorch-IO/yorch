@@ -68,6 +68,9 @@ function live(over: Partial<RunState> = {}): RunState {
     stage: "semantics",
     state: "running",
     progress: { activity: "extract_semantics", done: 260, total: 598 },
+    // Null, not absent: "nobody measured this run" is the ordinary case and the
+    // one every historical run is in.
+    scores: null,
     ...over,
   };
 }

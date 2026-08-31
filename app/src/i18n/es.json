@@ -168,7 +168,8 @@
       "active": "activa",
       "sharedWith": "compartida con {{count}} documento(s) más",
       "noArtifacts": "sin artefactos que reproducir",
-      "removeVersion": "Eliminar esta versión"
+      "removeVersion": "Eliminar esta versión",
+      "activateVersion": "Hacer que sea la versión activa"
     },
     "confirm": {
       "title": "Eliminar «{{title}}» de forma permanente",
@@ -183,7 +184,15 @@
     "startedRebuild": "Reconstrucción lanzada ({{id}}). Solo puede gastar en embeddings, y preguntará antes.",
     "removed": "Eliminado: {{points}} puntos en Qdrant, {{chunks}} fragmentos del grafo, {{versions}} versión(es).",
     "removedKeptVersions": "{{count}} versión(es) siguen existiendo porque otro documento las comparte.",
-    "removedKept": "Se conservan el historial de ejecuciones, los costes y el archivo en disco."
+    "removedKept": "Se conservan el historial de ejecuciones, los costes y el archivo en disco.",
+    "scores": {
+      "recall5": "recall@5",
+      "recall1": "recall@1",
+      "mrr": "MRR@10",
+      "denseOnly": "solo denso",
+      "noiseFloor": "piso de ruido",
+      "basis": "{{questions}} preguntas generadas sobre {{chunks}} fragmentos · {{misses}} no encontraron el suyo. Las preguntas se escriben a partir de los pasajes que deben encontrar, así que la cifra de solo denso es lo que vale la vía léxica sin esa filtración; el piso de ruido es lo que puntúa una consulta fuera de tema."
+    }
   },
   "import": {
     "title": "Importar un documento",
@@ -212,7 +221,9 @@
     "choose": "Elegir archivo…",
     "chooseOther": "Elegir otro…",
     "picking": "Abriendo…",
-    "oneAtATime": "Se tomó el primero. Archivos ignorados: {{count}}. Por ahora se importa de uno en uno."
+    "oneAtATime": "Se tomó el primero. Archivos ignorados: {{count}}. Por ahora se importa de uno en uno.",
+    "stageEvalset": "Medir la calidad de recuperación",
+    "stageTune": "Ajustar la recuperación (vuelve a embeber el documento)"
   },
   "gate": {
     "title": "Aprobar antes de gastar",
@@ -238,7 +249,9 @@
       "embedding": "Embeddings",
       "semantics": "Conceptos y relaciones",
       "evalset": "Conjunto de evaluación",
-      "profile": "Aprender las reglas del documento"
+      "profile": "Aprender las reglas del documento",
+      "tuning": "Ajuste — una segunda pasada de embeddings",
+      "evaluation": "Medición — embeber las preguntas"
     },
     "profileTitle": "Reglas",
     "profileReused": "Se reutiliza el perfil «{{slug}}», aprendido de {{learnedFrom}} (revisión {{revisions}}).",

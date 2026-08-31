@@ -22,7 +22,8 @@ use tokio::sync::Mutex;
 use auth::{AuthConfig, Pkce, Session};
 use backend::{BackendMode, BackendSettings};
 use control::{
-    Approval, Auth, AskProgress, AskStarted, ChunkContext, ConceptClaims, Control, DocumentDetail,
+    Activation, Approval, Auth, AskProgress, AskStarted, ChunkContext, ConceptClaims, Control,
+    DocumentDetail,
     GateReport, Health, IngestRequest, Libraries, Library, LibraryGraph, Outline, PingResult,
     ProjectSummary, Question, RebuildReport, RelatedDocuments, Removal, SectionChunks,
     RunState, StageOptions, StagedSource, StartedRun, VersionConcepts,
@@ -734,6 +735,23 @@ async fn version_remove(
         .await
 }
 
+/// Promote a version an ingest deliberately withheld.
+///
+/// The pipeline blocks activation when the inherited heading rules and the
+/// built-in ones disagree about how many chapters a document has — the one
+/// automatic signal a structural fingerprint collision gives, and one the
+/// retrieval metrics cannot see. This is the judgement that the rules were right
+/// after all, and it costs nothing: the index is already written and paid for.
+#[tauri::command]
+async fn version_activate(
+    state: State<'_, AppState>,
+    library_id: String,
+    version_id: String,
+) -> Result<Activation> {
+    let control = state.control().await?;
+    control.activate_version(&library_id, &version_id).await
+}
+
 #[tauri::command]
 async fn document_reindex(
     state: State<'_, AppState>,
@@ -922,6 +940,7 @@ pub fn run() {
             document_detail,
             document_remove,
             version_remove,
+            version_activate,
             document_reindex,
             document_rebuild,
             rebuild_gate,

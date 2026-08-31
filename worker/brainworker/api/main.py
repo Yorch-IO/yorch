@@ -30,6 +30,11 @@ from ..graph import DEFAULT_CONFIDENCE_FLOOR, Graph, GraphError
 from ..graph.queries import TemplateError, bind, get
 from ..graph.schema import LEGACY_TENANT_ID, SEMANTIC_EDGES
 from ..activities.rebuild import REQUIRED_ARTIFACT
+
+#: The artifact a measured run leaves behind. Named here rather than written as a
+#: literal at the two call sites, for the reason `REQUIRED_ARTIFACT` exists: the
+#: probe and the reader must not be able to drift apart.
+SCORES_ARTIFACT = "scores"
 from ..answering import Question, ask
 from ..pipeline import SUPPORTED_FORMATS, IngestRequest, StageOptions
 from ..workflows.ask import AskWorkflow
@@ -521,6 +526,57 @@ def _semantics_counts(
         return None
 
 
+def _measured_scores(
+    workspace: pathlib.Path, run_id: str, artifacts: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """What this run's index can actually be asked, or None if nobody asked.
+
+    Read from the run's own `scores.json` for the reason `_semantics_counts`
+    gives: a run that predates the measurement reports *nothing*, honestly,
+    rather than a zero somebody would read as a broken index. Recall of 0.00 and
+    "this was never measured" are different statements and only one of them is a
+    fact about the corpus.
+
+    The noise floor travels with the recall deliberately. Recall says how often
+    the right chunk came back; the floor says what a *wrong* one scores, and
+    without it a reader cannot tell an index that discriminates from one that
+    returns everything at a similar distance.
+    """
+    ref = next((a for a in artifacts if a.get("name") == "scores"), None)
+    if ref is None:
+        return None
+    try:
+        payload = ArtifactStore(workspace, run_id).read_json(
+            ArtifactRef(
+                kind="scores",
+                path=ref["rel_path"],
+                sha256=ref["sha256"],
+                bytes=ref["size_bytes"],
+            )
+        )
+    except Exception as e:
+        log.warning("could not read %s's scores: %s", run_id, e)
+        return None
+
+    scores = payload.get("scores") or {}
+    if not scores.get("eval_questions"):
+        # An eval set that produced no questions measured nothing. Rendering its
+        # zeros would put "recall 0.00" on a perfectly good index.
+        return None
+    return {
+        "recall_at_1": scores.get("recall_at_1"),
+        "recall_at_5": scores.get("recall_at_5"),
+        "mrr_at_10": scores.get("mrr_at_10"),
+        "recall_at_5_dense_only": scores.get("recall_at_5_dense_only"),
+        "noise_floor": scores.get("noise_floor"),
+        "chunks": scores.get("chunks"),
+        "eval_questions": scores.get("eval_questions"),
+        "margin": payload.get("margin"),
+        "leakage": payload.get("leakage"),
+        "misses": len(payload.get("misses") or []),
+    }
+
+
 @app.get("/runs/{workflow_id}")
 async def run_status(workflow_id: str) -> dict[str, Any]:
     """Live stage from Temporal, plus what the catalog recorded.
@@ -574,6 +630,11 @@ async def run_status(workflow_id: str) -> dict[str, Any]:
     # statements, and only one of them is true of a structure-only run.
     if (semantics := _semantics_counts(s.workspace, workflow_id, artifacts)) is not None:
         body["semantics"] = semantics
+    # Same rule again: absent means "this run was not asked to measure", which is
+    # true of every run indexed before the stage existed and of every run whose
+    # gate declined it.
+    if (scores := _measured_scores(s.workspace, workflow_id, artifacts)) is not None:
+        body["scores"] = scores
     return body
 
 
@@ -1037,6 +1098,19 @@ def document_detail(library_id: str, document_id: str) -> dict[str, Any]:
             for v in versions
         }
         shared = {v.id: catalog.documents_holding(v.id) for v in versions}
+        # The newest run of each version that measured anything, and what it
+        # measured. A version indexed before the stage existed — which is every
+        # version on this installation today — simply has none, and renders as
+        # "not measured" rather than as a zero.
+        scored_by = {
+            v.id: catalog.latest_run_with_artifact(v.id, SCORES_ARTIFACT)
+            for v in versions
+        }
+        scores = {
+            vid: _measured_scores(s.workspace, run, catalog.artifacts(run))
+            for vid, run in scored_by.items()
+            if run
+        }
         # Computed inside the `with`: the check reads the artifact row, and the
         # catalog is closed by the time the response below is assembled.
         can_rebuild = _replayable(s.workspace, catalog, rebuild_from.get(active))
@@ -1064,6 +1138,8 @@ def document_detail(library_id: str, document_id: str) -> dict[str, Any]:
                 "active": v.id == active,
                 "created_at": v.created_at.isoformat() if v.created_at else None,
                 "rebuild_run_id": rebuild_from.get(v.id),
+                # None means nobody measured this version, never "it scored 0".
+                "scores": scores.get(v.id),
                 # Which other documents hold these same bytes. Removing this
                 # document leaves the version standing when this is non-empty,
                 # and the confirm dialog has to be able to say so.
@@ -1120,6 +1196,36 @@ async def remove_version(library_id: str, version_id: str) -> dict[str, Any]:
             run_removal, s, library_id=library_id, version_id=version_id
         )
     except RemovalError as e:
+        raise HTTPException(
+            status_code=404, detail={"kind": e.kind, "message": str(e)}
+        ) from e
+    return result.as_dict()
+
+
+@app.post("/libraries/{library_id}/versions/{version_id}/activate")
+async def activate_version_route(library_id: str, version_id: str) -> dict[str, Any]:
+    """Promote a version the pipeline deliberately did not.
+
+    An ingest that finds a structural collision indexes everything and withholds
+    only this step, because the fingerprint that selects a family profile is
+    structural and structure is not subject matter — and the retrieval metrics
+    provably cannot see the difference, since the eval questions come from the
+    very chunks the wrong rules produced. So the judgement is a person's, and
+    this is the half of it that says "the rules were right".
+
+    The other half is re-importing with `ignore_profile`, which says they were
+    wrong and costs another pipeline run. This costs nothing: the index it
+    promotes is the one already paid for.
+    """
+    import asyncio
+
+    from ..activation import ActivationError, activate_version
+
+    try:
+        result = await asyncio.to_thread(
+            activate_version, library_id, version_id
+        )
+    except ActivationError as e:
         raise HTTPException(
             status_code=404, detail={"kind": e.kind, "message": str(e)}
         ) from e

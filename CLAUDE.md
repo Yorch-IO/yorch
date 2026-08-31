@@ -47,15 +47,15 @@ any more, and reaching for it in the dev loop is now the expensive mistake — s
 
 ```bash
 # Engine
-cd docaget && uv sync && uv run pytest -q          # 142 passed, 13 skipped
+cd docaget && uv sync && uv run pytest -q          # 194 passed, 15 skipped
 uv run pytest tests/test_invariants.py::test_inv01_char_span_is_byte_exact -q
 uv run docagent index --dry-run libro.pdf          # free structural preview
 uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # 379 passed, 70 skipped
-# 449 passed and nothing skipped with the stack up — and the Bolt port must come
+cd worker && uv sync && uv run pytest -q           # 462 passed, 78 skipped
+# 528 passed, 12 skipped with the stack up — and the Bolt port must come
 # from `docker`, not `infra/.env`: BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789
 # graph/ and catalog/ are integration tests: they skip, naming the URL they
 # tried, when Memgraph or Postgres is down, and neither fixture wipes anything.
@@ -63,7 +63,7 @@ uv run pytest tests/unit/test_artifacts.py -k rewritten -q
 
 # Desktop app
 cd app && npm install
-npm run typecheck && npx vitest run && npm run build   # 170 passed
+npm run typecheck && npx vitest run && npm run build   # 242 passed
 npx vitest run -t "define no key"                  # single test by name
 COMPANY_BRAIN_REPO_ROOT=/home/jjimenez/yorch npm run tauri dev
 
@@ -71,12 +71,14 @@ COMPANY_BRAIN_REPO_ROOT=/home/jjimenez/yorch npm run tauri dev
 # and PKG_CONFIG_PATH set, or the `soup3-sys` build script fails first. No
 # `--release`: the tuned dev profile runs this gate in 60s at 412% CPU.
 export PKG_CONFIG_PATH=~/.local/tauri-sysroot/prefix/usr/lib/x86_64-linux-gnu/pkgconfig
-cd app/src-tauri && cargo test                     # 91 passed
+cd app/src-tauri && cargo test                     # 93 passed
 
-# Rebuild the image the API and worker actually run. The dev overlay is not
-# optional: without it `--build` recreates the containers and changes nothing.
+# Rebuild the image the API and worker actually run. **All three overlays.**
+# Without `dev` the `--build` recreates the containers and changes nothing;
+# without `adc` the containers come up with no credentials and the first paid
+# stage dies on `DefaultCredentialsError` — see the entry below.
 cd infra && docker compose -f docker-compose.yaml -f docker-compose.dev.yaml \
-  up -d --build api worker
+  -f docker-compose.adc.yaml up -d --build api worker
 ```
 
 **Verify with real exit codes.** `npm run typecheck | tail -6 && echo CLEAN`
@@ -165,10 +167,20 @@ driver, so there is one owner of the schema and one set of models.
   corrected in `activities/ingest.py` changes nothing at a real gate until the
   image is rebuilt — and **`--build` is a silent no-op without the dev overlay**,
   because the base compose file names an `image:` and the `build:` section lives
-  only in `docker-compose.dev.yaml`. The whole command is
-  `docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d --build api worker`;
+  only in `docker-compose.dev.yaml`. **And a third `-f` is needed for the run to
+  get anywhere**: `docker-compose.adc.yaml` is applied *conditionally* by the
+  desktop app — `compose_args()` adds it only when `find_adc()` located a file,
+  because compose creates a directory at a bind mount's missing source — so a
+  stack rebuilt by hand does not get it and every paid stage dies on
+  `DefaultCredentialsError`. Measured 2026-08-31: the first real eval-set run
+  failed at `embedding` for exactly this, having spent nothing and reported the
+  cause honestly. The whole command is
+  `docker compose -f docker-compose.yaml -f docker-compose.dev.yaml -f docker-compose.adc.yaml up -d --build api worker`;
   drop the second `-f` and compose recreates the containers, reports success, and
-  leaves the old code serving. This is not hypothetical: a
+  leaves the old code serving; drop the third and it serves new code that cannot
+  authenticate. Note `/health` stays green either way — the provider row is free
+  and only says whether a project id is set. `POST /provider/probe` is what
+  spends and therefore what actually knows. This is not hypothetical: a
   2026-08-22 batch billed 8 of 34 documents above the range's high end and the
   audit first read that as the spread being too small — the deployed image was
   still on `OUTPUT_SPREAD = 1.27` while the repository had 1.86. Before drawing a
@@ -452,6 +464,97 @@ driver, so there is one owner of the schema and one set of models.
   *not* "reindex with correction off": correction changes the text's length, so
   that produces different `char_span`s and a silently different index.
 
+- **The embedding model belongs to the collection, not to the engine.**
+  `docagent.vertex.EMBED_MODEL` is `gemini-embedding-001`, which is what the CLI
+  writes into `docagent_v2`; `BRAIN_EMBEDDING_MODEL` is `gemini-embedding-2`,
+  which is what this worker has written into all 5,335 points of `brain`. Both
+  are 3,072 wide, so **Qdrant accepts either into either without an error and the
+  cosine between them means nothing** — a healthy log over a corrupt ranking. So
+  `docagent/runner.py` names no model constant at all and takes an `Embedder`
+  instead; `index_chunks` raises `VectorSpaceMismatch` when the embedder and the
+  writer disagree, before a single request is paid for; and the worker logs the
+  divergence once at startup, because nothing downstream can see it — both halves
+  of a single run always agree with each other.
+
+- **The engine embeds and Yorch stamps.** `runner.index_chunks` hands
+  `IndexRow`s to an injected `PointWriter`, and `brainworker/indexing.py` is the
+  only place that derives a point id or builds a payload. The engine must never
+  learn what a tenant is: `doc_id_for()` hashes a filename, and a point written
+  into `brain` without a `tenant_id` is unreachable by either plane with its
+  embedding already paid for. That is also why `version_scope()` is one function
+  — the tail prune, the removal filter and the evaluation's scope are the same
+  predicate, and two call sites that disagreed would score a document against
+  another document's chunks.
+
+- **A measurement without a scope is refused.** `runner.evaluate` and
+  `tune_once` raise `UnscopedEvaluation` on an empty filter rather than searching
+  the whole collection, because the figure that comes back would be a fact about
+  the corpus wearing the name of one document.
+
+- **A reused profile's eval set is dropped unless it was written from this
+  document.** The fingerprint groups by structure and structure is not subject
+  matter, so book B scored against book A's questions returns a recall of 0 that
+  means nothing about either. The engine drops it in `n_load_profile`;
+  `paid.build_evalset` has to apply the same rule or the fix does not travel.
+
+- **A structural collision withholds activation, and nothing else does.** When
+  the inherited heading rules and the built-in ones disagree about how many
+  chapters a document has, the run indexes everything and skips
+  `activate_version`: the index exists, the graph is projected, the bill is
+  reported, and the *previous* version stays answerable. Rule-learning falling
+  back to defaults is deliberately not in that list — after three failed attempts
+  the engine adopts rules that were themselves measured on a real book, and
+  blocking there would refuse to publish documents whose only fault is being
+  ordinary. The two ways out are `POST /libraries/{id}/versions/{id}/activate`,
+  which costs nothing because the index is already paid for, and re-importing
+  with `ignore_profile`, which pays for a full run. **`run.state = 'blocked'`
+  is a real value**, added in `20260831140000_run_blocked` because none of the
+  other five was honest: the run did every stage and paid for them, so it did
+  not fail; it withheld the last step, so it was not a plain success; and nobody
+  cancelled it. It is the same distinction the gate timeout already makes at the
+  other end. **Exercised on the running stack 2026-08-31** by giving a document
+  a profile that read 1 chapter where the defaults read 8: `blocked` /
+  `structural_mismatch`, the reason in the row, the prior version still active,
+  and `POST …/activate` promoting it afterwards — 404 with
+  `version_not_found`, never 403, for another library's.
+
+- **Tuning is one candidate, never a loop.** The free half — `min_score`,
+  `per_section`, dense-only — changes nothing in the index and is tried
+  exhaustively; the paid half re-cuts the document, so every chunk is a new
+  string, none of them is in the embedding cache, and it is a second full
+  indexing pass. A revert re-chunks and re-indexes rather than only rewriting the
+  profile: the engine's measured bug was that reverting the profile left the
+  *collection* holding the candidate's chunks, and three rounds drifted
+  0.729 → 0.762 → 0.700 having each reverted.
+
+- **The engine's stateful directories are parameters now, not the CWD.**
+  `profiles.load/save`, `correct.correct_paragraphs` and the new
+  `docagent/embedcache.py` all take an explicit root, and `docagent/workspace.py`
+  carries the three together. `os.chdir` is process-global and the worker runs
+  activities concurrently, so it could never serve two organisations at once —
+  which is why `CLAUDE.md` listed profiles as the open one of the three gaps
+  tenancy does not cover. `profile_dir()` passes
+  `Paths.for_tenant(tenant).profiles`, and the legacy tenant keeps the volume
+  root, so the 23 profiles already on disk are untouched. **A non-legacy tenant's
+  existing profile is orphaned by this** and will be re-learned once, for about
+  $0.006.
+
+- **The correction cache is one file per paragraph.** It was one JSON rewritten
+  after every batch, which is correct for one process and lossy for two: the
+  second writer's dict was assembled before the first one wrote. The legacy
+  `paragraphs.json` is still read and never written, so nothing already paid for
+  is re-spent.
+
+- **The worker's embedding path has a cache and the engine's quota patience.**
+  `Provider.embed` had neither: `cache/` under the workspace was empty from the
+  day it was created while `profiles/` beside it held 23 files, and `_call`
+  retried three times at 1.5^n — about seven seconds against a *per-minute*
+  quota bucket. `CachedEmbedder` fronts `Provider.embed` with
+  `docagent.embedcache` (the checks still run; it is not a second path to the
+  API), and 429s now get six attempts at 2/8/32/60/60 honouring `Retry-After`.
+  Paid activities get two Temporal attempts and each one runs the whole stage, so
+  without the cache the second attempt re-paid for every vector of the first.
+
 ### Tenancy, and the rules it added here
 
 Two planes over one set of stores. Everything below is a constraint on code in
@@ -699,22 +802,63 @@ the running stores on 2026-08-28, not remembered.
 Ordered by what it costs to leave alone. Details and measurements live in
 `doc/COMPANY_BRAIN.md`.
 
-**The eval-set stage is a switch with no activity behind it.** It appears in
-`StageOptions`, in the cost estimator and in `artifacts.KINDS`, and is not
-implemented. This is the piece that would let answer quality be *measured*
-instead of argued about, and here is what that costs, concretely:
+**The eval-set stage is built, and nothing has run it against Vertex yet.**
+It was "a switch with no activity behind it" until 2026-08-31. `build_evalset`,
+`evaluate_index` and `persist_profile_scores` now exist in `activities/paid.py`,
+the `evalset` and `scores` artifact kinds are written, `/runs/{id}` and the
+Library's version rows render the figures, and the engine's own tail —
+`build_evalset`, `measure`, `noise_floor`, `noise_margin` — is reached through
+`docagent/runner.py` rather than reimplemented. Tuning came with it, bounded to
+one chunking candidate.
+
+**It has now run against Vertex, once.** `taller-de-tarsis.txt` — a synthetic
+4,629-character document written for the purpose, 8 chunks, in the otherwise
+empty legacy tenant as `lib_pruebas`. **The first measured recall this product
+has ever produced for any document:**
+
+```
+recall@1 0.75 · recall@5 1.000 · MRR@10 0.875
+dense-only 1.000 · noise floor 0.5149 · 8 questions, 0 misses · margin ±0.078
+```
+
+Two things that run confirmed and one it broke. The eval-set generator
+**paraphrases rather than copies** — "¿Qué requisito debía cumplir un escriba
+según la pauta epistolar formulada en Quíos en el 390?" for a passage that says
+"la regla de los tres lectores… hacia el año 390" — which is why dense-only
+equals hybrid and the leakage note reads "no sign". And the measurement's scope
+reached every search, including the noise floor: `{tenant_id, version_id}`, in
+the artifact, checked.
+
+**What it broke was the estimate, and in the forbidden direction.** Quoted
+$0.0338, billed **$0.0650**. Input over-reported by 2.6x, which is fine; output
+under-reported by **3.6x** — 968 tokens per call against 270 quoted — and since
+output is priced at five times input the whole quote came in at half the bill.
+`EVALSET_OUTPUT_PER_CALL` was a guess at the length of a question and is now
+400, measured; the input side takes the document's own average chunk instead of
+the 2,600-character cap. Re-quoted at a free gate afterwards: **$0.0848 against
+the $0.0650 spent, 1.31x over**, which is the direction the rule demands.
+`test_the_eval_set_estimate_covers_what_the_first_real_run_billed` holds both
+ends. One document, eight calls; a second may move it again.
+
+The three decisions below are therefore *unblocked*, and still unsettled — one
+synthetic document is not a corpus:
 
 - **Gleaning stays off against its own measurement.** One pass buys +52% claims
-  and +40% concepts for +70% cost — a decent rate — and the default is still zero
-  because nothing can score whether the extra 41 claims are *better*. The
-  measurement exists; the thing that would act on it does not.
+  and +40% concepts for +70% cost. There is now something that could score
+  whether the extra 41 claims are better; nobody has scored them.
 - **`thinking_for("answering")` was settled on caution** because there was
-  nothing to measure with, and it is the only stage where reasoning is left on.
+  nothing to measure with. There is now.
 - **Profile quality rests on a structural outcome rather than recall** — the
-  entry directly below, which points back here for the same reason.
+  entry directly below. A profile's `scores` are written back into it now, so
+  the family accumulates measurement across documents; no family has any yet.
 
-Three decisions, one missing activity. graphrag's `question_gen_system_prompt.py`
-is the shape of the generator; the scoring half is ours to design.
+**And the sample size is a real limit, not a detail.** `EVAL_SAMPLE` is 40, and
+with σ ≈ 0.358 the bootstrap margin needs about 80 questions to resolve a +0.040
+MRR effect. So a tuning round at 40 measures the index honestly and refuses
+almost every candidate — which is the design working, and is also a full second
+embedding pass spent on a question the sample cannot answer. Turning `tune` on
+therefore raises the sample to `EVAL_SAMPLE_TUNING` and the gate prices both
+halves.
 
 **Profile quality is unmeasured.** Learning works and is verified end to end —
 a real document went from 0 detected chapters to a 9-section, two-level table of
@@ -1034,9 +1178,33 @@ session's files.
   'decimal.Decimal'`. Harmless wherever it is only serialised; a trap the first
   time anything compares or sums one. `repo.py:116`.
 
-## Two defects that were recorded here and are now fixed
+## Four defects that were recorded here and are now fixed
 
 Kept because each fix carries a rule worth not relearning.
+
+- **The second gate cost a document the profile it had just paid to learn.**
+  `IngestWorkflow._run` reassigned `decision` — the `ProfileDecision` every later
+  stage reads — to the `Approval` the second gate returned, so `chunk_final` was
+  handed an `Approval` where it expects a decision. Temporal's converter coerced
+  it into a defaulted `ProfileDecision` instead of failing, which means the run
+  succeeded, the chunk count looked ordinary, and the document was silently
+  chunked with the engine's built-in rules. **Nothing could see it**: the only
+  symptom was a table of contents worse than the rest of its family's. The
+  variable is `review` now, and
+  `test_the_second_gate_does_not_cost_the_document_its_profile` fails when the
+  shadowing comes back. Found by a later stage reading `decision.source` and
+  getting an attribute an `Approval` does not have — which failed the workflow
+  task, which Temporal retries for ever, so the first visible form of a
+  four-month-old silent bug was a hung test.
+
+- **A re-index that produced fewer chunks left the old tail in Qdrant.** Point
+  ids are `point_id(version_id, chunk_index)`, so `upsert` overwrites `0..n-1`
+  and never removes anything beyond them: a corrected profile that chunks more
+  coarsely left the previous chunking's tail alive, carrying `char_span`s into a
+  byte stream nothing holds. `removal.py` deletes a whole version and was the
+  only other delete in the package. `QdrantWriter.prune_tail` runs on every
+  index, not only after a tuning revert, and it is scoped to the version — an
+  unscoped one would delete the back of every other book on the shelf.
 
 - **A run's terminal state is a different question from its stage**, and
   `/runs/{id}` now answers both. A `stage` query against a failed workflow hands

@@ -12,8 +12,10 @@ that re-embedded a book would double a real bill.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import pathlib
 import re
 from collections import Counter
 from dataclasses import asdict
@@ -31,19 +33,28 @@ from ..pipeline import (
     ChunkKindCount,
     Chunked,
     Correction,
+    EvalSet,
     Extraction,
     Indexed,
     ProfileDecision,
+    ProfileRules,
     Registered,
+    Scores,
     Semantics,
     Spend,
     StageOptions,
     Staged,
+    TuneOutcome,
 )
-from ..providers import Provider, VertexAdapter
+from ..indexing import PAYLOAD_INDEXES, QdrantWriter, StoredChunk, version_scope
+from ..providers import CachedEmbedder, Provider, VertexAdapter
 from ..providers.gemini import RETRIEVAL_DOCUMENT, Usage
 from .ingest import (
     CHARS_PER_TOKEN,
+    EVAL_SAMPLE,
+    EVAL_SAMPLE_TUNING,
+    EVAL_SEED,
+    profile_dir,
     CONDENSE_SOURCE_CAP,
     CONDENSE_TOKENS,
     CONDENSE_WORDS,
@@ -70,13 +81,6 @@ log = logging.getLogger(__name__)
 #: somewhere disposable. This constant is only the default.
 DEFAULT_COLLECTION = "brain"
 
-#: Payload fields Qdrant must index for filtering to be usable at all.
-#:
-#: `tenant_id` is first because it is the one filter every search carries: a
-#: library is a shelf inside an organisation, and every other key here narrows
-#: within one.
-PAYLOAD_INDEXES = ("tenant_id", "library_id", "version_id", "kind", "document_id")
-
 #: Concurrent embedding requests. There is no batch size to choose: the model
 #: returns one embedding for a request carrying four texts, with no error
 #: (measured 2026-08-19), so `Provider.embed` issues one request per chunk and
@@ -86,6 +90,17 @@ EMBED_WORKERS = 6
 
 def _provider() -> Provider:
     return Provider(_settings().gemini)
+
+
+def _embed_cache_dir(settings) -> "pathlib.Path":
+    """Where embeddings already paid for live.
+
+    At the volume root rather than under a tenant, for the reason the correction
+    cache is: an entry is keyed by the model, the width, the task and the text,
+    so reading one requires already holding that text. That is a saving, not a
+    channel.
+    """
+    return settings.paths.cache / "embed"
 
 
 def _charge(run_id: str, spend: Spend) -> Spend:
@@ -236,7 +251,7 @@ async def learn_profile(
         extractor=extraction.extractor,
         learned_from=extraction.source_key or run_id,
     )
-    profile.save()
+    profile.save(profile_dir(settings, extraction.tenant_id))
 
     if not validation.passed:
         log.info(
@@ -401,6 +416,12 @@ async def embed_and_index(
 ) -> Indexed:
     """Embed every chunk and upsert it into Qdrant with its BM25 sparse vector.
 
+    The embedding and the sparse vector come from `docagent.runner.index_chunks`;
+    the identity of each point comes from `QdrantWriter`. That split is the whole
+    boundary: the engine has no concept of tenancy and must not gain one, and a
+    point written without a `tenant_id` is unreachable by either plane with the
+    embedding already paid for.
+
     **Point ids are derived from the version, not the path.** The engine's
     `doc_id_for()` hashes the filename, which is what lets byte-identical
     duplicates index twice and then compete in ranking; using the content-derived
@@ -408,8 +429,8 @@ async def embed_and_index(
     a duplicate file adds none. That also makes this activity idempotent, which
     Temporal requires of it anyway.
     """
-    from docagent.bm25 import avg_doc_len, doc_sparse_vector, tokenize
-    from docagent.qdrant import Point, Qdrant, point_id
+    from docagent.qdrant import Qdrant
+    from docagent.runner import index_chunks
 
     settings = _settings()
     store = ArtifactStore(settings.workspace, run_id)
@@ -422,63 +443,44 @@ async def embed_and_index(
             spend=Spend(stage="embedding", model=settings.gemini.embedding_model),
         )
 
-    provider = _provider()
-    embedded = provider.embed(
-        [r.get("embed_text") or r["text"] for r in rows],
-        task=RETRIEVAL_DOCUMENT,
+    chunks = [StoredChunk.from_row(r) for r in rows]
+    embedder = CachedEmbedder(
+        _provider(),
+        _embed_cache_dir(settings),
+        model=settings.gemini.embedding_model,
+        dimensions=settings.gemini.embedding_dimensions,
         workers=EMBED_WORKERS,
     )
-    usage = Usage()
-    vectors: list[list[float]] = []
-    for item in embedded:
-        usage.add(item.usage)
-        vectors.append(item.values)
 
-    docs = [tokenize(r["text"]) for r in rows]
-    avgdl = avg_doc_len(docs)
+    def heartbeat(done: int, total: int) -> None:
+        # A 600-chunk book is ~100 minutes of wall clock against the per-minute
+        # embedding quota, so silence here is indistinguishable from a hung
+        # socket — three runs were given up for dead when the only thing wrong
+        # was that the observer left first.
+        #
+        # Guarded for the reason `extract_semantics` gives: every test in
+        # `tests/activities/` calls these as plain functions rather than through
+        # a worker, and `heartbeat` raises outside an activity context.
+        if activity.in_activity():
+            activity.heartbeat(done, total)
 
     collection = settings.qdrant_collection
     with Qdrant(settings.qdrant_url, collection) as q:
         q.wait_ready()
         q.create(settings.gemini.embedding_dimensions, PAYLOAD_INDEXES)
-        points = [
-            Point(
-                id=point_id(registered.version_id, row["index"]),
-                dense=vectors[i],
-                sparse=doc_sparse_vector(docs[i], avgdl),
-                payload={
-                    # Written on every point and forced into every search. A
-                    # point id is `uuid5(ns, f"{version_id}:{index}")` and the
-                    # version id is now salted, so two customers holding the
-                    # same file no longer collide — but a collision is not the
-                    # same thing as authorization, and this is what a query
-                    # actually filters on.
-                    "tenant_id": registered.tenant_id,
-                    "library_id": library_id,
-                    "document_id": registered.document_id,
-                    "version_id": registered.version_id,
-                    # The graph's id for the same chunk, so a Qdrant hit can be
-                    # expanded through the graph without a lookup table.
-                    "chunk_id": make_chunk_id(registered.version_id, row["index"]),
-                    "source_title": staged.title,
-                    "chunk_index": row["index"],
-                    "kind": row["kind"],
-                    "chapter": row.get("chapter", ""),
-                    "section": row.get("section", ""),
-                    "breadcrumb": " > ".join(
-                        p for p in (row.get("chapter"), row.get("section")) if p
-                    ),
-                    "text": row["text"],
-                    "context": row.get("context", ""),
-                    # Indexes the *corrected* byte stream, not the original file:
-                    # correction changed the offsets.
-                    "char_span": [row["char_from"], row["char_to"]],
-                    "cell_ref": row.get("cell_ref", ""),
-                },
-            )
-            for i, row in enumerate(rows)
-        ]
-        q.upsert(points)
+        writer = QdrantWriter(
+            q,
+            tenant_id=registered.tenant_id,
+            library_id=library_id,
+            document_id=registered.document_id,
+            version_id=registered.version_id,
+            source_title=staged.title,
+            model=settings.gemini.embedding_model,
+            dimensions=settings.gemini.embedding_dimensions,
+        )
+        outcome = index_chunks(
+            chunks, embedder=embedder, writer=writer, on_done=heartbeat
+        )
         info = q.info()
 
     spend = _charge(
@@ -486,21 +488,533 @@ async def embed_and_index(
         Spend(
             stage="embedding",
             model=settings.gemini.embedding_model,
-            input_tokens=usage.input_tokens,
+            input_tokens=embedder.usage.input_tokens,
             output_tokens=0,
-            usd=price_for(settings.gemini.embedding_model, usage.input_tokens, 0),
+            usd=price_for(
+                settings.gemini.embedding_model, embedder.usage.input_tokens, 0
+            ),
         ),
     )
     log.info(
-        "indexed %d points into %r (%d total in collection)",
-        len(points), collection, info.points_count,
+        "indexed %d points into %r (%d total in collection); "
+        "%d served from cache, %d stale point(s) pruned",
+        outcome.points, collection, info.points_count,
+        embedder.cache_hits, outcome.pruned,
     )
     return Indexed(
         collection=collection,
-        points=len(points),
-        dimensions=settings.gemini.embedding_dimensions,
+        points=outcome.points,
+        dimensions=outcome.dimensions,
         spend=spend,
     )
+
+
+# ---------------------------------------------------------------------------
+# Measuring the index that was just written
+# ---------------------------------------------------------------------------
+
+#: `EVAL_SAMPLE` and `EVAL_SEED` come from `activities.ingest`, where the
+#: estimator reads them too. One definition, because the estimate is a promise
+#: about a bill and the stage is what settles it: two constants would let the
+#: gate quote forty calls and the run make eighty.
+#:
+#: The sample is also what decides what a *comparison* can resolve. With
+#: σ ≈ 0.358 the bootstrap margin needs roughly 80 questions to see a +0.040
+#: MRR effect, so at 40 a tuning round measures this index honestly and will
+#: correctly refuse almost any candidate.
+#:
+#: The seed is fixed so two runs of one document compare on the same questions.
+#: Resampling each time would measure the sample instead of the change — the
+#: mistake that made three tuning rounds drift 0.729 → 0.762 → 0.700.
+
+
+def _profile_for(settings, decision: ProfileDecision, tenant_id: str):
+    """This document's profile as it is on disk, or None.
+
+    Read back rather than carried in the payload: `ProfileDecision` deliberately
+    flattens a profile to fifteen scalars, because the profile itself also holds
+    an eval set of 88 questions and a tuning history, and those would then persist
+    in workflow history for the namespace's whole retention period.
+    """
+    from docagent import profiles as engine_profiles
+
+    if not decision.fingerprint:
+        return None
+    return engine_profiles.load(
+        decision.fingerprint, profile_dir(settings, tenant_id)
+    )
+
+
+@activity.defn(name="build_evalset")
+async def build_evalset(
+    run_id: str,
+    extraction: Extraction,
+    chunked: Chunked,
+    decision: ProfileDecision,
+    sample: int = EVAL_SAMPLE,
+) -> EvalSet:
+    """Generate the questions this document's index will be measured against.
+
+    One generation call per sampled chunk, stratified by `kind` so a table-heavy
+    or footnote-heavy document is not judged purely on its prose.
+
+    **A reused profile's questions are dropped unless they were written from this
+    document.** The fingerprint groups by *structure*, and structure is not
+    subject matter: a hermeneutics chapter and a church-history book landed on
+    the same fingerprint on the real corpus. Scoring book B against book A's
+    questions produced a recall of 0 that meant nothing about either — which is
+    the failure `doc/CLAUDE.md` records and `n_load_profile` fixes on the engine
+    side. The same rule has to hold here or the fix does not travel.
+    """
+    from docagent import evaluate as ev
+
+    settings = _settings()
+    store = ArtifactStore(settings.workspace, run_id)
+    rows = list(store.iter_jsonl(chunked.chunks))
+    if not rows:
+        return EvalSet(
+            items=store.write_json("evalset", []),
+            questions=0,
+            sample=sample,
+            spend=Spend(stage="evalset", model=settings.gemini.model),
+        )
+
+    profile = _profile_for(settings, decision, extraction.tenant_id)
+    source_key = extraction.source_key or run_id
+    if profile is not None and profile.evalset and profile.learned_from == source_key:
+        items = profile.evalset
+        log.info("reusing %d questions this document already paid for", len(items))
+        return EvalSet(
+            items=_record(
+                run_id, "evalset", store.write_json("evalset", [asdict(i) for i in items])
+            ),
+            questions=len(items),
+            sample=sample,
+            spend=Spend(stage="evalset", model=settings.gemini.model),
+            reused=True,
+        )
+    if profile is not None and profile.evalset:
+        log.info(
+            "dropping %d inherited questions: the profile was learned from %r, "
+            "not from %r",
+            len(profile.evalset), profile.learned_from, source_key,
+        )
+
+    adapter = VertexAdapter(_provider())
+    chunks = [StoredChunk.from_row(r) for r in rows]
+    items = ev.build_evalset(adapter, chunks, sample=sample, seed=EVAL_SEED)
+
+    spend = _charge(
+        run_id,
+        Spend(
+            stage="evalset",
+            model=settings.gemini.model,
+            input_tokens=adapter.usage.input_tokens,
+            output_tokens=adapter.usage.output_tokens,
+            usd=price_for(
+                settings.gemini.model,
+                adapter.usage.input_tokens,
+                adapter.usage.output_tokens,
+            ),
+        ),
+    )
+    ref = _record(
+        run_id, "evalset", store.write_json("evalset", [asdict(i) for i in items])
+    )
+    log.info("generated %d questions from %d chunks", len(items), len(rows))
+    return EvalSet(items=ref, questions=len(items), sample=sample, spend=spend)
+
+
+@activity.defn(name="evaluate_index")
+async def evaluate_index(
+    run_id: str,
+    registered: Registered,
+    chunked: Chunked,
+    evalset: EvalSet,
+    decision: ProfileDecision,
+) -> Scores:
+    """Ask the index the questions and report what came back.
+
+    Hybrid and dense-only, always both: the questions were written *from* the
+    chunks they must find, so they leak vocabulary to the lexical leg and a
+    hybrid figure quoted alone flatters the index. The gap between the two is the
+    leakage measurement.
+
+    The noise floor travels with them for the same reason. Recall says how often
+    the right chunk came back; the floor says what a *wrong* one scores, which is
+    what tells a reader whether this index can distinguish a miss from a hit at
+    all.
+    """
+    from docagent.profiles import EvalItem, RetrievalParams
+    from docagent.qdrant import Qdrant
+    from docagent.runner import evaluate as run_evaluate
+
+    settings = _settings()
+    store = ArtifactStore(settings.workspace, run_id)
+    items = [EvalItem(**d) for d in store.read_json(evalset.items)]
+    if not items:
+        return Scores(chunks=chunked.count)
+
+    profile = _profile_for(settings, decision, registered.tenant_id)
+    params = profile.retrieval if profile is not None else RetrievalParams()
+
+    embedder = CachedEmbedder(
+        _provider(),
+        _embed_cache_dir(settings),
+        model=settings.gemini.embedding_model,
+        dimensions=settings.gemini.embedding_dimensions,
+        workers=EMBED_WORKERS,
+    )
+    scope = version_scope(registered.tenant_id, registered.version_id)
+
+    with Qdrant(settings.qdrant_url, settings.qdrant_collection) as q:
+        outcome = run_evaluate(
+            embedder, q, items, scope=scope, params=params, chunks=chunked.count
+        )
+
+    engine_scores = outcome.scores
+    report = {
+        "scores": asdict(engine_scores),
+        "leakage": outcome.leakage,
+        "margin": round(outcome.margin, 4),
+        "retrieval": asdict(params),
+        "scope": scope,
+        # **The reciprocal rank of every question, misses included.** Not a
+        # detail: the bootstrap margin a tuning candidate has to beat is resampled
+        # from exactly this vector, and it cannot be reconstructed from `Scores`.
+        # Rebuilding it from the mean — every hit at MRR × n / hits — was tried,
+        # and on a realistic 40-question run it produced ±0.040 where the true
+        # margin is ±0.062, because a flat vector has none of the spread that
+        # ranks of 1, ½, ⅓, ¼ carry. **35% too small, in the direction that
+        # accepts noise as a real gain**, which is the one thing the margin
+        # exists to prevent. Forty floats in an artifact is the cheap way out.
+        "reciprocal_ranks": [
+            round(r, 6) for r in (outcome.baseline.rr_vector() if outcome.baseline else [])
+        ],
+        # The questions that did not find their own chunk, with where it ranked.
+        # A score with no misses attached is a number nobody can act on.
+        "misses": [
+            {"question": q_, "want": want, "rank": rank}
+            for q_, want, rank in (outcome.baseline.misses if outcome.baseline else [])
+        ],
+    }
+    ref = _record(run_id, "scores", store.write_json("scores", report))
+
+    spend = _charge(
+        run_id,
+        Spend(
+            stage="evaluation",
+            model=settings.gemini.embedding_model,
+            input_tokens=embedder.usage.input_tokens,
+            output_tokens=0,
+            usd=price_for(
+                settings.gemini.embedding_model, embedder.usage.input_tokens, 0
+            ),
+        ),
+    )
+    log.info("evaluated: %s", engine_scores.summary())
+    return Scores(
+        recall_at_1=engine_scores.recall_at_1,
+        recall_at_5=engine_scores.recall_at_5,
+        mrr_at_10=engine_scores.mrr_at_10,
+        recall_at_5_dense_only=engine_scores.recall_at_5_dense_only,
+        noise_floor=engine_scores.noise_floor,
+        chunks=engine_scores.chunks,
+        eval_questions=engine_scores.eval_questions,
+        margin=round(outcome.margin, 4),
+        leakage=outcome.leakage,
+        report=ref,
+        spend=spend,
+    )
+
+
+@activity.defn(name="propose_tuning")
+async def propose_tuning(
+    run_id: str,
+    registered: Registered,
+    chunked: Chunked,
+    evalset: EvalSet,
+    decision: ProfileDecision,
+    scores: Scores,
+) -> TuneOutcome:
+    """One tuning round: the free knobs exhaustively, then at most one paid idea.
+
+    Retrieval knobs — `min_score`, `per_section`, dense-only — change nothing in
+    the index, so every one is tried and the best is adopted here and now. Only
+    when none of them beats the noise margin is a chunking candidate worth its
+    cost, and that one is *returned*, not applied: re-cutting the document means
+    embedding every chunk again, which the gate priced as its own stage.
+
+    Nothing is adopted for having been tried. The objective is MRR@10 rather than
+    recall@5, which was measured to be blind here — saturated and binary at k=5,
+    so an overlap of 300 scored identically to an overlap of 0.
+    """
+    from dataclasses import replace as dc_replace
+
+    from docagent.profiles import EvalItem
+    from docagent.qdrant import Qdrant
+    from docagent.runner import tune_once
+
+    settings = _settings()
+    store = ArtifactStore(settings.workspace, run_id)
+    items = [EvalItem(**d) for d in store.read_json(evalset.items)]
+    profile = _profile_for(settings, decision, registered.tenant_id)
+    if not items or profile is None:
+        # Without a profile there is nowhere to keep an adopted knob, and the
+        # next run of this document would start from the same place having paid
+        # for the round. Refusing is cheaper than measuring and forgetting.
+        return TuneOutcome(
+            notes=["no eval set or no profile to tune against"],
+        )
+
+    embedder = CachedEmbedder(
+        _provider(),
+        _embed_cache_dir(settings),
+        model=settings.gemini.embedding_model,
+        dimensions=settings.gemini.embedding_dimensions,
+        workers=EMBED_WORKERS,
+    )
+    scope = version_scope(registered.tenant_id, registered.version_id)
+    # The baseline the candidate is judged against is the run `evaluate_index`
+    # just measured, re-derived from its own report rather than re-measured —
+    # measuring it again would spend the query embeddings twice and compare two
+    # runs that both moved.
+    baseline = _baseline_from(store, scores)
+    if baseline is None:
+        # Without the per-question ranks there is no margin, and without a margin
+        # a candidate would be adopted for having been tried — which is the one
+        # thing this whole loop is built not to do.
+        return TuneOutcome(
+            notes=[
+                "the measurement did not record its per-question ranks, so there "
+                "is no noise margin to judge a candidate against"
+            ]
+        )
+
+    with Qdrant(settings.qdrant_url, settings.qdrant_collection) as q:
+        outcome = tune_once(
+            embedder, q, items, scope=scope, profile=profile, baseline=baseline
+        )
+
+    for note in outcome.notes:
+        log.info("tune: %s", note)
+
+    ref = _record(
+        run_id,
+        "tuning",
+        store.write_json(
+            "tuning",
+            {
+                "kind": outcome.kind,
+                "label": outcome.label,
+                "baseline_objective": round(outcome.baseline_objective, 4),
+                "margin": round(outcome.margin, 4),
+                "history": outcome.history,
+                "notes": outcome.notes,
+            },
+        ),
+    )
+    _charge(
+        run_id,
+        Spend(
+            stage="tuning",
+            model=settings.gemini.embedding_model,
+            input_tokens=embedder.usage.input_tokens,
+            output_tokens=0,
+            usd=price_for(
+                settings.gemini.embedding_model, embedder.usage.input_tokens, 0
+            ),
+        ),
+    )
+
+    if outcome.kind == "retrieval" and outcome.retrieval is not None:
+        # Free and already decided, so it is written straight into the profile:
+        # the knob is a property of the family, not of this run.
+        with _profile_lock(
+            profile_dir(settings, registered.tenant_id),
+            decision.slug or decision.fingerprint,
+        ):
+            fresh = _profile_for(settings, decision, registered.tenant_id)
+            if fresh is not None:
+                dc_replace(fresh, retrieval=outcome.retrieval).save(
+                    profile_dir(settings, registered.tenant_id)
+                )
+        return TuneOutcome(
+            kind="retrieval", label=outcome.label,
+            baseline_objective=outcome.baseline_objective, margin=outcome.margin,
+            notes=outcome.notes, report=ref,
+        )
+
+    if outcome.kind == "chunking" and outcome.chunk_rules is not None:
+        candidate = dc_replace(
+            decision,
+            # Never `default`: `chunk_final` applies a decision's rules only when
+            # the source is not that, so a candidate labelled `default` would be
+            # silently ignored and the round would re-measure the chunking it was
+            # trying to change.
+            source="tuned",
+            rules=rules_from_chunk_rules(decision.rules, outcome.chunk_rules),
+        )
+        return TuneOutcome(
+            kind="chunking", label=outcome.label, candidate=candidate,
+            baseline_objective=outcome.baseline_objective, margin=outcome.margin,
+            notes=outcome.notes, report=ref,
+        )
+
+    return TuneOutcome(
+        baseline_objective=outcome.baseline_objective, margin=outcome.margin,
+        notes=outcome.notes, report=ref,
+    )
+
+
+def rules_from_chunk_rules(rules: ProfileRules, chunk_rules) -> ProfileRules:
+    """`rules` with the candidate's chunking values, and nothing else changed.
+
+    A `ProfileRules` is the fifteen scalars that cross a Temporal payload; a
+    candidate only ever moves two of them. Copying the rest rather than rebuilding
+    is what keeps a learned header pattern from being lost to a tuning round.
+    """
+    from dataclasses import replace as dc_replace
+
+    return dc_replace(
+        rules,
+        target_chars=chunk_rules.target_chars,
+        hard_cap_chars=chunk_rules.hard_cap_chars,
+        overlap_chars=chunk_rules.overlap_chars,
+        min_chunk_chars=chunk_rules.min_chunk_chars,
+        max_embed_chars=chunk_rules.max_embed_chars,
+    )
+
+
+def _baseline_from(store: ArtifactStore, scores: Scores) -> object | None:
+    """The measured run, rebuilt from the ranks its own report kept.
+
+    `EvalRun` carries a reciprocal rank per question and is far too big for a
+    Temporal payload, so `evaluate_index` reduced it to `Scores` and wrote the
+    ranks into the scores artifact. Tuning needs both halves: the objective, which
+    `Scores` has, and a bootstrap margin over those ranks, which it does not.
+
+    **None rather than an approximation.** Deriving the vector from the mean
+    understates the margin by about a third on a realistic run — measured at
+    ±0.040 against a true ±0.062 — because a flat vector has none of the spread
+    that ranks of 1, ½, ⅓, ¼ carry, and a margin that is too small accepts noise
+    as a real gain. A round that cannot compute its own threshold has nothing to
+    judge against, and declining is the only honest answer.
+    """
+    from docagent.evaluate import EvalRun
+
+    if scores.report is None:
+        return None
+    try:
+        report = store.read_json(scores.report)
+    except Exception:
+        return None
+    ranks = report.get("reciprocal_ranks")
+    if not ranks:
+        # An older report, written before the ranks were kept.
+        return None
+    n = len(ranks)
+    return EvalRun(
+        hits_at_1=int(round(scores.recall_at_1 * n)),
+        hits_at_5=int(round(scores.recall_at_5 * n)),
+        reciprocal_ranks=list(ranks),
+        questions=n,
+    )
+
+
+@activity.defn(name="persist_profile_scores")
+async def persist_profile_scores(
+    run_id: str,
+    extraction: Extraction,
+    decision: ProfileDecision,
+    evalset: EvalSet,
+    scores: Scores,
+) -> bool:
+    """Write the measurement back into the family's profile. Free.
+
+    The artifact is the authority — it is what `/runs/{id}` reads and what a
+    rebuild can find again. The profile's copy is what lets a *family* accumulate
+    measurement across documents, which is the whole reason the engine keeps one.
+
+    Returns whether it wrote, because "no profile to write to" is an ordinary
+    outcome — a document indexed with the measured defaults has no file of its
+    own — and reporting it as success would be a lie about where the numbers went.
+    """
+    import time
+    from dataclasses import replace
+
+    from docagent import profiles as engine_profiles
+    from docagent.profiles import EvalItem, Scores as EngineScores
+
+    settings = _settings()
+    root = profile_dir(settings, extraction.tenant_id)
+    store = ArtifactStore(settings.workspace, run_id)
+
+    with _profile_lock(root, decision.slug or decision.fingerprint):
+        # Re-read *inside* the lock. `revisions` is a read-modify-write, and two
+        # documents of one family can be in flight at once in this worker.
+        profile = _profile_for(settings, decision, extraction.tenant_id)
+        if profile is None:
+            log.info("no profile for %s; scores stay in the artifact", decision.fingerprint)
+            return False
+
+        items = [EvalItem(**d) for d in store.read_json(evalset.items)]
+        updated = replace(
+            profile,
+            scores=EngineScores(
+                recall_at_1=scores.recall_at_1,
+                recall_at_5=scores.recall_at_5,
+                mrr_at_10=scores.mrr_at_10,
+                recall_at_5_dense_only=scores.recall_at_5_dense_only,
+                noise_floor=scores.noise_floor,
+                chunks=scores.chunks,
+                eval_questions=scores.eval_questions,
+            ),
+            evalset=items,
+            # The eval set belongs to *this* document, so the record of which one
+            # has to move with it — otherwise the next book of the family reuses
+            # questions written from a book it has nothing to do with, and the
+            # drop rule in `build_evalset` has nothing to compare against.
+            learned_from=extraction.source_key or profile.learned_from,
+            revisions=profile.revisions + 1,
+            learned_at=time.time(),
+        )
+        updated.save(root)
+
+    log.info("wrote scores into profile %s", updated.slug)
+    return True
+
+
+@contextlib.contextmanager
+def _profile_lock(root: pathlib.Path, name: str):
+    """Serialise the read-modify-write on one profile.
+
+    `Profile.save` has no locking and `revisions` is incremented from a value read
+    earlier, so two runs of one family would each write the count they saw and one
+    measurement would vanish. An advisory `flock` is enough: the contenders are
+    threads and processes on one machine sharing one volume, not two hosts.
+
+    A filesystem that cannot lock — some network mounts — must not stop a run
+    recording what it measured, so failure here degrades to no lock rather than
+    to no scores.
+    """
+    import fcntl
+
+    handle = None
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        handle = open(root / f".{name}.lock", "w")
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    except OSError as e:
+        log.warning("could not lock profile %s (%s); writing unlocked", name, e)
+    try:
+        yield
+    finally:
+        if handle is not None:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+            finally:
+                handle.close()
 
 
 # ---------------------------------------------------------------------------

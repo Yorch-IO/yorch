@@ -38,6 +38,10 @@ from .vertex import Vertex
 # version's 60 KB chapters: a failed batch costs less to redo, and JSON output has
 # its own token overhead.
 MAX_BATCH_CHARS = 24_000
+#: The CWD-relative default. `correct_paragraphs` takes an optional
+#: ``cache_dir`` and falls back to this, for the reason `profiles.PROFILE_DIR`
+#: gives: `os.chdir` is process-global and the Temporal worker runs activities
+#: concurrently.
 CACHE_DIR = pathlib.Path("cache/correct")
 PROMPT_VERSION = "v1-conservador"
 
@@ -179,6 +183,7 @@ def correct_paragraphs(
     paragraphs: list[str],
     stage: str = "correct",
     progress: Callable[[int, int, str], None] | None = None,
+    cache_dir: "pathlib.Path | None" = None,
 ) -> tuple[list[str], CorrectionReport]:
     """Correct a list of paragraphs, returning the same number in the same order.
 
@@ -191,18 +196,19 @@ def correct_paragraphs(
     """
     report = CorrectionReport(paragraphs=len(paragraphs))
     out = list(paragraphs)
-    cache = _load_cache()
-    dirty = False
+    cache = _ParagraphCache(cache_dir)
     batches = _batches(paragraphs)
 
     for n, batch in enumerate(batches, start=1):
         # Cache is per paragraph, not per batch: a re-run with different batching
         # still gets its hits.
-        pending = [(i, paragraphs[i]) for i in batch if _key(paragraphs[i]) not in cache]
+        pending: list[tuple[int, str]] = []
         for i in batch:
-            if (hit := cache.get(_key(paragraphs[i]))) is not None:
+            if (hit := cache.get(paragraphs[i])) is not None:
                 report.cache_hits += 1
                 out[i] = hit
+            else:
+                pending.append((i, paragraphs[i]))
 
         if not pending:
             if progress:
@@ -243,17 +249,13 @@ def correct_paragraphs(
             if not ok:
                 report.rejected.append(Rejection(index=i, reason=reason, detail=detail))
                 continue
-            cache[_key(original)] = proposed.strip()
-            dirty = True
+            # Persisted here rather than after the batch. Correction is the
+            # most expensive step in the pipeline and the slowest; saving only
+            # on completion means a killed run throws away everything it already
+            # paid for — observed, after one was interrupted at batch 14 of 19.
+            # With a file per entry the write is cheap enough to do at once.
+            cache.put(original, proposed.strip())
             out[i] = proposed.strip()
-
-        # Persist after every batch, not once at the end. Correction is the most
-        # expensive step in the pipeline and the slowest; saving only on completion
-        # means a killed or crashed run throws away everything it already paid for
-        # — observed, after a run was interrupted at batch 14 of 19.
-        if dirty:
-            _save_cache(cache)
-            dirty = False
 
     for original, final in zip(paragraphs, out):
         if final.strip() == original.strip():
@@ -261,8 +263,6 @@ def correct_paragraphs(
         else:
             report.changed += 1
 
-    if dirty:
-        _save_cache(cache)
     return out, report
 
 
@@ -302,19 +302,63 @@ def _key(text: str) -> str:
     return hashlib.sha256(f"{PROMPT_VERSION}\x00{text}".encode("utf-8")).hexdigest()
 
 
-def _cache_file() -> pathlib.Path:
-    return CACHE_DIR / "paragraphs.json"
+def _cache_file(root: "pathlib.Path | None" = None) -> pathlib.Path:
+    """The pre-2026-09 layout: one JSON holding every entry.
+
+    Still read, never written. See `_ParagraphCache`.
+    """
+    return (CACHE_DIR if root is None else root) / "paragraphs.json"
 
 
-def _load_cache() -> dict[str, str]:
-    try:
-        return json.loads(_cache_file().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+class _ParagraphCache:
+    """One file per paragraph, replacing a read-modify-write of one JSON.
 
+    The old layout loaded the whole file at the top of a run and rewrote it
+    after every batch. That is correct for one process and lossy for two: the
+    Temporal worker can be correcting two documents at once, and last-writer-wins
+    over a whole dict silently discards the other run's entries. This cache is
+    the thing that makes an interrupted correction keep what it paid for — losing
+    it quietly is exactly the failure it exists to prevent.
 
-def _save_cache(cache: dict[str, str]) -> None:
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    _cache_file().write_text(
-        json.dumps(cache, ensure_ascii=False, indent=0), encoding="utf-8"
-    )
+    Per-key files also make the persistence stronger than the comment below the
+    batch loop promises: an entry survives from the moment it is verified, not
+    from the end of its batch.
+
+    The legacy `paragraphs.json` is read once, lazily, and never written back.
+    A repository with 2,379 lines of accumulated corrections in it keeps every
+    one of them; nothing has to be migrated.
+    """
+
+    def __init__(self, root: "pathlib.Path | None" = None) -> None:
+        self.root = CACHE_DIR if root is None else root
+        self._legacy: dict[str, str] | None = None
+
+    def _legacy_entries(self) -> dict[str, str]:
+        if self._legacy is None:
+            try:
+                self._legacy = json.loads(
+                    _cache_file(self.root).read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                self._legacy = {}
+        return self._legacy
+
+    def get(self, text: str) -> str | None:
+        path = self.root / f"{_key(text)}.txt"
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return self._legacy_entries().get(_key(text))
+
+    def put(self, text: str, corrected: str) -> None:
+        try:
+            os.makedirs(self.root, exist_ok=True)
+            path = self.root / f"{_key(text)}.txt"
+            # Write-then-rename with the pid in the temporary name, the same
+            # pattern `embedcache` uses: a reader must never see half an entry
+            # and two processes must not collide on one temporary file.
+            tmp = path.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(corrected, encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            pass  # a cache that cannot be written must not fail the run

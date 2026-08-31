@@ -43,6 +43,25 @@ MAX_ATTEMPTS = 3
 #: un-jittered backoff makes them all retry at the same instant too.
 BACKOFF_BASE = 1.5
 
+#: A rate-limit 429 gets its own, longer patience, and this is a correction
+#: rather than a preference. The comment above says the three attempts match the
+#: engine — they did, and then the engine measured the quota and grew a second
+#: policy that was never brought across.
+#:
+#: The metric is `aiplatform.googleapis.com/online_prediction_requests_per_base_model`,
+#: whose unit `serviceusage` reports as `1/min/{project}/{base_model}` — a
+#: *per-minute* bucket, measured at ~6 embeddings a minute sustained. Three
+#: attempts at 1.5^n is about seven seconds of patience against a sixty-second
+#: window, so every attempt lands inside the same exhausted bucket and the
+#: activity fails having learnt nothing. A run stalled at `embedding 1/600` under
+#: 127 of these.
+#:
+#: The delays are 2, 8, 32, 60, 60: capped, because a sleep longer than the
+#: window buys nothing, and `Retry-After` wins over all of it when the service
+#: says how long it wants.
+RATE_LIMIT_ATTEMPTS = 6
+RATE_LIMIT_MAX_BACKOFF = 60.0
+
 RETRIEVAL_DOCUMENT = "RETRIEVAL_DOCUMENT"
 RETRIEVAL_QUERY = "RETRIEVAL_QUERY"
 
@@ -98,6 +117,57 @@ class Generation:
 class Embedding:
     values: list[float]
     usage: Usage = field(default_factory=Usage)
+
+    @property
+    def tokens(self) -> int:
+        """What this one embedding was billed for.
+
+        Named `tokens` because that is what `docagent.runner.Vector` reads, so an
+        `Embedding` satisfies the engine's protocol without a wrapper. It is a
+        view on `usage`, not a second number.
+        """
+        return self.usage.input_tokens
+
+
+def _attempts_for(err: ProviderError) -> int:
+    """How many tries this kind of failure deserves.
+
+    A quota is a bucket that refills on a clock; an outage is not. Waiting out
+    the first is the fix, and giving up on it after seven seconds is how a paid
+    stage fails without having tested the thing it was waiting for.
+    """
+    return RATE_LIMIT_ATTEMPTS if err.kind == "provider_quota" else MAX_ATTEMPTS
+
+
+def _backoff(err: ProviderError, attempt: int, retry_after: float) -> float:
+    """2, 8, 32, 60, 60 for a quota; 1.5^n for everything else.
+
+    `Retry-After` wins when the service sent one: it knows when its own bucket
+    refills and we are guessing.
+    """
+    if err.kind != "provider_quota":
+        return BACKOFF_BASE ** attempt + random.uniform(0, 0.5)
+    if retry_after > 0:
+        return min(retry_after, RATE_LIMIT_MAX_BACKOFF)
+    return min(2.0 ** (2 * attempt - 1), RATE_LIMIT_MAX_BACKOFF) + random.uniform(0, 0.5)
+
+
+def _retry_after(e: errors.APIError) -> float:
+    """Seconds the service asked us to wait, or 0 if it did not say.
+
+    The SDK does not surface response headers uniformly across transports, so
+    this reads whatever is there and treats anything unparseable as absent —
+    a missing hint costs a guessed delay, not a failure.
+    """
+    for holder in (getattr(e, "response", None), e):
+        headers = getattr(holder, "headers", None) or {}
+        try:
+            for name, value in headers.items():
+                if str(name).lower() == "retry-after":
+                    return float(str(value).strip())
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return 0.0
 
 
 def _classify(e: errors.APIError) -> ProviderError:
@@ -175,17 +245,20 @@ class Provider:
 
     def _call(self, what: str, fn):
         last: ProviderError | None = None
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+        # The ceiling is the larger of the two policies; which one applies is
+        # decided per failure, because a run can hit a 503 and then a 429.
+        for attempt in range(1, max(MAX_ATTEMPTS, RATE_LIMIT_ATTEMPTS) + 1):
             try:
                 return fn()
             except errors.APIError as e:
                 last = _classify(e)
-                if not last.retryable or attempt == MAX_ATTEMPTS:
+                budget = _attempts_for(last)
+                if not last.retryable or attempt >= budget:
                     raise last from e
-                delay = BACKOFF_BASE ** attempt + random.uniform(0, 0.5)
+                delay = _backoff(last, attempt, _retry_after(e))
                 log.warning(
                     "%s failed (%s), retrying in %.1fs [%d/%d]",
-                    what, last.kind, delay, attempt, MAX_ATTEMPTS,
+                    what, last.kind, delay, attempt, budget,
                 )
                 time.sleep(delay)
             except ProviderError:
@@ -198,7 +271,7 @@ class Provider:
                     kind="provider_unavailable",
                     retryable=True,
                 )
-                if attempt == MAX_ATTEMPTS:
+                if attempt >= MAX_ATTEMPTS:
                     raise last from e
                 time.sleep(BACKOFF_BASE ** attempt + random.uniform(0, 0.5))
         raise last or ProviderError(f"{what} failed", kind="provider_refused")

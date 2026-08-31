@@ -63,6 +63,12 @@ KINDS: dict[str, str] = {
     "profile": "profile.json",
     "evalset": "evalset.json",
     "scores": "scores.json",
+    #: What a tuning round tried and what it concluded. Written even when the
+    #: conclusion is "nothing beat the noise margin", because that *is* the
+    #: result: a round that refused every candidate has measured something, and
+    #: without the record the next run would spend the same money to learn it
+    #: again.
+    "tuning": "tuning.json",
     "ledger": "ledger.json",
     "events": "events.jsonl",
 }

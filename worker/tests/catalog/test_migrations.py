@@ -34,6 +34,7 @@ def test_applying_every_migration_creates_every_table(database_url: str):
         "0_init",
         "20260826120000_tenancy",
         "20260826180000_tenant_required",
+        "20260831140000_run_blocked",
     ]
     assert {
         "library",
@@ -85,6 +86,7 @@ def test_require_schema_accepts_a_catalog_ahead_of_the_code(database_url: str):
     assert m.require_schema(database_url, minimum="0_init") == [
         "0_init",
         "20260826120000_tenancy",
+        "20260826180000_tenant_required",
         m.REQUIRED_MIGRATION,
     ]
 

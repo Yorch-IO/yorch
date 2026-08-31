@@ -250,6 +250,14 @@ export interface StageOptions {
   /** Decline an inherited profile and use the engine's measured defaults. */
   ignoreProfile: boolean;
   reviewCorrection: boolean;
+  /** Try to improve retrieval, and measure whether it worked.
+   *
+   *  Off, and bounded to a single chunking candidate. The free half changes
+   *  nothing in the index; the paid half re-cuts the document and embeds every
+   *  chunk again — the largest single line the gate can show. It also raises the
+   *  eval sample, because at 40 questions the bootstrap margin cannot resolve
+   *  the effect the round is looking for. */
+  tune: boolean;
 }
 
 export const DEFAULT_STAGES: StageOptions = {
@@ -260,6 +268,7 @@ export const DEFAULT_STAGES: StageOptions = {
   learnProfile: true,
   ignoreProfile: false,
   reviewCorrection: false,
+  tune: false,
 };
 
 /**
@@ -285,6 +294,38 @@ export interface RunState {
    *  nothing pending, an activity that does not heartbeat, a run older than the
    *  code that emits it. All of them mean "no progress to show". */
   progress: RunProgress | null;
+  /** What the index this run wrote can actually be asked.
+   *
+   *  Null means nobody measured — true of every version indexed before the
+   *  stage existed, and of every run whose gate declined it. Never render it as
+   *  zero: a recall of 0.00 is a claim about the index, and it sends somebody to
+   *  fix one that is fine. */
+  scores: RunScores | null;
+}
+
+/** Measured retrieval quality for one index.
+ *
+ *  `recallAt5DenseOnly` and `noiseFloor` are not extras. The eval set's
+ *  questions are written *from* the chunks they must find, so they leak
+ *  vocabulary to the lexical leg and the hybrid figure alone flatters the index;
+ *  the gap between the two is that leakage. And recall says how often the right
+ *  chunk came back while the floor says what a *wrong* one scores — without it
+ *  a reader cannot tell an index that discriminates from one that returns
+ *  everything at a similar distance. Render them together or not at all. */
+export interface RunScores {
+  recallAt1: number;
+  recallAt5: number;
+  mrrAt10: number;
+  recallAt5DenseOnly: number;
+  noiseFloor: number;
+  chunks: number;
+  evalQuestions: number;
+  /** Below this a difference is noise. With σ ≈ 0.358 it takes about 80
+   *  questions to resolve a +0.040 MRR effect. */
+  margin: number;
+  leakage: string;
+  /** How many questions did not find their own chunk. */
+  misses: number;
 }
 
 /** Chunks done out of chunks total, off the activity's heartbeat.
@@ -831,6 +872,10 @@ export interface VersionRow {
   /** Other documents holding these same bytes; non-empty means removing this
    *  document leaves the version standing. */
   alsoHeldBy: string[];
+  /** What this version's index can be asked, from the newest run that measured
+   *  it. null means nobody measured — which is every version indexed before the
+   *  stage existed, and is not the same claim as a recall of zero. */
+  scores: RunScores | null;
 }
 
 export interface DocumentDetail {
@@ -864,6 +909,17 @@ export interface Removal {
   graph: Record<string, number>;
   catalog: Record<string, number>;
   kept: Record<string, string>;
+}
+
+/** What promoting a version touched.
+ *
+ *  Every document holding these bytes, not just the one asked about: a version
+ *  can be shared, and promoting it for one copy while leaving another on an
+ *  older version would make the same content answer differently depending on
+ *  which copy was asked about. */
+export interface Activation {
+  versionId: string;
+  documents: string[];
 }
 
 export interface RebuildReport {
@@ -932,6 +988,17 @@ export const api = {
     invoke<Removal>("document_remove", { libraryId, documentId }),
   versionRemove: (libraryId: string, versionId: string) =>
     invoke<Removal>("version_remove", { libraryId, versionId }),
+  /** Make an already-indexed version the one questions see. Free.
+   *
+   *  Two things reach this. An ingest that found a structural collision indexed
+   *  everything and withheld only the promotion, because the fingerprint that
+   *  picks a family profile is structural and structure is not subject matter —
+   *  and the retrieval metrics cannot see the difference, since the eval
+   *  questions come from the very chunks the wrong rules produced. And a bad
+   *  re-index can be rolled back by flipping the flag rather than paying for the
+   *  pipeline again. */
+  versionActivate: (libraryId: string, versionId: string) =>
+    invoke<Activation>("version_activate", { libraryId, versionId }),
   /** Re-runs the whole pipeline; arrives at the normal gate, which re-quotes. */
   documentReindex: (libraryId: string, documentId: string,
                     options: StageOptions = DEFAULT_STAGES) =>

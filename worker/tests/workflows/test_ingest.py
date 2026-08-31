@@ -22,6 +22,7 @@ from brainworker.pipeline import (
     Chunked,
     Correction,
     Estimate,
+    EvalSet,
     Extraction,
     Indexed,
     IngestRequest,
@@ -30,11 +31,14 @@ from brainworker.pipeline import (
     ProfileRules,
     ProfileWarning,
     Registered,
+    Scores,
+    ProfileRules,
     Semantics,
     Spend,
     StageEstimate,
     StageOptions,
     Staged,
+    TuneOutcome,
 )
 from brainworker.workflows.ingest import Approval, IngestWorkflow
 
@@ -44,6 +48,7 @@ TASK_QUEUE = "test-ingest"
 #: assertion that matters most in this file is that it stays empty on a run
 #: nobody approved.
 SPENT: list[str] = []
+PERSISTED: list[str] = []
 
 REF = ArtifactRef(kind="raw_text", path="runs/r/raw.txt", sha256="a" * 64, bytes=10)
 CHUNK_REF = ArtifactRef(
@@ -234,6 +239,55 @@ async def embed_and_index(*_args) -> Indexed:
     )
 
 
+EVALSET_REF = ArtifactRef(
+    kind="evalset", path="runs/r/evalset.json", sha256="e" * 64, bytes=40
+)
+SCORES_REF = ArtifactRef(
+    kind="scores", path="runs/r/scores.json", sha256="f" * 64, bytes=30
+)
+
+
+@activity.defn(name="build_evalset")
+async def build_evalset(*_args) -> EvalSet:
+    SPENT.append("evalset")
+    return EvalSet(
+        items=EVALSET_REF, questions=40, sample=40,
+        spend=Spend("evalset", "gemini-3.6-flash", 12000, 1200, 0.0108),
+    )
+
+
+@activity.defn(name="evaluate_index")
+async def evaluate_index(*_args) -> Scores:
+    SPENT.append("evaluation")
+    return Scores(
+        recall_at_1=0.675, recall_at_5=0.9, mrr_at_10=0.7642,
+        recall_at_5_dense_only=1.0, noise_floor=0.6232,
+        chunks=3, eval_questions=40, margin=0.05, leakage="hybrid == dense",
+        report=SCORES_REF,
+        spend=Spend("evaluation", "gemini-embedding-2", 400, 0, 0.00008),
+    )
+
+
+@activity.defn(name="propose_tuning")
+async def propose_tuning(*_args) -> TuneOutcome:
+    SPENT.append("tuning")
+    return TuneOutcome(
+        kind="chunking", label="overlap=300",
+        baseline_objective=0.700, margin=0.077,
+        candidate=ProfileDecision(
+            fingerprint="fp", source="tuned",
+            rules=ProfileRules(target_chars=1200, overlap_chars=300),
+        ),
+        notes=["the free knobs are exhausted"],
+    )
+
+
+@activity.defn(name="persist_profile_scores")
+async def persist_profile_scores(*_args) -> bool:
+    PERSISTED.append("scores")
+    return True
+
+
 @activity.defn(name="extract_semantics")
 async def extract_semantics(*_args) -> Semantics:
     SPENT.append("semantics")
@@ -265,6 +319,10 @@ def activities(**kw):
         kw.get("correct_text", correct_text),
         chunk_final,
         embed_and_index,
+        kw.get("build_evalset", build_evalset),
+        kw.get("evaluate_index", evaluate_index),
+        kw.get("propose_tuning", propose_tuning),
+        persist_profile_scores,
         extract_semantics,
     ]
 
@@ -278,6 +336,7 @@ async def env():
 @pytest.fixture(autouse=True)
 def _clear():
     SPENT.clear()
+    PERSISTED.clear()
     LINKED.clear()
     OUTCOMES.clear()
     yield
@@ -791,3 +850,424 @@ async def test_cancelling_while_a_paid_activity_runs_still_records_the_outcome(
     assert OUTCOMES == ["cancelled"], (
         "a run cancelled mid-activity must still tell the catalog"
     )
+
+
+# -- the measurement --------------------------------------------------------
+
+
+async def test_evaluation_is_absent_unless_it_was_approved(env: WorkflowEnvironment):
+    """It is a paid stage like any other, so the gate governs it.
+
+    Off by default, because a document can be perfectly worth indexing without
+    anybody wanting to pay to find out how well it can be found.
+    """
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE,
+        workflows=[IngestWorkflow], activities=activities(),
+    ):
+        handle = await _start(env, request(), StageOptions(), activities())
+        await _wait_for_gate(handle)
+        await handle.signal(IngestWorkflow.approve, Approval(approved=True))
+        result = await handle.result()
+
+    assert "evalset" not in SPENT and "evaluation" not in SPENT
+    assert result.scores is None, "None means 'not asked'; 0.0 would be a claim"
+    assert PERSISTED == []
+
+
+async def test_an_approved_evaluation_reports_what_the_index_can_be_asked(
+    env: WorkflowEnvironment,
+):
+    """The figure the product has never had for any of its 74 documents."""
+    opts = StageOptions(generate_evalset=True)
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE,
+        workflows=[IngestWorkflow], activities=activities(),
+    ):
+        handle = await _start(env, request(), opts, activities())
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve, Approval(approved=True, options=opts)
+        )
+        result = await handle.result()
+
+    assert SPENT.index("embedding") < SPENT.index("evalset"), (
+        "it measured an index that had not been written"
+    )
+    assert result.scores is not None
+    assert result.scores.recall_at_5 == 0.9
+    # The noise floor travels with the recall, or the recall is not interpretable.
+    assert result.scores.noise_floor == 0.6232
+    assert PERSISTED == ["scores"], "the family did not learn what was measured"
+
+
+async def test_nothing_is_measured_when_there_is_no_index_to_measure(
+    env: WorkflowEnvironment,
+):
+    """Embedding declined, evaluation requested. Asking questions of a collection
+    this run never wrote would score somebody else's document."""
+    opts = StageOptions(embed=False, generate_evalset=True)
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE,
+        workflows=[IngestWorkflow], activities=activities(),
+    ):
+        handle = await _start(env, request(), opts, activities())
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve, Approval(approved=True, options=opts)
+        )
+        result = await handle.result()
+
+    assert "evalset" not in SPENT
+    assert result.scores is None
+
+
+async def test_a_reused_eval_set_is_not_billed_twice(env: WorkflowEnvironment):
+    """The questions belong to the document, not to the run. A second index of
+    the same book reuses them — which is also what makes the two runs comparable,
+    since resampling would measure the sample rather than the change."""
+
+    @activity.defn(name="build_evalset")
+    async def reused(*_args) -> EvalSet:
+        SPENT.append("evalset")
+        return EvalSet(
+            items=EVALSET_REF, questions=40, sample=40, reused=True,
+            spend=Spend("evalset", "gemini-3.6-flash", 0, 0, 0.0),
+        )
+
+    opts = StageOptions(generate_evalset=True)
+    acts = activities(build_evalset=reused)
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts,
+    ):
+        handle = await _start(env, request(), opts, acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve, Approval(approved=True, options=opts)
+        )
+        result = await handle.result()
+
+    # Correction + embedding + semantics + the evaluation's query embeddings,
+    # as the doubles above price them. The eval set itself contributes nothing,
+    # because it cost nothing — and a zero-dollar `Spend` appended anyway would
+    # be indistinguishable from one that was simply cheap.
+    assert result.total_usd == pytest.approx(0.0042 + 0.00045 + 0.0010 + 0.00008)
+    assert "evalset" in SPENT, "the stage still ran; only the bill was absent"
+
+
+async def test_an_eval_set_that_produced_no_questions_measures_nothing(
+    env: WorkflowEnvironment,
+):
+    """A model that returned nothing usable is a smaller eval set, not a failed
+    run — and an empty one must not be scored, because recall over zero questions
+    is 0.0 and reads exactly like a broken index."""
+
+    @activity.defn(name="build_evalset")
+    async def empty(*_args) -> EvalSet:
+        SPENT.append("evalset")
+        return EvalSet(
+            items=EVALSET_REF, questions=0, sample=40,
+            spend=Spend("evalset", "gemini-3.6-flash", 100, 0, 0.0),
+        )
+
+    opts = StageOptions(generate_evalset=True)
+    acts = activities(build_evalset=empty)
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts,
+    ):
+        handle = await _start(env, request(), opts, acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve, Approval(approved=True, options=opts)
+        )
+        result = await handle.result()
+
+    assert "evaluation" not in SPENT
+    assert result.scores is None
+    assert result.state == "indexed"
+
+
+# -- bounded tuning ---------------------------------------------------------
+
+
+async def test_tuning_is_absent_unless_it_was_approved(env: WorkflowEnvironment):
+    """It is the largest single line a gate can show: a full second embedding
+    pass, about a hundred minutes for a 600-chunk book against the measured
+    quota. Off unless somebody said yes to exactly that."""
+    opts = StageOptions(generate_evalset=True)
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE,
+        workflows=[IngestWorkflow], activities=activities(),
+    ):
+        handle = await _start(env, request(), opts, activities())
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve, Approval(approved=True, options=opts)
+        )
+        await handle.result()
+
+    assert "tuning" not in SPENT
+
+
+async def test_a_candidate_inside_the_noise_margin_is_reverted_through_the_collection(
+    env: WorkflowEnvironment,
+):
+    """Reverting the profile alone was the engine's measured bug: the collection
+    kept the candidate's chunks, so the next baseline belonged to a configuration
+    already rejected and three rounds drifted 0.729 → 0.762 → 0.700 having each
+    reverted. Going back through chunking is what makes it honest.
+    """
+    # The candidate measures 0.7642 against a 0.700 baseline: +0.064, inside the
+    # ±0.077 margin. Refusing it is the design working.
+    opts = StageOptions(generate_evalset=True, tune=True)
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE,
+        workflows=[IngestWorkflow], activities=activities(),
+    ):
+        handle = await _start(env, request(), opts, activities())
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve, Approval(approved=True, options=opts)
+        )
+        result = await handle.result()
+
+    # Three embeddings: the original index, the candidate, and the revert.
+    assert SPENT.count("embedding") == 3
+    # The scores that stand are the ones that measured the index that stands.
+    assert result.scores is not None
+    assert result.scores.recall_at_5 == 0.9
+    assert result.state == "indexed", "a reverted round left the run without vectors"
+
+
+async def test_a_candidate_that_beats_the_margin_is_kept(env: WorkflowEnvironment):
+    """And then nothing is re-indexed a third time: the candidate's own index is
+    the one that stands."""
+
+    @activity.defn(name="evaluate_index")
+    async def better(*_args) -> Scores:
+        SPENT.append("evaluation")
+        # 0.95 against a 0.700 baseline is +0.25, comfortably past ±0.077.
+        return Scores(
+            recall_at_1=0.9, recall_at_5=0.98, mrr_at_10=0.95,
+            recall_at_5_dense_only=0.9, noise_floor=0.6, chunks=3,
+            eval_questions=40, margin=0.05,
+            spend=Spend("evaluation", "gemini-embedding-2", 400, 0, 0.00008),
+        )
+
+    opts = StageOptions(generate_evalset=True, tune=True)
+    acts = activities(evaluate_index=better)
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts,
+    ):
+        handle = await _start(env, request(), opts, acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve, Approval(approved=True, options=opts)
+        )
+        result = await handle.result()
+
+    assert SPENT.count("embedding") == 2, "it re-indexed a candidate it had kept"
+    assert result.scores.mrr_at_10 == 0.95
+
+
+async def test_a_free_knob_costs_no_second_pass(env: WorkflowEnvironment):
+    """The retrieval half of a round changes nothing in the index — it is a
+    different way of querying the same points — so it is adopted without one."""
+
+    @activity.defn(name="propose_tuning")
+    async def knob(*_args) -> TuneOutcome:
+        SPENT.append("tuning")
+        return TuneOutcome(
+            kind="retrieval", label="per_section=3",
+            baseline_objective=0.700, margin=0.077,
+        )
+
+    opts = StageOptions(generate_evalset=True, tune=True)
+    acts = activities(propose_tuning=knob)
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts,
+    ):
+        handle = await _start(env, request(), opts, acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve, Approval(approved=True, options=opts)
+        )
+        result = await handle.result()
+
+    assert "tuning" in SPENT
+    assert SPENT.count("embedding") == 1
+    assert result.state == "indexed"
+
+
+async def test_the_second_gate_does_not_cost_the_document_its_profile(
+    env: WorkflowEnvironment,
+):
+    """A defect that shipped, and that nothing could see.
+
+    The second gate reassigned `decision` — the `ProfileDecision` every later
+    stage reads — to the `Approval` it returned. `chunk_final` was then handed an
+    `Approval` where it expects a decision, and Temporal's converter coerced it
+    into a `ProfileDecision` with defaults instead of failing. So a run that
+    reviewed its correction was chunked with the engine's built-in rules and the
+    profile it had just paid to learn was thrown away, silently: the run
+    succeeded, the chunk count looked ordinary, and the only visible symptom was
+    a document whose table of contents was worse than its family's.
+
+    What the property needs is the thing the bug destroyed: the rules that reach
+    the final chunking are the profile's, after a second gate as before one.
+    """
+    seen: list[str] = []
+
+    # Typed like the real activity on purpose: an untyped `*args` double is
+    # handed raw dicts, and it is precisely the *typed* decoding that turns an
+    # `Approval` into a defaulted `ProfileDecision` rather than an error.
+    @activity.defn(name="chunk_final")
+    async def recording(
+        run_id: str, text_kind: str, decision: ProfileDecision | None = None
+    ) -> Chunked:
+        seen.append(decision.source if decision else "none")
+        return Chunked(chunks=FINAL_REF, count=3, kinds=[ChunkKindCount("cuerpo", 3)])
+
+    acts = [a for a in activities() if getattr(a, "__name__", "") != "chunk_final"]
+    acts.append(recording)
+
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(env, request(), StageOptions(), acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve,
+            Approval(approved=True, options=StageOptions(review_correction=True)),
+        )
+        for _ in range(400):
+            if await handle.query(IngestWorkflow.stage) == "awaiting_correction_review":
+                break
+        await handle.signal(
+            IngestWorkflow.approve,
+            Approval(approved=True, options=StageOptions(extract_semantics=False)),
+        )
+        await handle.result()
+
+    assert seen == ["reused"], (
+        "the final chunking did not see the profile the gate reported"
+    )
+
+
+# -- a structural collision withholds activation ----------------------------
+
+
+ACTIVATED: list[str] = []
+
+
+@activity.defn(name="activate_version")
+async def note_activation(*_args) -> None:
+    ACTIVATED.append("activate_version")
+
+
+def _blocking_activities(**kw):
+    acts = [a for a in activities(**kw) if a is not activate_version]
+    return acts + [note_activation]
+
+
+def _collision(kind: str = "heading_disagreement") -> ProfileWarning:
+    return ProfileWarning(
+        profile_id="hermeneutica-110b1333",
+        collides_with="libros/1-desde-agustin.pdf",
+        similarity=0.02,
+        detail=(
+            "las reglas heredadas detectan 4 capítulo(s) donde las reglas por "
+            "defecto detectan 1"
+        ),
+        kind=kind,
+    )
+
+
+async def test_a_collision_leaves_the_prior_version_active(env: WorkflowEnvironment):
+    """The failure recall provably cannot see.
+
+    The fingerprint groups by structure and structure is not subject matter: a
+    hermeneutics chapter and a church-history book landed on `110b1333` on the
+    real corpus, and the second was chunked with the first's heading rules. The
+    eval questions are generated from the very chunks those rules produced, so a
+    measured recall says nothing about it.
+
+    Everything still runs — the index exists, the graph is projected, the money
+    is spent and reported. Only the promotion is withheld, because a document
+    indexed under the wrong structure is worse than one that is a click away
+    from being published.
+    """
+    ACTIVATED.clear()
+    acts = _blocking_activities(resolver=resolver(warnings=[_collision()]))
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(env, request(), StageOptions(), acts)
+        await _wait_for_gate(handle)
+        await handle.signal(IngestWorkflow.approve, Approval(approved=True))
+        result = await handle.result()
+
+    assert result.state == "blocked_structural"
+    assert "activate_version" not in ACTIVATED
+    assert "capítulo" in result.detail
+    # It is not a failure: the stages ran and their bill is reported.
+    assert result.total_usd is not None and result.total_usd > 0
+    assert result.indexed_chunks == 3
+
+
+async def test_a_plain_collision_does_not_block(env: WorkflowEnvironment):
+    """Sharing a fingerprint is ordinary — it is what makes the second document
+    of a family cheaper than the first. Blocking on it would fire on every
+    successful reuse, and a warning that fires on success is one an operator
+    learns to click past."""
+    ACTIVATED.clear()
+    acts = _blocking_activities(resolver=resolver(warnings=[_collision(kind="collision")]))
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(env, request(), StageOptions(), acts)
+        await _wait_for_gate(handle)
+        await handle.signal(IngestWorkflow.approve, Approval(approved=True))
+        result = await handle.result()
+
+    assert result.state == "indexed"
+    assert "activate_version" in ACTIVATED
+
+
+async def test_declining_the_inherited_profile_is_already_the_way_out(
+    env: WorkflowEnvironment,
+):
+    """`ignore_profile` chunks with the measured defaults, so there is no
+    disagreement left to act on and nothing to withhold."""
+    opts = StageOptions(ignore_profile=True)
+    acts = activities(resolver=resolver(warnings=[_collision()]))
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(env, request(), opts, acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve, Approval(approved=True, options=opts)
+        )
+        result = await handle.result()
+
+    assert result.state == "indexed"
+
+
+async def test_a_learned_profile_is_never_blocked_by_its_own_rules(
+    env: WorkflowEnvironment,
+):
+    """The check is about *inherited* rules. A document that learned its own
+    cannot be colliding with anybody."""
+    acts = activities(
+        resolver=resolver(source="default", warnings=[_collision()])
+    )
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(env, request(), StageOptions(), acts)
+        await _wait_for_gate(handle)
+        await handle.signal(IngestWorkflow.approve, Approval(approved=True))
+        result = await handle.result()
+
+    assert result.state == "indexed"

@@ -160,6 +160,16 @@ pub struct StageOptions {
     /// wrong rules produced. This is the person's way out.
     pub ignore_profile: bool,
     pub review_correction: bool,
+    /// Try to improve retrieval, and measure whether it worked.
+    ///
+    /// Off, and bounded to a single chunking candidate. The free half —
+    /// `min_score`, `per_section`, dense-only — changes nothing in the index;
+    /// the paid half re-cuts the document and embeds every chunk again, which is
+    /// the largest single line a gate can show. Turning it on also raises the
+    /// eval sample, because at 40 questions the bootstrap margin cannot resolve
+    /// the effect the round is looking for.
+    #[serde(default)]
+    pub tune: bool,
 }
 
 impl Default for StageOptions {
@@ -172,6 +182,7 @@ impl Default for StageOptions {
             learn_profile: true,
             ignore_profile: false,
             review_correction: false,
+            tune: false,
         }
     }
 }
@@ -215,6 +226,44 @@ pub struct RunState {
     /// one thing for a screen to render rather than four.
     #[serde(default)]
     pub progress: Option<RunProgress>,
+    /// What the index this run wrote can actually be asked.
+    ///
+    /// `None` means nobody measured — which is true of every version indexed
+    /// before the stage existed, and of every run whose gate declined it. It is
+    /// deliberately not zero: recall of 0.00 is a claim about the index, and it
+    /// would send somebody to fix one that is fine.
+    #[serde(default)]
+    pub scores: Option<RunScores>,
+}
+
+/// Measured retrieval quality for one run's index.
+///
+/// `recall_at_5_dense_only` and `noise_floor` are not extras. The eval set's
+/// questions are written *from* the chunks they must find, so they leak
+/// vocabulary to the lexical leg and the hybrid figure alone flatters the index;
+/// the gap between the two is that leakage. And recall says how often the right
+/// chunk came back while the floor says what a *wrong* one scores — without it a
+/// reader cannot tell an index that discriminates from one that returns
+/// everything at a similar distance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunScores {
+    pub recall_at_1: f64,
+    pub recall_at_5: f64,
+    pub mrr_at_10: f64,
+    pub recall_at_5_dense_only: f64,
+    pub noise_floor: f64,
+    pub chunks: u32,
+    pub eval_questions: u32,
+    /// Bootstrap margin on the objective. A difference smaller than this is
+    /// noise, and reporting it as real is the failure it guards against.
+    #[serde(default)]
+    pub margin: f64,
+    #[serde(default)]
+    pub leakage: String,
+    /// How many questions did not find their own chunk.
+    #[serde(default)]
+    pub misses: u32,
 }
 
 /// Chunks done out of chunks total, off the activity's heartbeat.
@@ -544,6 +593,11 @@ pub struct VersionRow {
     /// document leaves the version standing, and the confirm has to say so.
     #[serde(default)]
     pub also_held_by: Vec<String>,
+    /// What this version's index can be asked, from the newest run that measured
+    /// it. `None` means nobody measured — which is every version on this
+    /// installation today, and is not the same claim as a recall of zero.
+    #[serde(default)]
+    pub scores: Option<RunScores>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -589,6 +643,21 @@ pub struct Removal {
     pub catalog: std::collections::BTreeMap<String, i64>,
     #[serde(default)]
     pub kept: std::collections::BTreeMap<String, String>,
+}
+
+/// What promoting a withheld version touched.
+///
+/// Every document holding these bytes, not just the one asked about: a version
+/// can be shared — byte-identical files at two paths are two documents and one
+/// version — and promoting it for one while leaving the other on an older
+/// version would make the same content answer differently depending on which
+/// copy was asked about.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Activation {
+    pub version_id: String,
+    #[serde(default)]
+    pub documents: Vec<String>,
 }
 
 /// The rebuild's one-question gate. One stage here can spend, not a table of
@@ -1248,6 +1317,23 @@ impl Control {
     pub async fn remove_version(&self, library_id: &str, version_id: &str) -> Result<Removal> {
         self.delete(
             &format!("/libraries/{library_id}/versions/{version_id}"),
+            REMOVE_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Promote a version the pipeline deliberately withheld.
+    ///
+    /// Costs nothing: the index it activates is the one already paid for. The
+    /// other way out of a structural block is re-importing with `ignore_profile`,
+    /// which says the inherited rules were wrong and pays for a full run.
+    pub async fn activate_version(
+        &self,
+        library_id: &str,
+        version_id: &str,
+    ) -> Result<Activation> {
+        self.post(
+            &format!("/libraries/{library_id}/versions/{version_id}/activate"),
             REMOVE_TIMEOUT,
         )
         .await

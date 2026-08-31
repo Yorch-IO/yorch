@@ -106,6 +106,14 @@ def test_a_permission_error_names_the_role_to_grant():
 
 
 def test_a_quota_error_is_retried_then_surfaced(monkeypatch):
+    """A quota gets its own, longer patience than an outage.
+
+    `online_prediction_requests_per_base_model` is metered per *minute*. Three
+    attempts at 1.5^n is about seven seconds, so every attempt landed inside the
+    same exhausted bucket and the stage failed without having waited for the
+    thing it was waiting for. A run stalled at `embedding 1/600` under 127 of
+    these before the engine grew the longer policy this now matches.
+    """
     monkeypatch.setattr(g.time, "sleep", lambda _: None)
     attempts = []
 
@@ -116,8 +124,60 @@ def test_a_quota_error_is_retried_then_surfaced(monkeypatch):
     p = Provider(settings())
     with pytest.raises(ProviderError) as e:
         p._call("embed", always_429)
-    assert len(attempts) == g.MAX_ATTEMPTS
+    assert len(attempts) == g.RATE_LIMIT_ATTEMPTS
+    assert g.RATE_LIMIT_ATTEMPTS > g.MAX_ATTEMPTS
     assert e.value.kind == "provider_quota"
+
+
+def test_an_outage_keeps_the_shorter_patience(monkeypatch):
+    """The longer budget is for a bucket that refills on a clock. An outage does
+    not, and queueing behind one leaves the user watching a spinner."""
+    monkeypatch.setattr(g.time, "sleep", lambda _: None)
+    attempts = []
+
+    def always_503():
+        attempts.append(1)
+        raise FakeAPIError(503, "UNAVAILABLE")
+
+    with pytest.raises(ProviderError):
+        Provider(settings())._call("generate", always_503)
+    assert len(attempts) == g.MAX_ATTEMPTS
+
+
+def test_the_quota_backoff_reaches_the_length_of_the_window():
+    """2, 8, 32, 60, 60 — capped, because sleeping longer than the window buys
+    nothing, and long enough that the last attempts are in a fresh bucket."""
+    quota = ProviderError("x", kind="provider_quota", retryable=True)
+    delays = [g._backoff(quota, n, 0.0) for n in range(1, g.RATE_LIMIT_ATTEMPTS)]
+
+    assert [int(d) for d in delays] == [2, 8, 32, 60, 60]
+    assert sum(delays) > 60, "the whole budget is shorter than one quota window"
+
+
+def test_the_service_gets_to_say_how_long_to_wait(monkeypatch):
+    """`Retry-After` wins over the guess: it knows when its bucket refills."""
+    quota = ProviderError("x", kind="provider_quota", retryable=True)
+
+    assert g._backoff(quota, 1, retry_after=17.0) == 17.0
+    # Still capped: a header asking for ten minutes would strand the activity.
+    assert g._backoff(quota, 1, retry_after=600.0) == g.RATE_LIMIT_MAX_BACKOFF
+
+
+def test_a_missing_retry_after_header_costs_a_guess_not_a_failure():
+    class Bare:
+        pass
+
+    assert g._retry_after(Bare()) == 0.0
+
+    class Weird:
+        headers = {"Retry-After": "not a number"}
+
+    assert g._retry_after(Weird()) == 0.0
+
+    class Real:
+        headers = {"retry-after": "12"}
+
+    assert g._retry_after(Real()) == 12.0
 
 
 def test_a_permission_error_is_not_retried(monkeypatch):

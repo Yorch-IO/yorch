@@ -22,7 +22,19 @@ from dataclasses import asdict, dataclass, field, replace
 
 from .chunk import ChunkRules, DocRules
 
+#: The CWD-relative default. Every function below takes an optional ``root``
+#: and falls back to this, so the CLI is unchanged and a caller that knows its
+#: workspace — the Temporal worker, which runs activities for more than one
+#: organisation in one process — passes its own. A ``chdir`` cannot serve that
+#: caller: it is process-global, and a profile carries ``header_patterns``
+#: derived from a book's running header, which is often its title.
 PROFILE_DIR = pathlib.Path("profiles")
+
+
+def _root(root: "pathlib.Path | None") -> pathlib.Path:
+    """Resolved at call time, never captured, so a monkeypatched module constant
+    still takes effect."""
+    return PROFILE_DIR if root is None else root
 
 
 @dataclass
@@ -117,8 +129,8 @@ class Profile:
     validation_notes: list[str] = field(default_factory=list)
     tuning_history: list[dict] = field(default_factory=list)
 
-    def path(self) -> pathlib.Path:
-        return PROFILE_DIR / f"{self.slug}.json"
+    def path(self, root: "pathlib.Path | None" = None) -> pathlib.Path:
+        return _root(root) / f"{self.slug}.json"
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -151,9 +163,10 @@ class Profile:
             tuning_history=d.get("tuning_history", []),
         )
 
-    def save(self) -> pathlib.Path:
-        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        p = self.path()
+    def save(self, root: "pathlib.Path | None" = None) -> pathlib.Path:
+        directory = _root(root)
+        directory.mkdir(parents=True, exist_ok=True)
+        p = self.path(directory)
         p.write_text(
             json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
@@ -218,7 +231,7 @@ def slug_for(path: str, fp: str) -> str:
 # --- store -------------------------------------------------------------------
 
 
-def load(fp: str) -> Profile | None:
+def load(fp: str, root: "pathlib.Path | None" = None) -> Profile | None:
     """Find a saved profile by fingerprint. Returns None on a miss.
 
     More than one file can carry the same fingerprint: the slug is derived from
@@ -228,10 +241,11 @@ def load(fp: str) -> Profile | None:
     experiment won over a profile with eight measured revisions. The newest
     ``learned_at`` wins instead.
     """
-    if not PROFILE_DIR.exists():
+    directory = _root(root)
+    if not directory.exists():
         return None
     best: Profile | None = None
-    for p in sorted(PROFILE_DIR.glob("*.json")):
+    for p in sorted(directory.glob("*.json")):
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -244,11 +258,12 @@ def load(fp: str) -> Profile | None:
     return best
 
 
-def all_profiles() -> list[Profile]:
-    if not PROFILE_DIR.exists():
+def all_profiles(root: "pathlib.Path | None" = None) -> list[Profile]:
+    directory = _root(root)
+    if not directory.exists():
         return []
     out: list[Profile] = []
-    for p in sorted(PROFILE_DIR.glob("*.json")):
+    for p in sorted(directory.glob("*.json")):
         try:
             out.append(Profile.from_dict(json.loads(p.read_text(encoding="utf-8"))))
         except (OSError, ValueError, KeyError):

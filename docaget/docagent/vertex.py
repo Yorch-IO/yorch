@@ -31,10 +31,8 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures as cf
-import hashlib
 import os
 import pathlib
-import struct
 import sys
 import time
 from dataclasses import dataclass
@@ -42,6 +40,7 @@ from typing import Any, Callable, Iterable
 
 import httpx
 
+from . import embedcache
 from .ledger import Ledger
 
 LOCATION = "global"
@@ -121,50 +120,14 @@ def _adc() -> tuple[Any, str | None]:
     return _adc_cache
 
 
-#: One file per vector rather than the single JSON the correction cache uses:
-#: 3,072 float32 is 12 KB, so a 600-chunk book is ~7 MB and re-serialising one
-#: dict per write would dominate the run. Relative to the process CWD like
-#: `PROFILE_DIR` and `CACHE_DIR`, which is what lets the container relocate all
-#: of them with `WORKDIR /workspace` and no code change.
+#: The CWD-relative default, kept so the CLI and the test suite behave exactly
+#: as before. `Vertex` resolves it at call time rather than capturing it, which
+#: is what lets `tests/conftest.py` monkeypatch it away from the real cache.
+#:
+#: The implementation moved to `embedcache.py` so the Temporal worker's provider
+#: adapter — which reaches Vertex AI through the google-genai SDK and had no
+#: cache at all — can share it rather than grow a second one.
 EMBED_CACHE_DIR = pathlib.Path("cache/embed")
-
-
-def _embed_cache_key(text: str, task_type: str) -> str:
-    # The model and the task type are part of the key, not decoration: the same
-    # text embedded as RETRIEVAL_QUERY is a different vector, and a model change
-    # invalidates every entry rather than silently mixing two vector spaces.
-    raw = f"{EMBED_MODEL}\x00{EMBED_DIMS}\x00{task_type}\x00{text}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _embed_cache_read(text: str, task_type: str) -> "EmbedResult | None":
-    path = EMBED_CACHE_DIR / f"{_embed_cache_key(text, task_type)}.f32"
-    try:
-        blob = path.read_bytes()
-    except OSError:
-        return None
-    if len(blob) != 4 + EMBED_DIMS * 4:
-        return None  # truncated by an interrupted write; treat as a miss
-    tokens = int.from_bytes(blob[:4], "little")
-    values = list(struct.unpack(f"<{EMBED_DIMS}f", blob[4:]))
-    return EmbedResult(values, tokens, False)
-
-
-def _embed_cache_write(text: str, task_type: str, result: EmbedResult) -> None:
-    if result.truncated:
-        return  # a truncated embedding is a warning, not something to reuse
-    try:
-        os.makedirs(EMBED_CACHE_DIR, exist_ok=True)
-        path = EMBED_CACHE_DIR / f"{_embed_cache_key(text, task_type)}.f32"
-        # Write-then-rename: `embed_many` runs a worker pool, and a reader must
-        # never see half a vector.
-        tmp = path.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_bytes(
-            result.tokens.to_bytes(4, "little") + struct.pack(f"<{EMBED_DIMS}f", *result.values)
-        )
-        os.replace(tmp, path)
-    except OSError:
-        pass  # a cache that cannot be written must not fail the run
 
 
 class VertexError(RuntimeError):
@@ -207,12 +170,18 @@ def load_env_var(key: str, env_file: str = ".env") -> str:
 
 
 class Vertex:
+    #: A class attribute, not only an instance one, because a test may build a
+    #: `Vertex` with `__new__` to exercise one method without credentials — and
+    #: the cache lookup must still resolve rather than raise.
+    _embed_cache_dir: "pathlib.Path | None" = None
+
     def __init__(
         self,
         api_key: str | None = None,
         project_id: str | None = None,
         ledger: Ledger | None = None,
         read_timeout: float = READ_TIMEOUT,
+        embed_cache_dir: "pathlib.Path | None" = None,
     ) -> None:
         if api_key is not None:
             # Accepted and ignored so a stale call site fails loudly here rather
@@ -228,7 +197,15 @@ class Vertex:
         self._project_id = project_id or os.environ.get("PROJECT_ID", "").strip()
         self.ledger = ledger or Ledger()
         self._read_timeout = read_timeout
+        # None means "resolve the module constant at call time", which is what
+        # keeps `tests/conftest.py`'s monkeypatch effective and lets a caller
+        # that knows its workspace hand one over instead.
+        self._embed_cache_dir = embed_cache_dir
         self._client = self._new_client()
+
+    @property
+    def embed_cache_dir(self) -> "pathlib.Path":
+        return self._embed_cache_dir if self._embed_cache_dir is not None else EMBED_CACHE_DIR
 
     def _new_client(self) -> httpx.Client:
         return httpx.Client(
@@ -393,9 +370,11 @@ class Vertex:
         is metered `1/min/{project}/{base_model}` — and a run that dies at 586 of
         600 and then re-spends 586 units to reach the same wall never converges.
         """
-        if (hit := _embed_cache_read(text, task_type)) is not None:
+        cache_dir = self.embed_cache_dir
+        if (hit := embedcache.read(cache_dir, EMBED_MODEL, EMBED_DIMS, task_type, text)):
+            values, tokens = hit
             self.ledger.record(stage, EMBED_MODEL, calls=0, cache_hits=1)
-            return hit
+            return EmbedResult(values, tokens, False)
         body = {
             "instances": [{"task_type": task_type, "content": text}],
             "parameters": {"outputDimensionality": EMBED_DIMS, "autoTruncate": False},
@@ -414,7 +393,12 @@ class Vertex:
 
         self.ledger.record(stage, EMBED_MODEL, input_tokens=tokens)
         result = EmbedResult(values, tokens, bool(stats.get("truncated")))
-        _embed_cache_write(text, task_type, result)
+        if not result.truncated:
+            # A truncated embedding is a warning about the input, not a result
+            # worth reusing.
+            embedcache.write(
+                cache_dir, EMBED_MODEL, EMBED_DIMS, task_type, text, values, tokens
+            )
         return result
 
     def embed_many(

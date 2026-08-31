@@ -286,6 +286,67 @@ SEMANTICS_OUTPUT_PER_CHUNK = 634
 #: Only semantics has a spread. Every other stage's figure is already a ceiling —
 #: correction's 1.5 output ratio over a measured 1.29, and the unmeasured stages'
 #: borrowed 6.0 reasoning multiplier — so widening them would over-report twice.
+#: How many questions an eval set holds, and the seed that keeps two runs of one
+#: document comparable. Defined here rather than in `paid` because the estimator
+#: and the activity must not be able to disagree about the call count — the
+#: estimate is a promise about a bill.
+EVAL_SAMPLE = 40
+
+#: The sample a *tuning* run uses instead.
+#:
+#: Not a preference. The bootstrap margin a candidate has to beat is computed
+#: from the baseline's own per-question reciprocal ranks, and with σ ≈ 0.358 it
+#: takes roughly 80 questions to resolve the +0.040 MRR effect that restoring a
+#: chunk overlap is worth. At 40 the round measures honestly and refuses almost
+#: everything — which is the design working, and is also a full second embedding
+#: pass spent on a question the sample could never answer. So turning tuning on
+#: buys the questions that make its own comparison possible, and the gate prices
+#: both halves.
+EVAL_SAMPLE_TUNING = 80
+
+EVAL_SEED = 20260726
+
+#: Characters of *content* in one eval-set call: the chunk capped at 2,000 plus
+#: up to two 300-character neighbours the question must not also answer. A
+#: ceiling rather than a mean, because this stage has no `OUTPUT_SPREAD` and the
+#: point estimate therefore has to be the ceiling itself.
+EVALSET_INPUT_CHARS = 2_600
+
+#: How much of each neighbouring chunk `build_evalset` sends so the question it
+#: writes cannot also be answered by one of them.
+EVALSET_NEIGHBOUR_CHARS = 300
+
+#: Tokens one generated question costs, before the reasoning multiplier.
+#:
+#: **Measured 2026-08-31 on the first real run, and it corrected a 3.6x
+#: under-report.** The guess was 90 — the length of a question plus the
+#: `answerable_only_by_main` flag — which through the ×3 reasoning multiplier
+#: quoted 270 tokens per call. The run billed **7,743 output tokens over 8
+#: calls, i.e. 968 each**, and since output is priced at five times input the
+#: whole estimate came in at $0.0338 against a real $0.0650. Under-reporting is
+#: the one direction this must never fail in: a user who approved $0.03 and was
+#: billed $0.07 has been misled, and the reverse has not.
+#:
+#: 400 × 3.0 = 1,200 per call, which covers the measurement with about 24% of
+#: margin. **What is measured is the product, not the split**: the run had
+#: reasoning on throughout, so how much of the 968 is the question and how much
+#: is thinking was not separated, and `THINKING_OUTPUT_MULTIPLIER["evalset"]`
+#: stays at its guessed 3.0 rather than being tuned to fit one document.
+#:
+#: One document, eight calls. A second one may move it again.
+EVALSET_OUTPUT_PER_CALL = 400
+
+#: Off-topic queries the noise floor is measured with. Duplicated from
+#: `docagent.evaluate.NOISE_QUERIES` rather than imported, to keep this estimator
+#: free of engine imports — `test_the_noise_query_count_has_not_drifted` fails if
+#: the engine grows another one.
+NOISE_QUERIES = 4
+
+#: Tokens one query embedding costs. A synthetic question runs 100-200 characters
+#: and `CHARS_PER_TOKEN` is 3.6, so this is a ceiling for both the questions and
+#: the four noise queries.
+EVAL_QUERY_TOKENS = 60
+
 OUTPUT_SPREAD = {"semantics": 1.91}
 
 #: Characters per correction call, mirroring `docagent.correct.MAX_BATCH_CHARS`.
@@ -560,6 +621,7 @@ async def extract_text(
         extractor=extractor_name(request.source_path),
         structured=structured,
         source_key=request.source_key,
+        tenant_id=request.tenant_id,
     )
 
 
@@ -792,12 +854,55 @@ async def estimate_cost(
             condense_calls * CONDENSE_OUTPUT_PER_CALL,
         )
     if options.generate_evalset:
+        # **One call per sampled chunk, not one call per document.** The previous
+        # figure charged the whole document's tokens once and 20% of them as
+        # output, which is the same class of miss this repository has already
+        # measured twice: a generation call pays for its system instruction,
+        # schema and JSON envelope *per call*, so the error scales with the call
+        # count. On a 600-chunk book the old line under-reported the input by
+        # roughly the overhead of forty calls and over-reported the output by an
+        # order of magnitude — wrong in both directions at once.
+        #
+        # It had never mattered, because nothing implemented the stage.
+        sample = EVAL_SAMPLE_TUNING if options.tune else EVAL_SAMPLE
+        evalset_calls = min(sample, max(1, preview.chunk_count))
+        # The chunk this document actually has, not the cap — bounded by it.
+        # `EVALSET_INPUT_CHARS` is right for a document at the chunker's ceiling
+        # and 4.5x too big for one whose chunks run 580 characters, which is what
+        # the first real run had: 11,456 input tokens quoted against 4,408 spent.
+        # Over-reporting is the correct direction and *wildly* over-reporting is
+        # the other failure the range exists to avoid.
+        chunk_chars = preview.characters / max(1, preview.chunk_count)
+        evalset_chars = min(EVALSET_INPUT_CHARS, chunk_chars + 2 * EVALSET_NEIGHBOUR_CHARS)
         add(
             "evalset",
             settings.gemini.model,
-            tokens + SEMANTICS_CALL_OVERHEAD,
-            int(tokens * 0.2),
+            evalset_calls
+            * (int(evalset_chars / CHARS_PER_TOKEN) + SEMANTICS_CALL_OVERHEAD),
+            evalset_calls * EVALSET_OUTPUT_PER_CALL,
         )
+        if options.embed:
+            # Measuring embeds every question once and every noise query once.
+            # Small, and not nothing — and a stage that spends without a row is
+            # how the ledger came to be missing every question ever asked.
+            add(
+                "evaluation",
+                settings.gemini.embedding_model,
+                (evalset_calls + NOISE_QUERIES) * EVAL_QUERY_TOKENS,
+                0,
+            )
+            if options.tune:
+                # **The whole document, embedded a second time.** A chunking
+                # candidate re-cuts the text, so every chunk is a new string and
+                # not one of them is in the cache. This is the largest single
+                # line a gate can show and it is why tuning is off by default:
+                # at the measured quota of ~6 embeddings a minute it is also
+                # about a hundred minutes of wall clock for a 600-chunk book.
+                #
+                # The free half of a round — `min_score`, `per_section`,
+                # dense-only — changes nothing in the index and costs only the
+                # query embeddings already counted above.
+                add("tuning", settings.gemini.embedding_model, tokens, 0)
 
     priced = [s.usd for s in stages if s.usd is not None]
     priced_high = [s.usd_high for s in stages if s.usd_high is not None]
@@ -810,6 +915,23 @@ async def estimate_cost(
         price_source=PRICE_SOURCE,
         unpriced_stages=[s.stage for s in stages if s.usd is None],
     )
+
+
+def profile_dir(settings, tenant_id: str) -> "pathlib.Path":
+    """This organisation's profile directory.
+
+    `Paths.for_tenant` gives the legacy tenant the volume root itself, so the 23
+    profiles already on disk keep working untouched — the same exemption, for the
+    same reason, as the one `_salt()` makes for that tenant's ids. Every other
+    organisation gets `tenants/<id>/profiles`, which is what stops a profile
+    learned from one customer's book being applied to another's by structural
+    fingerprint.
+
+    Passed to `docagent.profiles` as an argument rather than arranged with a
+    `chdir`: the worker runs activities concurrently, and `os.chdir` is
+    process-global.
+    """
+    return settings.paths.for_tenant(tenant_id).profiles
 
 
 @activity.defn(name="resolve_profile")
@@ -845,7 +967,10 @@ async def resolve_profile(
     fingerprint = engine_profiles.fingerprint(evidence, extraction.extractor)
     decision = ProfileDecision(fingerprint=fingerprint)
 
-    matches = [p for p in engine_profiles.all_profiles() if p.fingerprint == fingerprint]
+    root = profile_dir(settings, extraction.tenant_id)
+    matches = [
+        p for p in engine_profiles.all_profiles(root) if p.fingerprint == fingerprint
+    ]
     if not matches:
         return decision
 
@@ -854,7 +979,7 @@ async def resolve_profile(
     # fingerprint, a real one with eight measured revisions and a stale one with
     # every score at 0.0. Going through `load` rather than `matches[0]` is what
     # keeps the family's rules from depending on a filename.
-    profile = engine_profiles.load(fingerprint)
+    profile = engine_profiles.load(fingerprint, root)
     if profile is None:  # pragma: no cover - all_profiles and load disagree
         return decision
 
@@ -885,6 +1010,7 @@ async def resolve_profile(
                 collides_with=profile.learned_from or profile.slug,
                 similarity=0.0,
                 detail=disagreement,
+                kind="heading_disagreement",
             )
         )
 

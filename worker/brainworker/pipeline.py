@@ -105,6 +105,19 @@ class StageOptions:
     ignore_profile: bool = False
     #: Show a second gate with the correction diff before the remaining spend.
     review_correction: bool = False
+    #: Try to improve retrieval, and measure whether it worked.
+    #:
+    #: Off by default and bounded to a single chunking candidate. The free half —
+    #: `min_score`, `per_section`, dense-only — changes nothing in the index and
+    #: is tried exhaustively; the paid half re-cuts the document, which means
+    #: embedding every chunk again, ~100 minutes for a 600-chunk book against the
+    #: measured per-minute quota. So the gate prices that second pass explicitly
+    #: rather than letting a loop discover it.
+    #:
+    #: Turning this on also raises the eval sample to `EVAL_SAMPLE_TUNING`,
+    #: because at 40 questions the bootstrap margin cannot resolve the effect
+    #: tuning is looking for and the round would honestly refuse everything.
+    tune: bool = False
     #: Condense each concept's accumulated descriptions into one a person reads.
     #: Paid — one bounded call per concept whose descriptions grew past a
     #: threshold — so it belongs behind the gate like every other stage that
@@ -135,6 +148,22 @@ class ProfileWarning:
     #: unrelated subject matter, so the wrong heading rules get applied.
     similarity: float
     detail: str
+    #: Which kind of warning this is, because the two have different force.
+    #:
+    #: ``collision`` says two documents share a structural fingerprint, which is
+    #: ordinary — it is the whole point of a family profile, and the second
+    #: document of a family is cheaper than the first because of it.
+    #:
+    #: ``heading_disagreement`` says the inherited rules and the built-in ones
+    #: read a *different number of chapters* in this document. That is the one
+    #: automatic signal available for a collision between unrelated families, and
+    #: the metrics provably cannot see it: the eval questions are generated from
+    #: the very chunks the wrong rules produced. So it is the one that withholds
+    #: activation.
+    #:
+    #: Defaulted rather than required, because this is a Temporal payload: a
+    #: workflow that started before the field existed must keep deserialising.
+    kind: str = "collision"
 
 
 @dataclass
@@ -193,6 +222,12 @@ class ProfileDecision:
     profile matched this family's fingerprint, free), ``learned`` (one was
     proposed and validated for it, paid) or ``default`` (the built-in rules,
     which were themselves measured on a real book — a fallback, not a gap).
+
+    A fourth value, ``tuned``, is this repository's own: a tuning round's
+    candidate rules. It is not ``default`` — that is the load-bearing part,
+    because `chunk_final` applies a decision's rules only when the source is not
+    ``default``, so a candidate labelled that way would be silently ignored and
+    the round would measure the very chunking it was trying to change.
     """
 
     fingerprint: str
@@ -257,6 +292,17 @@ class Extraction:
     #: `Profile.learned_from` ends up in a file that outlives the run, and an
     #: absolute container path there would be meaningless on the host.
     source_key: str = ""
+    #: Whose profile directory this document's rules are read from and written
+    #: to. Carried here rather than added as an activity parameter, because
+    #: Temporal maps payloads onto parameters by arity and an absent *field*
+    #: takes its default where a changed arity breaks every history in flight.
+    #:
+    #: It exists because a profile is not anonymous: it carries `header_patterns`
+    #: derived from a book's running header, which is often its title. `CLAUDE.md`
+    #: listed profiles as the one open gap of the three tenancy does not cover,
+    #: and this is the field that closes it — the engine now takes an explicit
+    #: root, so a `chdir` no longer has to serve every organisation at once.
+    tenant_id: str = LEGACY_TENANT_ID
 
 
 @dataclass
@@ -364,6 +410,86 @@ class Indexed:
 
 
 @dataclass
+class EvalSet:
+    """Synthetic questions generated from the chunks they must find.
+
+    They leak vocabulary to the lexical leg by construction — a question written
+    *from* a passage shares its wording — which is why `Scores` carries the
+    dense-only figure beside the hybrid one rather than reporting a single number
+    that flatters the index.
+
+    `reused` distinguishes "this family had already paid for its questions" from
+    "this run generated them". Regenerating them each time would measure the
+    questions instead of the change, which is the whole reason the engine keeps
+    them in the profile.
+    """
+
+    items: ArtifactRef
+    questions: int
+    sample: int
+    spend: Spend
+    reused: bool = False
+
+
+@dataclass
+class Scores:
+    """What the index that was just written can actually be asked.
+
+    The product has never had this figure for any of its documents; the engine's
+    CLI has it for thirty. Every number here is measured against the collection
+    the run wrote, not estimated.
+    """
+
+    recall_at_1: float = 0.0
+    recall_at_5: float = 0.0
+    mrr_at_10: float = 0.0
+    #: The same questions with the lexical leg switched off. The *gap* between
+    #: this and `recall_at_5` is the eval set's own vocabulary leakage, so a
+    #: hybrid figure quoted alone is not interpretable.
+    recall_at_5_dense_only: float = 0.0
+    #: The best dense score an off-topic query achieves — what "no match" looks
+    #: like in this collection. A recall figure without it says nothing about
+    #: whether the index can tell a miss from a hit.
+    noise_floor: float = 0.0
+    chunks: int = 0
+    eval_questions: int = 0
+    #: Bootstrap margin on the objective. Below it, a difference is noise: with
+    #: σ ≈ 0.358 it takes about 80 questions to resolve a +0.040 MRR effect, and
+    #: reporting a smaller one as real is the failure this guards against.
+    margin: float = 0.0
+    leakage: str = ""
+    report: ArtifactRef | None = None
+    #: Embedding the questions costs money. Small, and not zero.
+    spend: Spend | None = None
+
+
+@dataclass
+class TuneOutcome:
+    """What one tuning round concluded.
+
+    `kind` is `retrieval` when a free knob won and was adopted, `chunking` when
+    the free knobs are exhausted and the next candidate costs a full re-embed,
+    and `none` when there is nothing left worth trying.
+
+    `baseline_objective` and `margin` travel together because the candidate has
+    to be judged against the margin computed *before* it ran. A margin derived
+    from the candidate's own run moves with it, and the comparison would then be
+    between two things that both changed — which is how three tuning rounds once
+    drifted 0.729 → 0.762 → 0.700 while each of them had reverted.
+    """
+
+    kind: str = "none"
+    label: str = ""
+    baseline_objective: float = 0.0
+    margin: float = 0.0
+    #: The rules to try, as a decision `chunk_final` can be handed unchanged.
+    #: Present only for `kind == "chunking"`, and *proposed*, not adopted.
+    candidate: "ProfileDecision | None" = None
+    notes: list[str] = field(default_factory=list)
+    report: ArtifactRef | None = None
+
+
+@dataclass
 class Semantics:
     concepts: int
     claims: int
@@ -458,3 +584,8 @@ class IngestResult:
     projected: dict[str, int] = field(default_factory=dict)
     total_usd: float | None = None
     detail: str = ""
+    #: Measured retrieval quality, when the run was asked to measure it. None
+    #: means "not asked", never "zero" — the two are different answers and a
+    #: surface showing 0.00 recall for a run that never evaluated would send
+    #: somebody to fix an index that is fine.
+    scores: Scores | None = None

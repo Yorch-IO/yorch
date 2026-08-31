@@ -7,6 +7,7 @@ faithful preview for free, and a mocked extractor would test nothing about that.
 from __future__ import annotations
 
 import pathlib
+from dataclasses import replace
 
 import pytest
 
@@ -222,8 +223,20 @@ async def test_the_estimate_covers_exactly_the_stages_that_were_switched_on(
         StageOptions(correct=True, embed=True, extract_semantics=True, generate_evalset=True),
     )
     assert [s.stage for s in everything.stages] == [
-        "profile", "correction", "embedding", "semantics", "evalset",
+        "profile", "correction", "embedding", "semantics", "evalset", "evaluation",
     ]
+
+    # `evaluation` is the query embeddings the measurement itself pays for. It
+    # only appears when there is an index to measure: asking questions of a
+    # collection this run never wrote would score somebody else's document.
+    no_index = await act.estimate_cost(
+        preview,
+        StageOptions(
+            correct=False, embed=False, extract_semantics=False,
+            learn_profile=False, generate_evalset=True,
+        ),
+    )
+    assert [s.stage for s in no_index.stages] == ["evalset"]
 
     embedding_only = await act.estimate_cost(
         preview,
@@ -1030,3 +1043,106 @@ async def test_activation_marks_the_asking_organisations_version(
     monkeypatch.setattr(act, "Catalog", lambda *_a, **_k: _NoopCatalog())
     await act.activate_version(request, staged, registered)
     assert [v.tenant_id for v in captured_versions] == [ACME]
+
+
+async def test_the_eval_set_is_priced_per_call_not_per_document(
+    workspace: pathlib.Path, libro: pathlib.Path
+):
+    """The miss this repository has now measured three times.
+
+    A generation call pays for its system instruction, schema and JSON envelope
+    *per call*, so an estimate that charges a document once is wrong by the
+    overhead of every call after the first. The eval set makes one call per
+    sampled chunk — `build_evalset` is stratified by `kind` — so the figure has
+    to scale with the sample, and it stops scaling once the sample is capped.
+    """
+    extraction = await act.extract_text(request_for(libro), "run_e")
+    preview = await act.preview_chunks("run_e", extraction, StageOptions())
+    opts = StageOptions(
+        correct=False, embed=False, extract_semantics=False,
+        learn_profile=False, generate_evalset=True,
+    )
+
+    # Characters scale with the chunk count, so the *average chunk* stays the
+    # same size across the three and only the call count moves. Holding
+    # `characters` fixed instead would shrink the per-call input as chunks grew,
+    # which is an artefact of the fixture rather than a property of the code.
+    CHARS_PER_CHUNK = 1_100
+
+    def at(chunks: int):
+        return replace(preview, chunk_count=chunks, characters=chunks * CHARS_PER_CHUNK)
+
+    small = await act.estimate_cost(at(3), opts)
+    large = await act.estimate_cost(at(600), opts)
+    capped = await act.estimate_cost(at(6000), opts)
+
+    def stage(est, name):
+        return next(s for s in est.stages if s.stage == name)
+
+    # Three chunks, three calls; 600 chunks, forty — because the sample is
+    # stratified and capped, not one question per chunk.
+    assert stage(large, "evalset").input_tokens == pytest.approx(
+        stage(small, "evalset").input_tokens * (act.EVAL_SAMPLE / 3), rel=0.01
+    )
+    assert stage(large, "evalset").input_tokens == stage(capped, "evalset").input_tokens
+    # Reasoning is on for this stage — `evalset` is absent from
+    # `Gemini.stage_thinking`, deliberately, so it inherits the budget rather
+    # than being switched off — and reasoning tokens are billed as output.
+    assert stage(large, "evalset").output_tokens == int(
+        act.EVAL_SAMPLE
+        * act.EVALSET_OUTPUT_PER_CALL
+        * act.THINKING_OUTPUT_MULTIPLIER["evalset"]
+    )
+
+
+def test_the_noise_query_count_has_not_drifted():
+    """`NOISE_QUERIES` is duplicated into the estimator to keep it free of engine
+    imports. A duplicated constant needs a test or it is just a stale one."""
+    from docagent.evaluate import NOISE_QUERIES
+
+    assert act.NOISE_QUERIES == len(NOISE_QUERIES)
+
+
+def test_the_estimator_and_the_stage_agree_on_the_sample():
+    """The estimate is a promise about a bill; the stage is what settles it. Two
+    constants would let the gate quote forty calls and the run make eighty."""
+    from brainworker.activities import paid
+
+    assert paid.EVAL_SAMPLE is act.EVAL_SAMPLE
+    assert paid.EVAL_SEED is act.EVAL_SEED
+
+
+async def test_the_eval_set_estimate_covers_what_the_first_real_run_billed(
+    workspace: pathlib.Path, libro: pathlib.Path
+):
+    """The measurement that corrected a 3.6x under-report.
+
+    Measured 2026-08-31 on `taller-de-tarsis.txt`: 8 chunks over 4,629
+    characters, `generate_evalset` on, correction and semantics off. The run
+    billed **4,408 input and 7,743 output tokens for the eval set, $0.064685**,
+    against an estimate of 11,456 / 2,160 and $0.033384 — input over-reported by
+    2.6x and output *under*-reported by 3.6x, which since output is priced at
+    five times input left the whole quote at half the bill.
+
+    Under-reporting is the one direction this must never fail in: a user who
+    approved $0.03 and was billed $0.07 has been misled, and the reverse has not.
+    """
+    extraction = await act.extract_text(request_for(libro), "run_m")
+    preview = await act.preview_chunks("run_m", extraction, StageOptions())
+    measured = replace(preview, chunk_count=8, characters=4_629)
+
+    estimate = await act.estimate_cost(
+        measured,
+        StageOptions(
+            correct=False, embed=True, extract_semantics=False,
+            learn_profile=False, generate_evalset=True,
+        ),
+    )
+    stage = next(s for s in estimate.stages if s.stage == "evalset")
+
+    assert stage.output_tokens >= 7_743, "it would quote less than the run cost"
+    assert stage.input_tokens >= 4_408
+    # And not wildly more, which is the other half of the rule the range exists
+    # to hold: covering the worst must not mean doubling the typical.
+    assert stage.output_tokens < 2 * 7_743
+    assert stage.input_tokens < 2 * 4_408

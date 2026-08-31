@@ -7,6 +7,7 @@ import {
   type DocumentDetail,
   type DocumentRow,
   type Removal,
+  type RunScores,
 } from "../lib/api";
 import { useLibraries } from "../lib/libraries";
 
@@ -25,6 +26,55 @@ import { useLibraries } from "../lib/libraries";
  * component. It also lets the confirmation name what is about to be destroyed
  * *and* what survives, which "are you sure?" cannot.
  */
+/** What one version's index can be asked.
+ *
+ * Rendered only when a run measured it, never as zeros: every version on this
+ * installation predates the stage, and "recall 0.00" would send somebody to fix
+ * an index that is fine.
+ *
+ * The five figures go together on purpose. `recallAt5` alone flatters the index,
+ * because the questions were generated *from* the chunks they must find and
+ * therefore leak vocabulary to the lexical leg — the gap to `recallAt5DenseOnly`
+ * is that leakage. And the noise floor is what a *wrong* answer scores, without
+ * which a reader cannot tell an index that discriminates from one that returns
+ * everything at a similar distance.
+ */
+function Scores({ scores }: { scores: RunScores }) {
+  const { t } = useTranslation();
+  const pct = (n: number) => `${(n * 100).toFixed(0)}%`;
+  return (
+    <dl className="scores">
+      <div>
+        <dt>{t("library.scores.recall5")}</dt>
+        <dd>{pct(scores.recallAt5)}</dd>
+      </div>
+      <div>
+        <dt>{t("library.scores.recall1")}</dt>
+        <dd>{pct(scores.recallAt1)}</dd>
+      </div>
+      <div>
+        <dt>{t("library.scores.mrr")}</dt>
+        <dd>{scores.mrrAt10.toFixed(3)}</dd>
+      </div>
+      <div>
+        <dt>{t("library.scores.denseOnly")}</dt>
+        <dd>{pct(scores.recallAt5DenseOnly)}</dd>
+      </div>
+      <div>
+        <dt>{t("library.scores.noiseFloor")}</dt>
+        <dd>{scores.noiseFloor.toFixed(3)}</dd>
+      </div>
+      <p className="muted basis">
+        {t("library.scores.basis", {
+          questions: scores.evalQuestions,
+          chunks: scores.chunks,
+          misses: scores.misses,
+        })}
+      </p>
+    </dl>
+  );
+}
+
 export function LibraryScreen() {
   const { t } = useTranslation();
 
@@ -116,6 +166,31 @@ export function LibraryScreen() {
       setBusy(true);
       try {
         setRemoved(await api.versionRemove(libraryId, versionId));
+        if (openId) setDetail(await api.documentDetail(libraryId, openId));
+        await load();
+      } catch (e) {
+        setError(errorMessage(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [libraryId, load, openId],
+  );
+
+  /** Promote a version that is indexed and not the active one.
+   *
+   *  Two things reach it: an ingest that withheld activation on a structural
+   *  collision, and a plain rollback — the previous version stays in the graph
+   *  deactivated rather than deleted, precisely so a bad re-index can be undone
+   *  by flipping the flag instead of paying for the pipeline again.
+   *
+   *  Not behind a confirm, unlike removal: this is reversible by pressing the
+   *  same button on the other version. */
+  const activateVersion = useCallback(
+    async (versionId: string) => {
+      setBusy(true);
+      try {
+        await api.versionActivate(libraryId, versionId);
         if (openId) setDetail(await api.documentDetail(libraryId, openId));
         await load();
       } catch (e) {
@@ -347,6 +422,15 @@ export function LibraryScreen() {
                                     · {t("library.detail.noArtifacts")}
                                   </span>
                                 )}
+                                {!v.active && v.state === "indexed" && (
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => void activateVersion(v.id)}
+                                  >
+                                    {t("library.detail.activateVersion")}
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   disabled={busy}
@@ -354,6 +438,7 @@ export function LibraryScreen() {
                                 >
                                   {t("library.detail.removeVersion")}
                                 </button>
+                                {v.scores && <Scores scores={v.scores} />}
                               </li>
                             ))}
                           </ul>

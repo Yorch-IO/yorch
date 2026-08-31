@@ -294,3 +294,92 @@ def test_offsets_shift_when_accents_are_added():
     after = "relación evidente con otras materias".encode("utf-8")
     assert len(after) == len(before) + 1
     assert before.index(b"evidente") != after.index(b"evidente")
+
+
+# --- the cache ---------------------------------------------------------------
+
+
+class _OneShotVertex:
+    """Corrects by appending a marker, and counts the calls it was asked for."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, prompt, *, system=None, stage="", json_schema=None, temperature=0.0):
+        import json
+
+        self.calls += 1
+        payload = json.loads(prompt)
+        return json.dumps(
+            {
+                "parrafos": [
+                    {"i": p["i"], "texto": p["texto"]} for p in payload["parrafos"]
+                ]
+            }
+        )
+
+
+def test_an_interrupted_correction_keeps_what_it_already_paid_for(tmp_path):
+    """The reason this cache exists: a run was killed at batch 14 of 19 and threw
+    away everything before it. Correction is the dominant cost of an index
+    ($0.0334 against $0.0498 on a real run), so the second attempt must ask only
+    for what it never got."""
+    paragraphs = [ORIGINAL, ORIGINAL.replace("griego", "helénico")]
+    cache = tmp_path / "correct"
+
+    first = _OneShotVertex()
+    correct_paragraphs(first, paragraphs, cache_dir=cache)
+    assert first.calls == 1
+
+    second = _OneShotVertex()
+    _, report = correct_paragraphs(second, paragraphs, cache_dir=cache)
+    assert second.calls == 0, "it re-paid for corrections it already had"
+    assert report.cache_hits == len(paragraphs)
+
+
+def test_two_concurrent_corrections_do_not_lose_each_others_entries(tmp_path):
+    """One file per paragraph, not one JSON holding every entry.
+
+    The old layout loaded the whole file at the top of a run and rewrote it after
+    every batch, so the second writer's dict — assembled before the first one
+    wrote — silently replaced it. The worker can correct two documents at once.
+    """
+    cache = tmp_path / "correct"
+    mine = ORIGINAL
+    theirs = ORIGINAL.replace("Dooyeweerd", "Kierkegaard")
+
+    # Interleaved deliberately: both start before either finishes.
+    a = correct_mod._ParagraphCache(cache)
+    b = correct_mod._ParagraphCache(cache)
+    a.get(mine)
+    b.get(theirs)
+    a.put(mine, "corregido A")
+    b.put(theirs, "corregido B")
+
+    fresh = correct_mod._ParagraphCache(cache)
+    assert fresh.get(mine) == "corregido A"
+    assert fresh.get(theirs) == "corregido B"
+
+
+def test_the_previous_single_file_cache_is_still_read(tmp_path):
+    """2,379 lines of corrections already paid for live in `paragraphs.json`.
+    Changing the layout must not re-spend them."""
+    import json
+
+    cache = tmp_path / "correct"
+    cache.mkdir(parents=True)
+    (cache / "paragraphs.json").write_text(
+        json.dumps({correct_mod._key(ORIGINAL): "de la caché antigua"}),
+        encoding="utf-8",
+    )
+
+    assert correct_mod._ParagraphCache(cache).get(ORIGINAL) == "de la caché antigua"
+
+
+def test_the_cache_root_is_a_parameter_not_the_working_directory(tmp_path):
+    """`os.chdir` is process-global and the worker runs activities concurrently."""
+    a, b = tmp_path / "one", tmp_path / "two"
+    correct_mod._ParagraphCache(a).put(ORIGINAL, "en A")
+
+    assert correct_mod._ParagraphCache(b).get(ORIGINAL) is None
+    assert correct_mod._ParagraphCache(a).get(ORIGINAL) == "en A"

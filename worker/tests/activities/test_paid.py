@@ -17,7 +17,15 @@ import pytest
 
 from brainworker.activities import paid
 from brainworker.graph.schema import chunk_id as make_chunk_id
-from brainworker.pipeline import Chunked, Extraction, Registered, Staged
+from brainworker.artifacts import ArtifactRef, ArtifactStore
+from brainworker.pipeline import (
+    Chunked,
+    Extraction,
+    ProfileDecision,
+    Registered,
+    Scores,
+    Staged,
+)
 from brainworker.providers.gemini import Embedding, Generation, Usage
 
 DIMS = 3072
@@ -222,6 +230,88 @@ def qdrant(monkeypatch: pytest.MonkeyPatch):
     finally:
         with Qdrant(url, name, timeout=10.0) as q:
             q.drop()
+
+
+async def test_a_shrinking_reindex_leaves_no_orphan_points(
+    workspace: pathlib.Path, provider: FakeProvider, qdrant: str
+):
+    """The defect nothing in this repository closed before.
+
+    `upsert` overwrites only the ids the new run produced. Point ids are
+    deterministic in the chunk index, so a re-index that yields *fewer* chunks
+    than the last one leaves the previous chunking's tail alive — carrying
+    `char_span`s into a byte stream nothing holds any more, and competing in
+    ranking with the chunks that replaced it.
+
+    Observed for the CLI on `07-LlavesDelPoder-INT.pdf` after a rejected
+    625-chunk tuning candidate left ids 502..624 behind. Nothing here needs a
+    tuning candidate to reach it: a corrected profile that chunks more coarsely
+    is enough, and `removal.py` — the only other delete in this package — removes
+    a whole version, never a tail.
+    """
+    from docagent.qdrant import Qdrant
+
+    registered, staged = _ids()
+    collection = os.environ["BRAIN_QDRANT_COLLECTION"]
+
+    await paid.embed_and_index(
+        "run_long", "lib_t", registered, staged, _chunked(workspace, "run_long", 10)
+    )
+    with Qdrant(qdrant, collection) as q:
+        assert q.count({"version_id": registered.version_id}) == 10
+
+    # Same document, same version, fewer chunks.
+    result = await paid.embed_and_index(
+        "run_short", "lib_t", registered, staged, _chunked(workspace, "run_short", 6)
+    )
+
+    assert result.points == 6
+    with Qdrant(qdrant, collection) as q:
+        assert q.count({"version_id": registered.version_id}) == 6, (
+            "the tail of the longer chunking survived"
+        )
+
+
+async def test_pruning_only_touches_this_version(
+    workspace: pathlib.Path, provider: FakeProvider, qdrant: str
+):
+    """The tail delete is scoped, or a short re-index of one book would delete
+    the back of every other book in the collection."""
+    from docagent.qdrant import Qdrant
+
+    mine, staged = _ids()
+    theirs, other_staged = _ids()
+    collection = os.environ["BRAIN_QDRANT_COLLECTION"]
+
+    await paid.embed_and_index("r1", "lib_t", mine, staged, _chunked(workspace, "r1", 8))
+    await paid.embed_and_index(
+        "r2", "lib_t", theirs, other_staged, _chunked(workspace, "r2", 8)
+    )
+    await paid.embed_and_index("r3", "lib_t", mine, staged, _chunked(workspace, "r3", 2))
+
+    with Qdrant(qdrant, collection) as q:
+        assert q.count({"version_id": mine.version_id}) == 2
+        assert q.count({"version_id": theirs.version_id}) == 8
+
+
+async def test_a_retry_does_not_re_embed_what_it_already_paid_for(
+    workspace: pathlib.Path, provider: FakeProvider, qdrant: str
+):
+    """Paid activities get two Temporal attempts, and each attempt runs the whole
+    stage. Without a cache the second one re-pays for every vector of the first —
+    and the scarce resource is the per-minute embedding quota, not the money, so
+    re-spending it arrives back at the same wall for ever.
+    """
+    registered, staged = _ids()
+    chunked = _chunked(workspace, "run_cache", 5)
+
+    await paid.embed_and_index("run_cache", "lib_t", registered, staged, chunked)
+    assert sum(len(c) for c in provider.embed_calls) == 5
+
+    provider.embed_calls.clear()
+    await paid.embed_and_index("run_cache", "lib_t", registered, staged, chunked)
+
+    assert provider.embed_calls == [], "it re-embedded text it already had"
 
 
 async def test_indexing_writes_points_whose_ids_come_from_the_content(
@@ -824,3 +914,262 @@ async def test_a_claim_relating_a_concept_to_itself_projects_no_second_edge(
         "run_r2", registered, _chunked(workspace, "run_r2", 1)
     )
     assert [e.type for e in captured["edges"]] == ["ABOUT"]
+
+
+# -- measuring the index ----------------------------------------------------
+
+
+class EvalProvider:
+    """Generates one question per call and embeds deterministically."""
+
+    def __init__(self) -> None:
+        self.generate_calls: list[str] = []
+        self.embed_calls: list[list[str]] = []
+
+    def generate(self, prompt, *, system=None, temperature=0.0,
+                 max_output_tokens=None, response_schema=None, stage=None):
+        import json
+
+        self.generate_calls.append(prompt)
+        payload = json.loads(prompt)
+        # The question names the chunk it came from, which is what makes
+        # retrieval deterministic below without a real embedding model.
+        return Generation(
+            text=json.dumps(
+                {
+                    "question": f"¿Qué dice el fragmento {payload['fragmento_principal'][:40]!r}?",
+                    "answerable_only_by_main": True,
+                }
+            ),
+            usage=Usage(input_tokens=800, output_tokens=60, calls=1),
+        )
+
+    def embed(self, texts, *, task, workers=6):
+        self.embed_calls.append(list(texts))
+        return [
+            Embedding(values=[0.01] * DIMS, usage=Usage(input_tokens=10)) for _ in texts
+        ]
+
+
+def _profile(workspace: pathlib.Path, *, learned_from: str, questions: int = 2):
+    """A profile on disk for the legacy tenant, with an eval set already in it."""
+    from docagent.profiles import EvalItem, Profile
+
+    root = workspace / "profiles"
+    p = Profile(
+        fingerprint="fp_shared",
+        slug="una-familia-fp_share",
+        extractor="plain",
+        learned_from=learned_from,
+        learned_at=1.0,
+        evalset=[
+            EvalItem(question=f"heredada {i}", chunk_index=i, char_mid=-1)
+            for i in range(questions)
+        ],
+    )
+    p.save(root)
+    return p
+
+
+def _extraction(source_key: str) -> Extraction:
+    ref = ArtifactRef(kind="raw_text", path="runs/x/raw.txt", sha256="a" * 64, bytes=1)
+    ev_ref = ArtifactRef(kind="evidence", path="runs/x/evidence.json",
+                         sha256="b" * 64, bytes=1)
+    return Extraction(
+        text=ref, evidence=ev_ref, extractor="plain", source_key=source_key
+    )
+
+
+async def test_a_reused_profile_does_not_score_against_another_book(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The failure `doc/CLAUDE.md` records, carried across the boundary.
+
+    The fingerprint groups by *structure*, and structure is not subject matter: a
+    hermeneutics chapter and a church-history book landed on one fingerprint on
+    the real corpus. Scoring book B against book A's questions produced a recall
+    of 0 that said nothing about either index. The engine drops an inherited eval
+    set when `learned_from` names a different file; if this side did not, the fix
+    would simply not travel.
+    """
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    _profile(workspace, learned_from="libros/otro-libro.pdf")
+
+    result = await paid.build_evalset(
+        "run_drop",
+        _extraction("libros/este-libro.pdf"),
+        _chunked(workspace, "run_drop", 3),
+        ProfileDecision(fingerprint="fp_shared", source="reused"),
+    )
+
+    assert result.reused is False, "it scored this book with another book's questions"
+    assert fake.generate_calls, "it neither reused nor generated"
+    assert result.questions == 3
+
+
+async def test_this_documents_own_questions_are_reused_and_cost_nothing(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Regenerating them would measure the questions instead of the change, which
+    is the whole reason the engine keeps them in the profile."""
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    _profile(workspace, learned_from="libros/este-libro.pdf", questions=2)
+
+    result = await paid.build_evalset(
+        "run_reuse",
+        _extraction("libros/este-libro.pdf"),
+        _chunked(workspace, "run_reuse", 3),
+        ProfileDecision(fingerprint="fp_shared", source="reused"),
+    )
+
+    assert result.reused is True
+    assert result.questions == 2
+    assert fake.generate_calls == [], "it re-paid for questions it already had"
+
+
+async def test_the_measurement_is_scoped_to_the_version_it_just_wrote(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch, qdrant: str
+):
+    """Two documents, one collection. A measurement with no scope searches the
+    whole shelf and reports a figure about the corpus as if it were about this
+    document."""
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    mine, staged = _ids()
+    theirs, other_staged = _ids()
+    await paid.embed_and_index("m", "lib_t", mine, staged, _chunked(workspace, "m", 4))
+    await paid.embed_and_index(
+        "t", "lib_t", theirs, other_staged, _chunked(workspace, "t", 4)
+    )
+
+    chunked = _chunked(workspace, "ev", 4)
+    evalset = await paid.build_evalset(
+        "ev", _extraction("libros/mio.pdf"), chunked, ProfileDecision(fingerprint="fp_x")
+    )
+    scores = await paid.evaluate_index(
+        "ev", mine, chunked, evalset, ProfileDecision(fingerprint="fp_x")
+    )
+
+    report = ArtifactStore(workspace, "ev").read_json(scores.report)
+    assert report["scope"] == {
+        "tenant_id": mine.tenant_id,
+        "version_id": mine.version_id,
+    }
+    assert scores.eval_questions == evalset.questions
+    # Both legs ran, or the leakage the questions introduce stays invisible.
+    assert scores.leakage
+
+
+async def test_the_scores_are_written_back_into_the_family_profile(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The artifact is the authority; the profile's copy is what lets a family
+    accumulate measurement across documents."""
+    from docagent import profiles as engine_profiles
+
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    before = _profile(workspace, learned_from="libros/este-libro.pdf")
+
+    extraction = _extraction("libros/este-libro.pdf")
+    decision = ProfileDecision(fingerprint="fp_shared", slug=before.slug, source="reused")
+    evalset = await paid.build_evalset(
+        "run_p", extraction, _chunked(workspace, "run_p", 3), decision
+    )
+    scores = Scores(
+        recall_at_1=0.5, recall_at_5=0.9, mrr_at_10=0.7,
+        recall_at_5_dense_only=0.85, noise_floor=0.58, chunks=3, eval_questions=2,
+    )
+
+    assert await paid.persist_profile_scores("run_p", extraction, decision, evalset, scores)
+
+    after = engine_profiles.load("fp_shared", workspace / "profiles")
+    assert after.scores.recall_at_5 == 0.9
+    assert after.revisions == before.revisions + 1
+    assert after.learned_from == "libros/este-libro.pdf"
+
+
+async def test_a_document_with_no_profile_keeps_its_scores_in_the_artifact(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A document indexed with the measured defaults has no file of its own.
+    That is an ordinary outcome, and reporting it as a successful write would be
+    a lie about where the numbers went."""
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    extraction = _extraction("libros/sin-perfil.pdf")
+    decision = ProfileDecision(fingerprint="fp_nadie", source="default")
+    evalset = await paid.build_evalset(
+        "run_np", extraction, _chunked(workspace, "run_np", 2), decision
+    )
+
+    wrote = await paid.persist_profile_scores(
+        "run_np", extraction, decision, evalset, Scores(chunks=2)
+    )
+    assert wrote is False
+
+
+async def test_a_measurement_keeps_the_ranks_its_own_margin_is_resampled_from(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch, qdrant: str
+):
+    """The bootstrap margin a tuning candidate must beat is resampled from the
+    reciprocal rank of every question, and that vector cannot be rebuilt from
+    `Scores`.
+
+    Deriving it from the mean was tried: on a realistic 40-question run it gave
+    ±0.040 where the true margin is ±0.062, because a flat vector has none of the
+    spread that ranks of 1, ½, ⅓, ¼ carry. **35% too small, in the direction that
+    accepts noise as a real gain** — which is the one thing the margin exists to
+    prevent.
+    """
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    registered, staged = _ids()
+    chunked = _chunked(workspace, "ranks", 4)
+    await paid.embed_and_index("ranks", "lib_t", registered, staged, chunked)
+    evalset = await paid.build_evalset(
+        "ranks", _extraction("libros/x.pdf"), chunked, ProfileDecision(fingerprint="fp")
+    )
+    scores = await paid.evaluate_index(
+        "ranks", registered, chunked, evalset, ProfileDecision(fingerprint="fp")
+    )
+
+    report = ArtifactStore(workspace, "ranks").read_json(scores.report)
+    assert len(report["reciprocal_ranks"]) == scores.eval_questions
+
+    run = paid._baseline_from(ArtifactStore(workspace, "ranks"), scores)
+    assert run is not None
+    assert run.rr_vector() == report["reciprocal_ranks"]
+
+
+async def test_tuning_declines_rather_than_inventing_a_margin(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A report written before the ranks were kept has no margin in it. A round
+    that cannot compute its own threshold would adopt a candidate for having been
+    tried, so it declines instead."""
+    from brainworker.pipeline import Scores as PipelineScores
+
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    store = ArtifactStore(workspace, "old")
+    ref = store.write_json("scores", {"scores": {"eval_questions": 40}, "misses": []})
+
+    outcome = await paid.propose_tuning(
+        "old",
+        _ids()[0],
+        _chunked(workspace, "old", 3),
+        await paid.build_evalset(
+            "old", _extraction("libros/x.pdf"), _chunked(workspace, "old", 3),
+            ProfileDecision(fingerprint="fp"),
+        ),
+        ProfileDecision(fingerprint="fp"),
+        PipelineScores(eval_questions=40, mrr_at_10=0.7, report=ref),
+    )
+
+    assert outcome.kind == "none"

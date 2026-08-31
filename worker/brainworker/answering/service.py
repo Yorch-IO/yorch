@@ -27,7 +27,7 @@ def ask(settings: Settings, question: Question) -> Answer:
     spend = [plan.spend] if plan.spend else []
 
     try:
-        evidence = search(settings, provider, question, plan)
+        evidence = search(settings, provider, question, plan, spend)
     except OffCorpus as e:
         # Told apart from "not enough evidence" because the remedy differs: this
         # question belongs to a different corpus, not to a gap in this one.

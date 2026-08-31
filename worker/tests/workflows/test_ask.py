@@ -43,9 +43,34 @@ async def breaks(question: Question) -> Answer:
     raise RuntimeError("algo se rompió sin un kind")
 
 
+#: What the run row and the charges would have been. A question could not be
+#: billed at all until the catalog had a row for it: `record_cost` derives the
+#: tenant from the run rather than taking one, so no run meant no cost, and
+#: `cost_entry` held nothing for any question ever asked.
+BOOKED: list[tuple[str, str, int]] = []
+
+
+@activity.defn(name="start_question_run")
+async def start_question_run(question_id: str, question: Question) -> None:
+    BOOKED.append(("start", question_id, 0))
+
+
+@activity.defn(name="record_question_cost")
+async def record_question_cost(question_id, state, spend) -> None:
+    BOOKED.append((state, question_id, len(spend)))
+
+
+@pytest.fixture(autouse=True)
+def _clear_booked():
+    BOOKED.clear()
+    yield
+    BOOKED.clear()
+
+
 async def _run(env: WorkflowEnvironment, act) -> AskOutcome:
     client: Client = env.client
-    async with Worker(client, task_queue=TASK_QUEUE, workflows=[AskWorkflow], activities=[act]):
+    acts = [act, start_question_run, record_question_cost]
+    async with Worker(client, task_queue=TASK_QUEUE, workflows=[AskWorkflow], activities=acts):
         return await client.execute_workflow(
             AskWorkflow.run,
             Question(library_id="lib_a", text="¿el arrianismo?"),
@@ -103,7 +128,8 @@ async def test_the_query_answers_before_the_activity_does(env: WorkflowEnvironme
         await asyncio.sleep(30)
         return Answer(state="answered", text="tarde", reason="")
 
-    async with Worker(client, task_queue=TASK_QUEUE, workflows=[AskWorkflow], activities=[slow]):
+    acts = [slow, start_question_run, record_question_cost]
+    async with Worker(client, task_queue=TASK_QUEUE, workflows=[AskWorkflow], activities=acts):
         handle = await client.start_workflow(
             AskWorkflow.run,
             Question(library_id="lib_a", text="¿?"),
@@ -112,3 +138,42 @@ async def test_the_query_answers_before_the_activity_does(env: WorkflowEnvironme
         )
         assert (await handle.query(AskWorkflow.result)).state == "running"
         assert (await handle.result()).state == "done"
+
+
+# -- the bill -----------------------------------------------------------------
+
+
+async def test_a_question_is_recorded_in_the_books(env: WorkflowEnvironment):
+    """`SELECT count(*) FROM cost_entry WHERE run_id LIKE 'ask-%'` was **0**
+    across the whole catalog while the ledger held $32 of indexing.
+
+    A question is measured at ~$0.023 with reasoning on, which is the shipped
+    setting, so every question ever asked was missing from the books. On the free
+    plane that is a gap; on the paid one it is an organisation's bill, which is
+    `SUM(cost_entry)` filtered by tenant.
+    """
+    outcome = await _run(env, answers)
+
+    assert outcome.state == "done"
+    assert [b[0] for b in BOOKED] == ["start", "done"]
+
+
+async def test_the_row_is_opened_before_the_question_is_asked(
+    env: WorkflowEnvironment,
+):
+    """So a question that is still running is visible while it runs. A real one
+    outran the app's 180s timeout, and a screen showing nothing about work being
+    paid for is the failure that episode was about."""
+    await _run(env, answers)
+
+    assert BOOKED[0][0] == "start"
+
+
+async def test_a_failed_question_still_closes_its_row(env: WorkflowEnvironment):
+    """The planner runs first and is a paid call, so a question that failed
+    afterwards still spent something. A row left open would read as a question
+    that never finished."""
+    outcome = await _run(env, refuses)
+
+    assert outcome.state == "failed"
+    assert [b[0] for b in BOOKED] == ["start", "failed"]

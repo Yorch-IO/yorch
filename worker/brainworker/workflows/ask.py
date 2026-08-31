@@ -22,8 +22,18 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
 
 with workflow.unsafe.imports_passed_through():
-    from ..activities.asking import answer_question
+    from ..activities.asking import (
+        answer_question,
+        record_question_cost,
+        start_question_run,
+    )
     from ..answering.types import Answer, Question
+
+#: Bookkeeping is local and small. Three attempts, because losing the record of
+#: a charge that was made is worth one retry — but never at the cost of the
+#: answer, which is why both calls are best-effort inside the activity too.
+BOOK_TIMEOUT = timedelta(minutes=2)
+_BOOK_RETRY = RetryPolicy(maximum_attempts=3)
 
 #: Generous, because a real question against the church-history library once
 #: outran the app's own 180s timeout — was computed, was billed, and was
@@ -52,6 +62,16 @@ class AskWorkflow:
 
     @workflow.run
     async def run(self, question: Question) -> AskOutcome:
+        # Opened before the question is asked, so one still running is visible
+        # while it runs. A real question once outran the app's 180s timeout, and
+        # a screen showing nothing about work that is being paid for is the
+        # failure that whole episode was about.
+        await workflow.execute_activity(
+            start_question_run,
+            args=[workflow.info().workflow_id, question],
+            start_to_close_timeout=BOOK_TIMEOUT,
+            retry_policy=_BOOK_RETRY,
+        )
         try:
             answer = await workflow.execute_activity(
                 answer_question,
@@ -70,9 +90,27 @@ class AskWorkflow:
                 kind = str(cause.details[0])
                 message = cause.message
             self._outcome = AskOutcome(state="failed", error={"kind": kind, "message": message})
+            # A question that failed still spent whatever it spent before it
+            # did. The planner runs first and is a paid call.
+            await self._book("failed", [])
             return self._outcome
 
         # Set together, and answer-before-state is not a concern here the way it
         # was in the in-process store: a query reads one immutable object.
         self._outcome = AskOutcome(state="done", answer=answer)
+        await self._book("done", answer.spend)
         return self._outcome
+
+    async def _book(self, state: str, spend: list) -> None:
+        """Write the bill. Never allowed to change the outcome.
+
+        The answer is already set before this runs, and the activity swallows its
+        own failures too — a catalog that is down must cost the user a record,
+        not the answer they paid for.
+        """
+        await workflow.execute_activity(
+            record_question_cost,
+            args=[workflow.info().workflow_id, state, spend],
+            start_to_close_timeout=BOOK_TIMEOUT,
+            retry_policy=_BOOK_RETRY,
+        )

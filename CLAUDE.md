@@ -1107,19 +1107,6 @@ that are missing. Each was found by running the thing, and each is recorded
 rather than fixed because the fix is somebody's decision or sits in another
 session's files.
 
-- **A question spends money and nothing records it.** `SELECT count(*) FROM
-  cost_entry WHERE run_id LIKE 'ask-%'` is **0** across the whole catalog, and
-  neither `activities/asking.py` nor `workflows/ask.py` contains a cost-recording
-  call. The ledger holds four stages, all of them indexing — semantics, profile,
-  embedding, correction, $32.18 in total. `doc/COMPANY_BRAIN.md` measures a
-  question at ~$0.023 with reasoning on, which is the shipped setting, so every
-  question ever asked is missing from the books. On the free plane that is a gap;
-  on the paid one it is an organisation's **bill**, which is `SUM(cost_entry)`
-  filtered by `tenant_id`. Found 2026-08-30 while verifying preproduction. The
-  fix is an activity that records what `answer` and `plan` already return, plus a
-  `run` row for the question — `run_kind_check` has no `ask`, which is why one
-  does not exist.
-
 - **`tenant_scope_pending` carries two opposite meanings, so its guidance is
   wrong for one of them.** The kind was minted for "this view is not segmented
   by organisation yet, so it answers only for the legacy one" — a refusal aimed
@@ -1178,9 +1165,45 @@ session's files.
   'decimal.Decimal'`. Harmless wherever it is only serialised; a trap the first
   time anything compares or sums one. `repo.py:116`.
 
-## Four defects that were recorded here and are now fixed
+## Six defects that were recorded here and are now fixed
 
 Kept because each fix carries a rule worth not relearning.
+
+- **A question spent money and nothing recorded it.** `SELECT count(*) FROM
+  cost_entry WHERE run_id LIKE 'ask-%'` was **0** across the whole catalog while
+  the ledger held $32 of indexing across four stages. The reason it needed a
+  migration rather than only Python is the interesting part: `record_cost` takes
+  no tenant and derives one in the INSERT from the run the charge hangs off, so
+  that a charge and its run cannot disagree about who owns them — **no run row
+  therefore meant no cost row**, and a run row needed a kind `run_kind_check`
+  allowed. `20260831160000_run_kind_ask` adds `'ask'`, `AskWorkflow` opens the
+  row before it asks and closes it after, and questions now appear in
+  `recent_runs` beside imports. Measured on the first real one: planning
+  $0.003051, `ask-embedding` $0.000003, answering $0.010157 — **$0.013211**.
+  That middle row is the query's own vector, which `Answer.spend` never carried,
+  so even a fixed ledger would have under-reported every question by it.
+
+- **Adding a parameter to an activity broke the call site that did not pass it.**
+  `evaluate_index` grew a sixth parameter with a default, and the five-argument
+  baseline call then died on `'builtin_function_or_method' object has no
+  attribute 'path'` — Temporal maps payloads onto parameters **by arity**, so the
+  converter gave up and passed raw dicts, and `evalset.items` became
+  `dict.items`. The same failure this repository already records as `'dict'
+  object has no attribute 'source_path'`, reached from the other direction. Every
+  call site passes every argument now. **The test doubles were what hid it**: an
+  untyped `*args` double accepts any arity, so five workflow tests passed against
+  a workflow the real converter could not run. They are typed like the real
+  activities now, and all five fail when the argument is dropped again.
+
+- **A document's own profile read as a structural collision.** The
+  `heading_disagreement` check asks whether *inherited* rules see a different
+  outline than the built-in ones — and a profile reused on the document it was
+  learned from is not inherited from anywhere. Measured on
+  `01_RetoDeDios_INT-S.pdf`, whose own learned pattern reads **38 chapters where
+  the defaults read 8**: exactly the improvement a profile exists to provide, and
+  it withheld activation from every re-index of any document that had learned
+  one. The `default == 0` escape beside it covers only the case where the
+  built-in detector finds nothing; here it found eight.
 
 - **The second gate cost a document the profile it had just paid to learn.**
   `IngestWorkflow._run` reassigned `decision` — the `ProfileDecision` every later

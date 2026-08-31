@@ -446,7 +446,19 @@ class IngestWorkflow:
                     spent.append(evalset.spend)
                 scores = await workflow.execute_activity(
                     paid.evaluate_index,
-                    args=[run_id, registered, chunked, evalset, decision],
+                    # `"scores"` is passed explicitly rather than left to the
+                    # default. **Temporal maps payloads onto an activity's
+                    # parameters by arity**: hand a six-parameter activity five
+                    # arguments and the converter cannot line them up, so it
+                    # gives up and passes raw dicts — and the activity then died
+                    # on `'builtin_function_or_method' object has no attribute
+                    # 'path'`, because `evalset` had arrived as a dict and
+                    # `dict.items` is a method. Same failure as the
+                    # `'dict' object has no attribute 'source_path'` this file
+                    # already carries a warning about, reached from the other
+                    # direction: there by adding a parameter, here by adding one
+                    # and leaving an older call site short.
+                    args=[run_id, registered, chunked, evalset, decision, "scores"],
                     start_to_close_timeout=PAID_TIMEOUT,
                     retry_policy=_PAID_RETRY,
                 )

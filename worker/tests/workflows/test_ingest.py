@@ -260,10 +260,20 @@ async def build_evalset(*_args) -> EvalSet:
 EVALUATED_INTO: list[str] = []
 
 
+# Typed like the real activity, and that matters: an untyped `*args` double
+# accepts any arity, so it happily recorded a five-argument call that the real
+# converter could not map at all.
 @activity.defn(name="evaluate_index")
-async def evaluate_index(*args) -> Scores:
+async def evaluate_index(
+    run_id: str,
+    registered: Registered,
+    chunked: Chunked,
+    evalset: EvalSet,
+    decision: ProfileDecision,
+    artifact_kind: str,
+) -> Scores:
     SPENT.append("evaluation")
-    EVALUATED_INTO.append(args[5] if len(args) > 5 else "scores")
+    EVALUATED_INTO.append(artifact_kind)
     return Scores(
         recall_at_1=0.675, recall_at_5=0.9, mrr_at_10=0.7642,
         recall_at_5_dense_only=1.0, noise_floor=0.6232,
@@ -1058,8 +1068,16 @@ async def test_a_candidate_that_beats_the_margin_is_kept(env: WorkflowEnvironmen
     the one that stands."""
 
     @activity.defn(name="evaluate_index")
-    async def better(*_args) -> Scores:
+    async def better(
+        run_id: str,
+        registered: Registered,
+        chunked: Chunked,
+        evalset: EvalSet,
+        decision: ProfileDecision,
+        artifact_kind: str,
+    ) -> Scores:
         SPENT.append("evaluation")
+        EVALUATED_INTO.append(artifact_kind)
         # 0.95 against a 0.700 baseline is +0.25, comfortably past ±0.077.
         return Scores(
             recall_at_1=0.9, recall_at_5=0.98, mrr_at_10=0.95,
@@ -1325,9 +1343,16 @@ async def test_a_kept_candidate_becomes_the_runs_measurement(env: WorkflowEnviro
     the index that stands, so it is promoted over the baseline's."""
 
     @activity.defn(name="evaluate_index")
-    async def better(*args) -> Scores:
+    async def better(
+        run_id: str,
+        registered: Registered,
+        chunked: Chunked,
+        evalset: EvalSet,
+        decision: ProfileDecision,
+        artifact_kind: str,
+    ) -> Scores:
         SPENT.append("evaluation")
-        EVALUATED_INTO.append(args[5] if len(args) > 5 else "scores")
+        EVALUATED_INTO.append(artifact_kind)
         return Scores(
             recall_at_1=0.9, recall_at_5=0.98, mrr_at_10=0.95,
             recall_at_5_dense_only=0.9, noise_floor=0.6, chunks=3,

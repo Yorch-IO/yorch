@@ -1002,7 +1002,21 @@ async def resolve_profile(
         decision.warnings = warnings
         return decision
 
-    disagreement = _heading_disagreement(store, extraction, rules)
+    # **Only for rules this document did not learn itself.** The check asks
+    # whether *inherited* rules read a different structure than the built-in
+    # ones, and a profile reused on the document it was learned from is not
+    # inherited from anywhere — the disagreement is the profile doing its job.
+    #
+    # Measured 2026-08-31 on `01_RetoDeDios_INT-S.pdf`: its own learned pattern
+    # reads 38 chapters where the defaults read 8, exactly the improvement
+    # profiles exist to provide, and without this every re-index of a document
+    # that had learned its own profile was blocked from activating. The
+    # `default == 0` escape below covers the same case only when the built-in
+    # detector finds *nothing*; here it found eight.
+    inherited = profile.learned_from != (extraction.source_key or "")
+    disagreement = (
+        _heading_disagreement(store, extraction, rules) if inherited else ""
+    )
     if disagreement:
         warnings.append(
             ProfileWarning(

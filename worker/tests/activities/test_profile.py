@@ -264,6 +264,50 @@ async def test_rules_that_contradict_the_defaults_raise_a_warning(
     assert "3" in disagreements[0].detail
 
 
+async def test_a_documents_own_profile_never_reads_as_a_collision(
+    workspace: pathlib.Path, tmp_path: pathlib.Path
+):
+    """The check asks whether *inherited* rules read a different structure than
+    the built-in ones. A profile reused on the document it was learned from is
+    not inherited from anywhere, so a disagreement there is the profile doing
+    exactly its job.
+
+    Measured 2026-08-31 on `01_RetoDeDios_INT-S.pdf`, whose own learned pattern
+    reads 38 chapters where the defaults read 8. Without this, activation was
+    withheld from every re-index of a document that had learned its own profile
+    — a `structural_mismatch` on a document that collides with nothing.
+    """
+    prose = (
+        "Una exposición del capítulo con la extensión que la materia pide y "
+        "que el lector podrá comprobar más adelante en el texto completo."
+    )
+    numbered = tmp_path / "propio.txt"
+    numbered.write_text(
+        "\n\n".join(
+            f"{title}\n\n{prose}"
+            for title in (
+                "1. Capítulo I",
+                "2. Capítulo segundo de la obra completa",
+                "3. Capítulo III",
+            )
+        ),
+        encoding="utf-8",
+    )
+    extraction = await act.extract_text(request_for(numbered), "run_own")
+    fp = (await act.resolve_profile("v", "run_own", extraction, StageOptions())).fingerprint
+    # The same rules that produce a contradiction above — but learned from *this*
+    # document rather than from another one.
+    save_profile(fp, slug="propio-1a2b3c4d",
+                 learned_from=extraction.source_key, heading_l1_max=16)
+
+    decision = await act.resolve_profile("v", "run_own", extraction, StageOptions())
+
+    assert decision.source == "reused"
+    assert not [w for w in decision.warnings if w.kind == "heading_disagreement"], (
+        "a document's own profile was reported as a structural collision"
+    )
+
+
 async def test_no_disagreement_is_reported_when_the_rules_agree(
     workspace: pathlib.Path, libro: pathlib.Path
 ):

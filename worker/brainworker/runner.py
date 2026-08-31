@@ -36,6 +36,8 @@ ACTIVITIES = [
     probe_services,
     probe_provider,
     asking.answer_question,
+    asking.start_question_run,
+    asking.record_question_cost,
     removing.remove_document,
     removing.remove_version,
     ingest.stage_source,

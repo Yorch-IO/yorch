@@ -65,15 +65,43 @@ class OffCorpus(Exception):
 
 
 def search(
-    settings: Settings, provider: Provider, question: Question, plan: Plan
+    settings: Settings,
+    provider: Provider,
+    question: Question,
+    plan: Plan,
+    spend: "list | None" = None,
 ) -> list[Evidence]:
-    """Retrieve, expand, and return the evidence an answer may rest on."""
+    """Retrieve, expand, and return the evidence an answer may rest on.
+
+    ``spend`` is an out-parameter rather than a second return value, so the eight
+    existing call sites are untouched. It exists because embedding the question
+    is a real charge that nothing was recording: `Answer.spend` carried planning
+    and answering and not this, so even a fixed ledger would have under-reported
+    every question by the cost of its own query vector. Small — four orders of
+    magnitude under the answering call — and a stage that spends without a row is
+    exactly how the ledger came to be missing every question ever asked.
+    """
     from docagent.qdrant import Qdrant, SearchOpts, diversify
 
     # RETRIEVAL_QUERY, not RETRIEVAL_DOCUMENT. The model embeds questions and
     # passages asymmetrically on purpose (invariant #5) and using one task for
     # both measurably degrades retrieval.
-    vector = provider.embed([question.text], task=RETRIEVAL_QUERY)[0].values
+    embedded = provider.embed([question.text], task=RETRIEVAL_QUERY)[0]
+    vector = embedded.values
+    if spend is not None:
+        from ..activities.ingest import price_for
+        from ..pipeline import Spend
+
+        tokens = embedded.usage.input_tokens
+        spend.append(
+            Spend(
+                stage="ask-embedding",
+                model=provider.settings.embedding_model,
+                input_tokens=tokens,
+                output_tokens=0,
+                usd=price_for(provider.settings.embedding_model, tokens, 0),
+            )
+        )
 
     filters = {
         k: v for k, v in question.filters.items() if k in ALLOWED_FILTERS

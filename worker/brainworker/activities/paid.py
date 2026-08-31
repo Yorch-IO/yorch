@@ -817,11 +817,11 @@ async def extract_semantics(
         # running" into "598 chunks, 96 done" for somebody deciding whether to
         # let it finish.
         #
-        # **No `heartbeat_timeout` is set on this activity, deliberately.** One
-        # would let Temporal notice a hang — but it would also fail and retry the
-        # activity on a heartbeat that merely arrived late, and a retry of this
-        # stage re-runs every generation call from the start. Detecting a stall
-        # is worth less than never paying twice for a slow one.
+        # The workflow sets `heartbeat_timeout` against this, at sixty times the
+        # interval below. It was left unset at first, on the reasoning that a
+        # late heartbeat would retry an expensive stage — and a worker restart
+        # then orphaned this activity for what would have been three more hours
+        # before the same retry happened anyway. See `PAID_HEARTBEAT_TIMEOUT`.
         # Guarded because every test in `tests/activities/` calls these as plain
         # functions rather than through a worker — which is the pattern that
         # keeps them cheap to test — and `heartbeat` raises outside an activity

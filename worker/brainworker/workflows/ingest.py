@@ -63,6 +63,30 @@ WRITE_TIMEOUT = timedelta(minutes=2)
 #: stuck call, not this.
 PAID_TIMEOUT = timedelta(hours=4)
 
+#: How long an activity that heartbeats may go quiet before Temporal gives up on
+#: the attempt and retries it.
+#:
+#: **This was left unset, and the first real event proved that wrong.** The
+#: reasoning against it was that a heartbeat merely arriving late would fail and
+#: retry the activity, and a retry of semantic extraction re-runs every
+#: generation call from the start — so detecting a stall looked worth less than
+#: never paying twice for a slow one.
+#:
+#: What that missed is that without it nothing is detected at all. On 2026-08-31
+#: a worker restart — an ordinary event, and one the documented deploy command
+#: causes — left `extract_semantics` orphaned in `Started`, 47 minutes and 413
+#: generation calls in, with the worker that ran it gone and the new one idle.
+#: Temporal would not have noticed until `PAID_TIMEOUT` expired: **three more
+#: hours of nothing, and then the same retry from scratch anyway.** The cost the
+#: original reasoning was avoiding turned out to be the cost it was paying, plus
+#: the wait.
+#:
+#: Five minutes is sixty times the observed interval between heartbeats, which is
+#: one per chunk at roughly one every five seconds. Tripping it spuriously needs
+#: a single generation call to stall for five minutes, which nothing measured
+#: here comes close to.
+PAID_HEARTBEAT_TIMEOUT = timedelta(minutes=5)
+
 #: A paid activity is retried far less eagerly than a free one. Every attempt
 #: spends real money, and the provider already retries the transient failures
 #: internally — so a Temporal retry here means the whole stage runs again.
@@ -388,6 +412,10 @@ class IngestWorkflow:
                 paid.extract_semantics,
                 args=[run_id, registered, chunked, approved],
                 start_to_close_timeout=PAID_TIMEOUT,
+                # The only activity that heartbeats, so the only one this can be
+                # set on: a heartbeat timeout on an activity that never sends one
+                # would fail it immediately.
+                heartbeat_timeout=PAID_HEARTBEAT_TIMEOUT,
                 retry_policy=_PAID_RETRY,
             )
             spent.append(semantics.spend)

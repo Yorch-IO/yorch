@@ -471,6 +471,14 @@ the three stores lacks a tenant**. Three real leaks were found by doing this —
 the entries below on field defaults, on listings and on library ids — none of
 them failed anything, which is why none of them had been found by reading.
 
+**Those legacy figures are historical as of 2026-08-31**, when that whole corpus
+was migrated to a second organisation (`preprod`) — see *Moving a corpus between
+organisations* below. Legacy now holds 0 documents, 0 versions, 0 nodes and 0
+points; `preprod` holds 74 documents, 70 indexed versions, 47,860 nodes and 4,724
+points; acme is untouched at 1 document, 1 indexed version and 13 points. The
+measurement above is left as it was taken, because what it verified — that
+isolation holds in both directions — is what made the migration safe to attempt.
+
 - **The error body's `detail.kind` is a client contract.** `app/src/lib/api.ts`
   parses it and keys its guidance map on it, so both planes emit
   `{"detail": {"kind": …, "message": …}}` and an unmatched route emits FastAPI's
@@ -491,6 +499,14 @@ them failed anything, which is why none of them had been found by reading.
   needed the full pipeline re-run, correction included, against source files
   many of them no longer record. `test_the_legacy_tenants_ids_are_exactly_what_they_were`
   is what stops somebody tidying the branch away.
+  **That measurement is now historical**: those 69 versions left the legacy
+  tenant on 2026-08-31, so on this installation the exemption protects nothing.
+  The branch stays anyway, and not out of sentiment — it is the id contract for
+  any installation whose legacy tenant is still populated, and the free plane
+  still writes under that tenant here, so removing it would change the ids of
+  whatever is indexed there next. What the migration did prove is that the
+  fear behind the exemption was survivable after all: every salted id turned out
+  to be recomputable from the stores themselves, no artifact required.
 
 - **A salted id is not authorization.** It is `digest(tenant, content)`, and a
   tenant id is a value its own members hold — it travels in `X-Tenant-Id`. A
@@ -539,7 +555,10 @@ them failed anything, which is why none of them had been found by reading.
   paid tenant's libraries the moment one existed. All three take a required
   `tenant_id` now and the FastAPI plane names `LEGACY_TENANT_ID` at the call
   site, because that plane *is* that organisation and saying so is what makes it
-  a decision. `project_totals` carries the predicate in each of its eight scalar
+  a decision — an organisation that is **empty** since 2026-08-31, so the free
+  plane answers `/project-summary` with zeros and `available: true`. That is the
+  degradation working, not a failure, and it is the accepted consequence of
+  moving the corpus rather than copying it. `project_totals` carries the predicate in each of its eight scalar
   subqueries — there is no join to hang one outer filter on — so the test seeds
   two organisations and asserts each figure rather than the row.
 
@@ -559,7 +578,7 @@ them failed anything, which is why none of them had been found by reading.
   `profile_warning` — *derive* it in the INSERT from the run or version they
   hang off, so an artifact and its run cannot disagree about who owns them.
 
-**Two things tenancy does not cover, and why.** `PROFILE_DIR` and `CACHE_DIR` in
+**Three things tenancy does not cover, and why.** `PROFILE_DIR` and `CACHE_DIR` in
 `docagent` are module constants relative to the process CWD, and the worker runs
 activities concurrently, so a chdir per run is unsafe. The correction cache is
 content-addressed (`sha256(prompt_version + text)`), so sharing an entry requires
@@ -571,6 +590,72 @@ them when `learned_from` names a different file, and across organisations it
 always does. Closing it needs `docagent` to accept an explicit root instead of
 resolving from the CWD; it was judged not to block the paid plane, and this
 paragraph is the record of that judgement.
+
+**Run artifacts are the third, and the one most likely to be misread as
+covered.** `Paths.for_tenant` exists and is used — but on the *inbox*, by
+`stage_source`'s containment check, and nowhere else. All twelve sites that build
+an `ArtifactStore` pass `settings.workspace`, so `rel_path` is measured from the
+volume root and every organisation's run artifacts share `<workspace>/runs/`.
+Unlike the correction cache this is a real crossing rather than a saving: the
+files are readable by anyone holding the root. `for_tenant`'s own docstring used
+to claim the opposite, and on 2026-08-31 that sentence sent a migration to move 34
+run directories into a tenant subtree, where 157 of 159 `chunks`/`semantics` files
+became unreachable and `rebuild` was broken until they were moved back —
+`test_a_reference_is_relative_to_the_workspace` is the behaviour to trust here,
+not prose. Closing it is those twelve call sites plus a move per organisation.
+
+### Moving a corpus between organisations
+
+Done once, on 2026-08-31: the whole legacy corpus — 72 documents, 69 indexed
+versions, 48,247 graph nodes, 4,721 Qdrant points, 524 artifact rows and $32.18
+of ledger — moved to `preprod`. Recorded here because the next one will be
+tempted by the cheap version, and the cheap version is wrong.
+
+- **An `UPDATE tenant_id` is not a move.** `_salt()` folds the tenant into `ver_`
+  and `con_`, and everything downstream inherits it, so relabelling leaves the
+  destination holding ids it would never compute. The next import then mints a
+  second `ver_` for a book already there and a second `con_` for a concept
+  already there — the graph forks at exactly the join it exists to provide.
+- **Every derived id is recomputable from what the stores already hold**, which
+  is what makes a faithful move possible at all: `content_sha256` on
+  `DocumentVersion`, `path` on `Section`, `ordinal` on `Chunk`, `canonical` on
+  `Concept`, `text` + `source_chunk_id` on `Claim`, `locator` on `Citation`, and
+  the Qdrant point from `uuid5(version_id:chunk_index)`. No artifact is needed
+  and nothing is re-embedded, so the move cost **$0**. That matters against the
+  obvious alternative: rebuilding under the new tenant reaches only the versions
+  whose artifacts survive, which here was **31 of 69**.
+- **The check that makes it trustworthy is recomputing the id you already have.**
+  Before writing anything, re-derive each node's *source* id from its own
+  properties and compare it with the stored one. It proves the derivation rather
+  than assuming it, and it costs one read: **48,247 nodes accounted for, zero
+  mismatches**, and afterwards 47,867 re-checked against the destination tenant,
+  also zero.
+- **Edges carry ids too.** `MENTIONS`, `ABOUT` and `INVOLVES` each store a
+  `source_chunk_id` property — ~49,000 of them. A re-salt that touches only nodes
+  leaves the graph pointing at chunk ids that no longer exist.
+- **Re-salting into an organisation that already holds a concept is a merge, not
+  a rename.** The legacy id of `dios` *becomes* the id `preprod` already had, so
+  the edges have to move and the loser deleted. Two collided; `Dios` came out as
+  one node with 685 chunks.
+- **Some debris cannot be re-salted, because the datum that derives it is gone**:
+  214 orphan `Claim`s (their `source_chunk_id` names no chunk), 127 `Citation`s
+  with no `CITES` edge, 1 `Chunk` with no `version_id`. Deleted, along with 65
+  concepts only those claims reached. Carrying them would have reintroduced
+  exactly the unreproducible ids the whole exercise avoids.
+- **Projections first, catalog last**, for the reason `brainworker/removal.py`
+  gives: a crash before the catalog is written leaves the move retryable. The
+  catalog is also the only store that can still answer once the graph is done —
+  it holds the `content_sha256` the version map is rebuilt from.
+- **The inbox moves; run artifacts do not.** `stage_source` refuses a
+  `source_path` outside `Paths.for_tenant`, so the inbox *must* follow the tenant
+  and `document.source_path` must be rewritten with it. `ArtifactStore` is tenant
+  blind, so `runs/` must stay at the volume root. Getting this backwards broke
+  `rebuild` for the whole corpus until the directories were moved back; see the
+  third gap under *Three things tenancy does not cover*.
+- **Anything in flight is left incoherent.** An `awaiting_approval` run holds the
+  pre-migration `version_id` in its workflow state, so approving it after the move
+  writes old-shaped ids back. Terminate it and re-import; the free gate has cost
+  nothing yet.
 
 ### Why the approval gate sits where it does
 

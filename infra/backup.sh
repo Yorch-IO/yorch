@@ -92,6 +92,14 @@ container() {
 
 PG="$(container postgres)"
 
+# Like `container`, but a miss is an answer rather than a death: the workspace
+# tar falls back to reading it from the host.
+container_or_empty() {
+  docker ps -q \
+    --filter "label=com.docker.compose.project=${PROJECT}" \
+    --filter "label=com.docker.compose.service=$1" | head -1
+}
+
 # -- verify: does every artifact the catalog names still exist, unchanged? ---
 #
 # This is the check that would have caught eight pruned `chunks.jsonl` files
@@ -138,13 +146,40 @@ say "-- catálogo (pg_dump)"
 docker exec "$PG" pg_dump -U "$PG_USER" -d brain --no-owner --no-privileges \
   | gzip -6 > "${OUT}/catalog.sql.gz"
 
+# `tenants/` is not optional, and leaving it out was a real gap. A paid
+# organisation's inbox lives there — `Paths.for_tenant` gives every tenant minted
+# since tenancy its own tree — so after the 2026-08-31 migration that subtree
+# holds the *source file of every document in the corpus*. The four names below
+# are the legacy tenant's tree, which is the volume root; without `tenants` a
+# backup covers one organisation and silently omits the others.
+#
+# Read from inside a container when one is running, for the same reason the
+# Qdrant snapshot is fetched over HTTP rather than off the bind mount: the
+# uploads controller writes each file `0600` and the container runs as root, so
+# the host user cannot open them. On the host this failed with "Cannot open:
+# Permission denied" and exit 2 — which is at least loud, but a backup that
+# aborts is not a backup, and `--ignore-failed-read` would put us back to
+# omitting them in silence. Host dev mode has no such container, and no such
+# files either, so it falls back.
 say "-- artefactos del workspace (tar)"
-tar -C "$WORKSPACE" -czf "${OUT}/workspace.tar.gz" \
-  --exclude=snapshots \
-  $( [[ -d "${WORKSPACE}/runs"     ]] && echo runs ) \
-  $( [[ -d "${WORKSPACE}/profiles" ]] && echo profiles ) \
-  $( [[ -d "${WORKSPACE}/cache"    ]] && echo cache ) \
+TAR_DIRS=(
+  $( [[ -d "${WORKSPACE}/runs"     ]] && echo runs )
+  $( [[ -d "${WORKSPACE}/profiles" ]] && echo profiles )
+  $( [[ -d "${WORKSPACE}/cache"    ]] && echo cache )
   $( [[ -d "${WORKSPACE}/inbox"    ]] && echo inbox )
+  $( [[ -d "${WORKSPACE}/tenants"  ]] && echo tenants )
+)
+WS_CONTAINER="$(container_or_empty worker)"
+[[ -n "$WS_CONTAINER" ]] || WS_CONTAINER="$(container_or_empty api)"
+if [[ -n "$WS_CONTAINER" ]]; then
+  docker exec "$WS_CONTAINER" tar -C /workspace -czf - \
+    --exclude=snapshots "${TAR_DIRS[@]}" > "${OUT}/workspace.tar.gz" \
+    || die "the workspace tar failed inside ${WS_CONTAINER}"
+else
+  say "   (sin contenedor con el volumen; leyendo del host)"
+  tar -C "$WORKSPACE" -czf "${OUT}/workspace.tar.gz" \
+    --exclude=snapshots "${TAR_DIRS[@]}"
+fi
 
 say "-- Qdrant (snapshot API)"
 SNAP="$(curl -sf -m 300 -X POST "http://127.0.0.1:${QDRANT_PORT}/collections/${COLLECTION}/snapshots" \

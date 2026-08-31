@@ -40,15 +40,36 @@ class Paths:
     root: pathlib.Path
 
     def for_tenant(self, tenant: str) -> "Paths":
-        """This organisation's corner of the volume.
+        """This organisation's corner of the volume — its *inbox*, not its artifacts.
 
         The legacy tenant keeps the root itself, and that is not a shortcut: a
         `run_artifact` row stores a **workspace-relative** path, so rerooting an
         existing corpus would invalidate every one of them at once — the same
-        reasoning that keeps its derived ids unsalted, and measured the same way
-        (69 indexed versions, 31 whose artifacts are still on disk). Everything
-        minted since lands under `tenants/<id>/`, and the rows written there are
-        relative to *that*, so neither has to know about the other.
+        reasoning that keeps its derived ids unsalted. Everything minted since
+        lands under `tenants/<id>/`.
+
+        **What this scopes is the inbox.** `stage_source` calls `contains()`
+        before it hashes, so a `source_path` must fall inside the caller's own
+        tree; that is the boundary this function exists to draw, and the second
+        clause of `contains()` is what keeps the legacy root from swallowing it.
+
+        **Run artifacts are not scoped by it.** This docstring used to claim the
+        opposite — that rows written under a tenant were relative to that tenant's
+        root — and reading it that way is how a migration on 2026-08-31 moved 34
+        run directories out of reach of the code that opens them, leaving 157 of
+        159 `chunks`/`semantics` files unreachable and `rebuild` broken until they
+        were moved back. All twelve sites that build an `ArtifactStore` pass
+        `settings.workspace`, so `ArtifactStore._relative` measures from the
+        volume root and a run's artifacts live at `<workspace>/runs/<run_id>/…`
+        whoever owns them. `test_a_reference_is_relative_to_the_workspace` is what
+        fixes that, and it is the behaviour to trust over any prose.
+
+        That leaves a known isolation gap, the third beside `profiles/` and the
+        correction cache: one organisation's run artifacts sit where another could
+        read them. Unlike the cache — content-addressed, so sharing an entry means
+        already holding that paragraph — this one is a real crossing. Closing it is
+        those twelve call sites plus moving the artifacts each organisation already
+        has, and it has not been judged to block anything yet.
         """
         from .graph.schema import LEGACY_TENANT_ID
 

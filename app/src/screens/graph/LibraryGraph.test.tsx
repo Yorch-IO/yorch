@@ -654,4 +654,50 @@ describe("the accessible list", () => {
     fireEvent.click(list.getByRole("button", { name: /Historia/ }));
     await screen.findByRole("heading", { name: "Historia" });
   });
+
+  it("grows in place when the reader scrolls near the bottom, rather than paginating", async () => {
+    // 250 concepts, all sharing one type, so the list holds more than the
+    // initial 200-row cap and the second page is reachable only by growing it.
+    const concepts = Array.from({ length: 250 }, (_, i) => ({
+      id: `con_${i}`,
+      name: `Concepto ${String(i).padStart(3, "0")}`,
+      conceptType: "Doctrina",
+      mentions: 1,
+      documents: 1,
+    }));
+    libraryGraph.mockResolvedValue(
+      data({
+        concepts,
+        edges: concepts.map((c) => ({
+          versionId: "ver_1",
+          conceptId: c.id,
+          mentions: 1,
+          confidence: 0.9,
+        })),
+      }),
+    );
+    await mounted();
+    const groups = document.querySelector(".graph-index-groups") as HTMLElement;
+    expect(within(groups).queryByRole("button", { name: "Concepto 249" })).toBeNull();
+
+    Object.defineProperty(groups, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(groups, "clientHeight", { value: 500, configurable: true });
+    Object.defineProperty(groups, "scrollTop", { value: 600, configurable: true });
+    fireEvent.scroll(groups);
+
+    expect(within(groups).getByRole("button", { name: "Concepto 249" })).toBeTruthy();
+  });
+
+  it("gives every concept type its own colour, in the list and on the canvas", async () => {
+    await mounted();
+    // The fixture's only typed concept — the other two carry no `conceptType`.
+    const list = within(document.querySelector(".graph-index-groups") as HTMLElement);
+    const dot = list.getByRole("button", { name: /Gracia/ }).querySelector(".node-dot");
+    expect(dot?.className).toContain("type-0");
+    expect(node("Gracia").getAttribute("class")).toContain("type-0");
+    expect(node("Concilio").getAttribute("class")).not.toMatch(/type-\d/);
+
+    const legend = within(document.querySelector(".graph-type-legend") as HTMLElement);
+    expect(legend.getByText("Doctrina")).toBeTruthy();
+  });
 });

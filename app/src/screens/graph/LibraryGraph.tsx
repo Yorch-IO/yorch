@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -63,9 +63,18 @@ const FLOORS = [0.5, 0.6, 0.7, 0.8, 0.9] as const;
 /** The document view's marks, minus `dashed`: there is one edge type here. */
 const OVERVIEW_LEGEND = ["doc", "concept", "weight"] as const;
 
-/** How many nodes the accessible list renders before it says "and N more".
- *  10,835 list items is not a keyboard path either. */
+/** How many nodes of each kind the accessible list renders at first. Growing
+ *  this on demand, rather than rendering all 10,835 at once, is what infinite
+ *  scroll buys: the keyboard path stays complete without ever laying out a
+ *  list item nobody has scrolled to. */
 const LIST_CAP = 200;
+
+/** How many more rows a scroll near the bottom of the list reveals. */
+const LIST_STEP = 200;
+
+/** Distinct colours the concept-type legend cycles through. Matches the number
+ *  of `--graph-type-N` custom properties defined in `styles.css`. */
+const TYPE_PALETTE_SIZE = 8;
 
 type Selection =
   | { kind: "doc"; id: string }
@@ -83,6 +92,7 @@ interface Placed {
   y: number;
   r: number;
   label: string;
+  conceptType: string | null;
 }
 
 /** The same badge as the document view and Explore, meaning the same thing. */
@@ -124,6 +134,10 @@ export function LibraryGraph({
   const [onlyBook, setOnlyBook] = useState<string | null>(null);
   const [onlyFound, setOnlyFound] = useState(false);
   const [hideIsolated, setHideIsolated] = useState(false);
+  // How much of each kind's list is rendered, grown by `LIST_STEP` when the
+  // reader scrolls near the bottom rather than fetched — the whole envelope is
+  // already in memory, so "loading more" is `slice`, not a request.
+  const [listCap, setListCap] = useState(LIST_CAP);
   const [selected, setSelected] = useState<Selection>(null);
   const [hoverLabel, setHoverLabel] = useState<SVGGElement | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -227,6 +241,7 @@ export function LibraryGraph({
         // landmarks, so varying them buys nothing and costs legibility.
         r: i < index.docCount ? 9 : CONCEPT_RADIUS,
         label: index.label[i] as string,
+        conceptType: index.conceptType[i] ?? null,
       });
     }
     return placed;
@@ -271,17 +286,50 @@ export function LibraryGraph({
    *  canvas. */
   const listed = useMemo(() => {
     if (index === null) return [];
-    const rows: { id: string; kind: "doc" | "concept"; label: string }[] = [];
+    const rows: { id: string; kind: "doc" | "concept"; label: string; conceptType: string | null }[] = [];
     for (let i = 0; i < index.ids.length; i += 1) {
       const kind = i < index.docCount ? ("doc" as const) : ("concept" as const);
       if (kind === "doc" ? !showBooks : !showConcepts) continue;
       const id = index.ids[i] as string;
       if (matches !== null && !matches.has(id)) continue;
-      rows.push({ id, kind, label: index.label[i] as string });
+      rows.push({ id, kind, label: index.label[i] as string, conceptType: index.conceptType[i] ?? null });
     }
     rows.sort((a, b) => a.label.localeCompare(b.label));
     return rows;
   }, [index, showBooks, showConcepts, matches]);
+
+  /** Every distinct `conceptType` in the envelope, alphabetised so the colour a
+   *  type gets does not depend on the order concepts happened to arrive in —
+   *  the same determinism `force.ts` seeds positions for. Palette wraps past
+   *  `TYPE_PALETTE_SIZE` rather than growing unboundedly: a corpus with more
+   *  than eight named types would stop being a legend and start being noise. */
+  const conceptTypeOrder = useMemo(() => {
+    if (index === null) return [];
+    const seen = new Set<string>();
+    for (const type of index.conceptType) {
+      if (type !== null) seen.add(type);
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  }, [index]);
+
+  const typeSlot = useCallback(
+    (type: string | null): number | null =>
+      type === null ? null : conceptTypeOrder.indexOf(type) % TYPE_PALETTE_SIZE,
+    [conceptTypeOrder],
+  );
+
+  // A new filter or search is a different list, so the reader should not land
+  // on it already scrolled three pages down a list that no longer exists.
+  useEffect(() => {
+    setListCap(LIST_CAP);
+  }, [libraryId, showBooks, showConcepts, needle]);
+
+  const onIndexScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 64) {
+      setListCap((c) => c + LIST_STEP);
+    }
+  }, []);
 
 
   // -- interaction ---------------------------------------------------------
@@ -771,6 +819,7 @@ export function LibraryGraph({
                   const dimmed = lit !== null && !lit.has(p.id);
                   const found = matches !== null && matches.has(p.id);
                   const chosen = selected?.id === p.id;
+                  const slot = typeSlot(p.conceptType);
                   // The parent scales the position; this inverse scale keeps
                   // the node and its label at their screen-space size.
                   //
@@ -787,7 +836,9 @@ export function LibraryGraph({
                       data-label={p.label}
                       className={`node concept ${chosen ? "is-active" : ""} ${
                         found ? "is-shared" : ""
-                      } ${dimmed && !found ? "is-faded" : ""}`}
+                      } ${dimmed && !found ? "is-faded" : ""} ${
+                        slot !== null ? `type-${slot}` : ""
+                      }`}
                       transform={`translate(${p.x} ${p.y}) scale(${1 / zoom})`}
                       role="button"
                       tabIndex={-1}
@@ -947,14 +998,30 @@ export function LibraryGraph({
                 <p className="muted small">
                   {t("graph.listing", {
                     shown:
-                      Math.min(listed.filter((p) => p.kind === "doc").length, LIST_CAP) +
-                      Math.min(listed.filter((p) => p.kind === "concept").length, LIST_CAP),
+                      Math.min(listed.filter((p) => p.kind === "doc").length, listCap) +
+                      Math.min(listed.filter((p) => p.kind === "concept").length, listCap),
                     total: listed.length,
                   })}
                 </p>
-                <div className="graph-index-groups">
+                {conceptTypeOrder.length > 0 && (
+                  <ul className="graph-legend graph-type-legend">
+                    {conceptTypeOrder.map((type, i) => (
+                      <li key={type}>
+                        <span
+                          className={`dot node-dot type-${i % TYPE_PALETTE_SIZE}`}
+                          aria-hidden="true"
+                        />
+                        <span>{type}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {/* Grown by `LIST_STEP` on scroll rather than paginated with
+                    buttons: the whole envelope is already in memory, so there
+                    is nothing to wait for and no page number worth naming. */}
+                <div className="graph-index-groups" onScroll={onIndexScroll}>
                   {(["doc", "concept"] as const).map((kind) => {
-                    const rows = listed.filter((p) => p.kind === kind).slice(0, LIST_CAP);
+                    const rows = listed.filter((p) => p.kind === kind).slice(0, listCap);
                     if (rows.length === 0) return null;
                     return (
                       <div className="graph-index-group" key={kind}>
@@ -962,14 +1029,22 @@ export function LibraryGraph({
                           {t(kind === "doc" ? "graph.overviewLegend.doc" : "graph.overviewLegend.concept")}
                         </h4>
                         <ul className="graph-index">
-                          {rows.map((p) => (
-                            <li key={p.id}>
-                              <button type="button" onClick={() => pick(p)}>
-                                <span className={`dot node-dot node-${p.kind}`} aria-hidden="true" />
-                                {p.label}
-                              </button>
-                            </li>
-                          ))}
+                          {rows.map((p) => {
+                            const slot = typeSlot(p.conceptType);
+                            return (
+                              <li key={p.id}>
+                                <button type="button" onClick={() => pick(p)}>
+                                  <span
+                                    className={`dot node-dot node-${p.kind} ${
+                                      slot !== null ? `type-${slot}` : ""
+                                    }`}
+                                    aria-hidden="true"
+                                  />
+                                  {p.label}
+                                </button>
+                              </li>
+                            );
+                          })}
                         </ul>
                       </div>
                     );

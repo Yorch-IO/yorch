@@ -27,6 +27,21 @@
      Tracks --graph-bg and is named separately because it is a different job. */
   --graph-halo: #fbfcfd;
 
+  /* A concept's `conceptType` — a fact the extractor proposed, not a control
+     the reader set — gets its colour from this fixed, ordered palette
+     (Okabe-Ito, colourblind-safe) rather than from a hash of the string, so
+     the same type gets the same colour across a session and the legend can
+     name eight without running out. Wraps past eight; see `TYPE_PALETTE_SIZE`
+     in LibraryGraph.tsx. */
+  --graph-type-0: #e69f00;
+  --graph-type-1: #56b4e9;
+  --graph-type-2: #009e73;
+  --graph-type-3: #d1b301;
+  --graph-type-4: #0072b2;
+  --graph-type-5: #d55e00;
+  --graph-type-6: #cc79a7;
+  --graph-type-7: #7570b3;
+
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 15px;
@@ -54,6 +69,15 @@
     --graph-centre-fill: #7aa2f7;
     --graph-centre-fg: #10131a;
     --graph-halo: #191c22;
+
+    --graph-type-0: #f0b34d;
+    --graph-type-1: #7cc9f2;
+    --graph-type-2: #3ecfa0;
+    --graph-type-3: #e6cd4d;
+    --graph-type-4: #4a9fe0;
+    --graph-type-5: #ff8f4d;
+    --graph-type-6: #e0a0c2;
+    --graph-type-7: #a29be0;
   }
 }
 
@@ -1278,6 +1302,19 @@ button.link.active {
   stroke: var(--graph-concept-stroke);
 }
 
+/* A typed concept's colour, generated for the eight `type-N` classes
+   LibraryGraph.tsx assigns from `conceptTypeOrder`. Declared after the
+   default above so a type overrides it, and before `.is-hovered` below so
+   hovering still wins over a type's own colour. */
+.graph-canvas .node.concept.type-0 .shape { fill: var(--graph-type-0); stroke: var(--graph-type-0); }
+.graph-canvas .node.concept.type-1 .shape { fill: var(--graph-type-1); stroke: var(--graph-type-1); }
+.graph-canvas .node.concept.type-2 .shape { fill: var(--graph-type-2); stroke: var(--graph-type-2); }
+.graph-canvas .node.concept.type-3 .shape { fill: var(--graph-type-3); stroke: var(--graph-type-3); }
+.graph-canvas .node.concept.type-4 .shape { fill: var(--graph-type-4); stroke: var(--graph-type-4); }
+.graph-canvas .node.concept.type-5 .shape { fill: var(--graph-type-5); stroke: var(--graph-type-5); }
+.graph-canvas .node.concept.type-6 .shape { fill: var(--graph-type-6); stroke: var(--graph-type-6); }
+.graph-canvas .node.concept.type-7 .shape { fill: var(--graph-type-7); stroke: var(--graph-type-7); }
+
 /* The touch target. `fill: none` with `pointer-events: all` rather than a
    transparent fill: it is the one combination that is reliably hit-tested
    without painting anything. */
@@ -1835,6 +1872,17 @@ button.link.active {
 .node-dot.node-concept {
   background: var(--graph-concept-stroke);
 }
+
+/* Declared after `.node-concept` so a typed concept's dot overrides the
+   untyped default, matching the canvas's own type-N colouring. */
+.node-dot.type-0 { background: var(--graph-type-0); }
+.node-dot.type-1 { background: var(--graph-type-1); }
+.node-dot.type-2 { background: var(--graph-type-2); }
+.node-dot.type-3 { background: var(--graph-type-3); }
+.node-dot.type-4 { background: var(--graph-type-4); }
+.node-dot.type-5 { background: var(--graph-type-5); }
+.node-dot.type-6 { background: var(--graph-type-6); }
+.node-dot.type-7 { background: var(--graph-type-7); }
 
 /* A legend for a fieldset that needs no visible one: the two checkboxes label
    themselves, and the group still needs a name for a screen reader. */

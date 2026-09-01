@@ -9,8 +9,9 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from . import config
-from .activities import asking, ingest, paid, rebuild, removing
+from .activities import activating, asking, ingest, paid, rebuild, removing
 from .activities.health import probe_provider, probe_services
+from .workflows.activation import ActivationWorkflow
 from .workflows.ask import AskWorkflow
 from .workflows.ingest import IngestWorkflow
 from .workflows.ping import PingWorkflow
@@ -26,6 +27,7 @@ WORKFLOWS = [
     RebuildWorkflow,
     AskWorkflow,
     RemovalWorkflow,
+    ActivationWorkflow,
     ProviderProbeWorkflow,
 ]
 
@@ -40,6 +42,7 @@ ACTIVITIES = [
     asking.record_question_cost,
     removing.remove_document,
     removing.remove_version,
+    activating.promote_version,
     ingest.stage_source,
     ingest.register_document,
     ingest.extract_text,

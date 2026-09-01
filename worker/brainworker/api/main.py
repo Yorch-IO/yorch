@@ -1223,7 +1223,18 @@ async def activate_version_route(library_id: str, version_id: str) -> dict[str, 
 
     try:
         result = await asyncio.to_thread(
-            activate_version, library_id, version_id
+            activate_version,
+            library_id,
+            version_id,
+            # Named rather than defaulted, the same decision `reindex_document`
+            # records: this plane *is* the legacy organisation, it has no
+            # accounts, and saying so is what keeps the value from being an
+            # accident. It was an accident until 2026-08-31 — the parameter
+            # defaulted, so this route answered 404 for every version any other
+            # organisation owned, which is every version on this installation
+            # since the corpus moved to `preprod`. The paid plane reaches the
+            # same function through `ActivationWorkflow`, carrying its own.
+            tenant_id=LEGACY_TENANT_ID,
         )
     except ActivationError as e:
         raise HTTPException(

@@ -34,7 +34,6 @@ from . import config
 from .catalog import Catalog
 from .graph import Graph
 from .graph import projection as proj
-from .graph.schema import LEGACY_TENANT_ID
 
 log = logging.getLogger(__name__)
 
@@ -61,8 +60,26 @@ class Activation:
 
 
 def activate_version(
-    library_id: str, version_id: str, *, tenant_id: str = LEGACY_TENANT_ID
+    library_id: str, version_id: str, *, tenant_id: str
 ) -> Activation:
+    """Promote `version_id`, for the organisation that owns it.
+
+    **The tenant is required, and it used to default to the legacy one.** That
+    default is the same mistake `VersionNode.tenant_id` already made and it fails
+    the same two ways, because this function does both things: the catalog lookup
+    below is the authorization predicate — a salted id is not authorization, so
+    the default silently refused every organisation that is not the legacy one —
+    and `proj.activate` builds a `VersionNode` from it, so a caller that meant a
+    different organisation would have written its activation into the legacy
+    graph under an id nothing there computes.
+
+    Measured 2026-08-31: `ver_0b71d21eeb3228f54437d9cf` sat `pending` in
+    `tnt_f489b4a62220158ef6790c07` with its index paid for, its 600 points in
+    Qdrant and its 600 chunks projected — and the one route that could have
+    published it for $0 answered 404 for the organisation that owned it. Naming
+    the tenant at each call site is what makes the free plane's answer a decision
+    rather than an accident; it is that organisation, and it says so.
+    """
     settings = config.load()
 
     with Catalog(settings.database_url) as catalog:

@@ -1165,7 +1165,111 @@ session's files.
   'decimal.Decimal'`. Harmless wherever it is only serialised; a trap the first
   time anything compares or sums one. `repo.py:116`.
 
-## Six defects that were recorded here and are now fixed
+- **The free plane's `/reindex` finds another organisation's document and then
+  re-indexes it as the legacy one.** `reindex_document` looks the document up
+  with `catalog.document(document_id, library_id=library_id)` — **no tenant**
+  (`main.py:1259`) — and then builds an `IngestRequest` with
+  `tenant_id=LEGACY_TENANT_ID`. Every *listing* took a required tenant when that
+  hole was closed; this lookup has an id, so it was left alone, and an id is not
+  authorization. The result is not a refusal but a silent cross-tenant write: the
+  document's chunks, sections and citations would be projected into the legacy
+  graph under unsalted ids, which is exactly the `VersionNode.tenant_id` failure
+  already recorded above, reached from a different direction. Found 2026-08-31
+  while re-indexing a `preprod` document; the run was started through Temporal
+  with a hand-built request instead. `rebuild_document` is worth checking for the
+  same shape. The paid plane is unaffected — it carries `@ActiveTenant()`.
+
+- **`header_patterns` cannot do anything for this corpus, and the validator does
+  not know that.** Only `extract/pdf_text.py` and `extract/pdf_ocr.py` call
+  `rules.header_res()`; the plain extractor is contractually forbidden from
+  touching the bytes, because `char_span` indexes the file itself — its docstring
+  says so. Every document here arrives as a `.corrected.txt`, so **running
+  headers are never stripped from any of them**. This is not cosmetic: the
+  running headers are what make a level-2 heading pattern look undiscriminating,
+  so the validator rejects it and the document is chunked with *no* sections at
+  all. Measured 2026-08-31 on `01_RetoDeDios_INT-S.pdf.corrected.txt`: the
+  rejected pattern matched 22.6% of paragraphs, and of its 325 hits **203 were
+  real sub-headings appearing exactly once** — the book has ~190 sections and got
+  0. Worked around in that document's profile by excluding the 28 repeated
+  heading-shaped lines inside `heading_l2_pattern` itself, which is the wrong
+  place for it: it is per-document text living in a rule keyed by a *structural*
+  fingerprint, so it travels to any document that shares one. The fix is either a
+  plain extractor that can strip without moving offsets, or a validator that
+  discounts repeated lines before judging a pattern.
+
+- **`_topical_overlap` reports 0.0 for every plain-text document, and 0.0 is the
+  value that means "most dangerous".** It compares the current document's
+  `repeated_lines` and `first_lines` against the *filename stem* of the profile's
+  `learned_from` (`activities/ingest.py:1251`). Only `pdf_text.py` ever fills
+  those two evidence fields, so for a `.txt` both are empty, the "no basis to
+  judge" branch returns 0.0 — and `ProfileWarning.similarity` documents a low
+  value as the dangerous case: *same structure, unrelated subject matter, so the
+  wrong heading rules get applied*. The branch's own comment says reporting 0.0
+  "would assert 'unrelated', which is a stronger claim than the evidence
+  supports", and then does it anyway. Measured 2026-08-31: a document re-indexed
+  with **its own** profile raised a 0.0-similarity collision warning naming its
+  own filename in `collides_with`. This is the same blind spot as the fixed
+  "a document's own profile read as a structural collision" entry below, still
+  open in the *warning* path, and it lands at the gate — the moment a person
+  decides whether to spend, and where the advice it implies is `ignore_profile`,
+  which throws the profile away and pays for a full run. The check is the one
+  `build_evalset` and `n_load_profile` already make: `learned_from == source_key`.
+  A "cannot tell" needs to be distinguishable from a measured zero, as
+  `/project-summary` already does with `available`.
+
+- **A re-index leaves the previous run's semantics in the graph, and they now
+  name chunks whose text has moved.** The vector side prunes — `QdrantWriter.
+  prune_tail` runs on every index — and `project_structure` prunes the citations
+  of the chunks it just projected. Nothing prunes `Claim` nodes or `MENTIONS`
+  edges: `project_claims` and `project_semantic_edges` MERGE, so a second
+  extraction over a different cutting *adds*. Measured 2026-09-01 on
+  `ver_0b71d21eeb3228f54437d9cf`, re-indexed with a corrected profile that took
+  it from 600 chunks to 631: the graph held 5,001 claims, the run extracted
+  3,055, and the total came to **8,043 — 13 converged and 4,988 (62%) were left
+  behind**. `MENTIONS` the same way: 4,057 of 7,554 (53.7%) stale.
+  This is not inert debris like the 214 orphan claims recorded above. `claim_id`
+  is `f(chunk_id, text)` and `chunk_id` is `f(version_id, index)`, so re-chunking
+  keeps every id *alive* while the text underneath it changes — the stale claims
+  are attached to chunks that no longer contain the quote they carry, and they
+  are indistinguishable from good ones at read time. That is precisely the state
+  `Semantics.claims_verified` exists to keep visible, arrived at from a direction
+  it does not cover: the quote was verified, against a chunk that has since been
+  re-cut.
+  **A rebuild has the same shape** — `replay_semantics` replays an artifact into
+  the same MERGE — and is worth checking. The fix mirrors `remove_version`
+  exactly and is four statements: take `_CANDIDATE_CONCEPTS` *before* deleting,
+  delete the claims and `MENTIONS` this run did not produce, then
+  `_COLLECT_ORPHAN_CONCEPTS` over the candidates. The set is computable with no
+  guesswork, because the run's own `semantics.json` names exactly what it
+  produced.
+
+- **A profile's `retrieval` block is measured, persisted, and never read by the
+  thing it describes.** `answering/retrieve.py` uses module constants —
+  `MIN_SCORE = 0.60` (line 37) and `PER_SECTION = 2` (line 44) — so the only
+  reader of `profile.retrieval` is `evaluate_index`. Per-family retrieval tuning
+  is therefore a number in a file: `propose_tuning`'s *free* half exists to
+  choose exactly these three parameters, and choosing them changes no answer.
+  Measured 2026-09-01 on `ver_0b71d21eeb3228f54437d9cf` (631 chunks, the 80
+  questions the profile already owns): sweeping `per_section` × `min_score`
+  found `per_section = 2` already optimal and `min_score` 0.60 → 0.55 worth
+  **recall@5 0.8750 → 0.9125 and MRR@10 0.7827 → 0.7929**. The profile records
+  0.55 now. Nothing answers differently.
+  The fix is not to move the constants — they are global, so one document's
+  measurement would re-tune every document in both organisations — but to have
+  `retrieve.search` read the retrieval block of the version it is scoped to,
+  keeping the constants as the default for a version with no profile.
+
+  **And a rule the sweep produced, worth not relearning: a dense floor below the
+  measured noise floor is not a tuning win.** `min_score = 0.50` scored best of
+  everything tried (MRR@10 0.7990) and is *wrong*: the noise floor for this index
+  is 0.5153, which is what a **wrong** chunk scores, so 0.50 wins the metric by
+  admitting exactly what the floor was measured to exclude. Any automated search
+  over `min_score` needs `noise_floor` as a hard lower bound, or it will
+  reliably pick the value that cannot tell a hit from a miss — and it will look
+  like an improvement, because the eval questions all have a right answer to
+  find and none of them is off-corpus.
+
+## Eight defects that were recorded here and are now fixed
 
 Kept because each fix carries a rule worth not relearning.
 
@@ -1247,6 +1351,71 @@ Kept because each fix carries a rule worth not relearning.
   and by the `DO UPDATE` the two are indistinguishable. The picker renders the
   name too: fixing the write without the read would have left the same string
   on screen.
+
+- **An `async` activity with no `await` in it froze the whole worker, and the
+  heartbeat that was supposed to notice could not be sent.** `extract_semantics`
+  was `async def` around `_extract_passes`, a *synchronous* per-chunk network
+  call, and `runner.py` builds the `Worker` with no `activity_executor` — so the
+  activity ran directly on the worker's only event loop and held it for the whole
+  document. `activity.heartbeat()` only **records**; the loop is what flushes it.
+  Nothing was flushed, `PAID_HEARTBEAT_TIMEOUT` fired at minute five on an
+  activity that was working perfectly, and the blocked coroutine could not see
+  the cancellation either — cancellation is delivered through the same loop — so
+  it finished all 600 chunks, projected them, wrote `semantics.json` and billed
+  $4.72 into an attempt Temporal had closed 45 minutes earlier. `_PAID_RETRY`
+  then ran the entire stage again, identically. **Measured 2026-08-31 on
+  `ver_0b71d21eeb3228f54437d9cf`: $10.017265 spent, $9.4539 of it semantics
+  charged twice, and the run ended `failed`.** The corroborating symptom is worth
+  recognising: the worker log flushed dozens of `query task not found, or already
+  expired` all at one timestamp — every workflow query the UI had polled while
+  the loop was blocked. It was not the activity that was frozen, it was the
+  worker. `docker inspect` said `restarts=0`, which rules out the orphaning case
+  the heartbeat had just been added for.
+  The fix is one `await asyncio.to_thread`, which is the pattern
+  `activities/removing.py` and `asking.py` already use and state the reason for:
+  *"a thread keeps the activity's own event loop free, which is what lets
+  Temporal heartbeat and cancel it."* Awaiting once per chunk restores the ~5s
+  interval the timeout was calibrated against.
+  `test_extraction_leaves_the_event_loop_free_to_heartbeat` measures the loop
+  itself — a ticker that must get a turn while extraction is in flight — because
+  no other test in the suite can see blocking: they all call activities as plain
+  functions. **Verified by reverting the fix: the ticker gets 0 turns.**
+  The constant was never the bug and is unchanged.
+  **Remaining exposure, deliberately not widened into this fix:** the projection
+  block and `_condense_descriptions` still run inline on the loop. Projection is
+  seconds; condensation is one generation call per concept and would re-create
+  this exactly — it is only safe because `condense_descriptions` is off.
+  A generalisation of this: **anything expensive that lands in the stores before
+  its activity returns is not protected by the run's outcome.** Everything this
+  run paid for is in Qdrant and Memgraph — 600 points, 600 chunks, 2,937
+  concepts, 5,001 claims — under a version the catalog still calls `pending`.
+  And because extraction is not deterministic and `claim_id` keys on the model's
+  own paraphrase, the two attempts **MERGE'd as a union rather than converging**:
+  the graph holds 5,001 claims where `semantics.json` records 2,965. Paying twice
+  does not produce the same document twice.
+
+- **The one operation that publishes an index already paid for was unreachable
+  by everyone who pays.** `activation.activate_version` took
+  `tenant_id: str = LEGACY_TENANT_ID`, and the FastAPI route called it without
+  one. That default does both halves of the damage the `VersionNode.tenant_id`
+  entry above describes, because this function both checks the tenant and writes
+  it: the catalog lookup is the authorization predicate, so the default *refused*
+  every other organisation with a 404; and `proj.activate` builds a `VersionNode`
+  from it, so a caller who did mean another organisation would have written the
+  activation into the legacy graph. The paid plane made the point moot by not
+  serving the route at all — the one path the FastAPI plane had and it did not.
+  So the escape hatch that
+  `activation.py` documents at length, and that the app already wires end to end
+  (`lib.rs:746` → `control.rs:1330` → `POST …/activate`), could not be reached
+  for any version in `preprod` — which since 2026-08-31 is every version on this
+  installation. Found while diagnosing the run above, where it was the $0 way out
+  of a $10 failure. The parameter is required and keyword-only now, both call
+  sites name their tenant, and the paid plane reaches the same Python through a
+  new `ActivationWorkflow` — thin, exactly like `RemovalWorkflow` and for the
+  same recorded reason: the catalog-first-then-graph ordering lives in one module
+  so a second implementation cannot drift from it. The activity is registered as
+  `promote_version`, because `activate_version` is already an activity name and a
+  collision surfaces as a worker accepting a task and then failing it.
 
 ## Working on the engine (`docaget/`)
 

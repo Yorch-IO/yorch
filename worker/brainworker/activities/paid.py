@@ -12,6 +12,7 @@ that re-embedded a book would double a real bill.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -1361,6 +1362,12 @@ async def extract_semantics(
         # late heartbeat would retry an expensive stage — and a worker restart
         # then orphaned this activity for what would have been three more hours
         # before the same retry happened anyway. See `PAID_HEARTBEAT_TIMEOUT`.
+        #
+        # **This call only records; the event loop is what sends.** That is why
+        # the extraction below runs in a thread, and the two lines are one
+        # decision: with the synchronous call inline, this loop held the worker's
+        # only event loop for the whole document, no heartbeat was ever flushed,
+        # and the timeout fired on an activity that was working perfectly.
         # Guarded because every test in `tests/activities/` calls these as plain
         # functions rather than through a worker — which is the pattern that
         # keeps them cheap to test — and `heartbeat` raises outside an activity
@@ -1370,8 +1377,25 @@ async def extract_semantics(
             activity.heartbeat(done, len(rows))
         chunk = make_chunk_id(registered.version_id, row["index"])
         try:
-            passes = _extract_passes(
-                adapter, row["text"], rounds=settings.gemini.max_gleaning
+            # In a thread, like `activities/removing.py` and `asking.py`, and for
+            # the reason `asking.py` states: a synchronous network call left on
+            # the activity's own event loop blocks everything that loop also
+            # owes — the heartbeat flush above, this workflow's task, every
+            # query the UI polls with. `_extract_passes` is one such call per
+            # chunk, so the block lasts the whole document.
+            #
+            # **Measured 2026-08-31 on `ver_0b71d21eeb3228f54437d9cf`**, 600
+            # chunks: the loop was held for 50 minutes, the 5-minute heartbeat
+            # timeout fired at minute five, and the blocked coroutine could not
+            # see the cancellation either — so it ran all 600 chunks, projected
+            # them, wrote the artifact and billed $4.72 into a slot Temporal had
+            # closed 45 minutes earlier. `_PAID_RETRY` then did it again:
+            # $9.45 for a run that ended `failed`. Awaiting here yields once per
+            # chunk, which is the ~5s interval the timeout was calibrated
+            # against in the first place.
+            passes = await asyncio.to_thread(
+                _extract_passes,
+                adapter, row["text"], rounds=settings.gemini.max_gleaning,
             )
         except Exception as e:
             # One unparseable chunk must not lose the whole document's

@@ -438,6 +438,87 @@ async def test_every_semantic_edge_is_attributed_to_the_chunk_that_produced_it(
     }
 
 
+async def test_extraction_leaves_the_event_loop_free_to_heartbeat(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The heartbeat this stage sends is only *recorded* by `activity.heartbeat`;
+    the activity's own event loop is what flushes it to the server, and Temporal
+    fails an attempt that goes quiet for `PAID_HEARTBEAT_TIMEOUT`.
+
+    So a synchronous generation call left inline is not merely slow. It holds the
+    worker's only event loop for the whole document — no heartbeat sent, no
+    workflow task processed, no query answered — and the timeout then fires on an
+    activity that is working perfectly. Measured 2026-08-31 on
+    `ver_0b71d21eeb3228f54437d9cf`, 600 chunks: the loop was held 50 minutes, and
+    both attempts ran every call, projected, and billed ~$4.72 each into a slot
+    Temporal had already failed. $9.45, and the run ended `failed`.
+
+    Nothing else in this suite can see that, because every other test calls these
+    as plain functions where blocking is invisible. This one measures the loop:
+    a ticker that has to get a turn while extraction is in flight. Inline, it
+    gets none and stops at zero.
+    """
+    import asyncio
+    import json
+    import time
+
+    #: Long enough that a blocked loop cannot hide behind scheduling noise,
+    #: short enough that four of them stay a fast test.
+    CALL = 0.02
+    TICK = 0.002
+
+    class SlowProvider(FakeProvider):
+        """Synchronous and slow, like the real one. `_extract_passes` is not a
+        coroutine, and that is the property under test."""
+
+        def generate(self, prompt, **kw):
+            time.sleep(CALL)
+            return super().generate(prompt, **kw)
+
+    fake = SlowProvider(semantics=json.dumps({
+        "conceptos": [{"nombre": "Providencia", "tipo": "doctrina", "confianza": 0.9}],
+        "afirmaciones": [],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    class FakeGraph:
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+        def ensure_schema(self): pass
+
+    monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
+    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c, **k: len(c))
+    monkeypatch.setattr(paid.proj, "project_claims", lambda g, c, **k: len(c))
+    monkeypatch.setattr(paid.proj, "project_semantic_edges", lambda g, e: len(e))
+
+    ticks = 0
+
+    async def heartbeat_loop() -> None:
+        """Stands in for everything the loop owes while a chunk is in flight."""
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(TICK)
+            ticks += 1
+
+    registered, _ = _ids()
+    chunked = _chunked(workspace, "run_beat", 4)
+
+    beating = asyncio.create_task(heartbeat_loop())
+    try:
+        await paid.extract_semantics("run_beat", registered, chunked)
+    finally:
+        # Cancelled with no await in between, so a tick counted below is one that
+        # happened *during* extraction rather than after it returned.
+        beating.cancel()
+
+    assert len(fake.generate_calls) == 4, "one call per chunk, as always"
+    assert ticks >= 4, (
+        f"the event loop got {ticks} turn(s) across 4 blocking calls: the "
+        "extraction is holding it, so no heartbeat can be flushed and Temporal "
+        "will fail this attempt while it is still working"
+    )
+
+
 async def test_one_unparseable_chunk_does_not_lose_the_whole_document(
     workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ):

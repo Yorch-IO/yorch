@@ -88,6 +88,23 @@ PAID_TIMEOUT = timedelta(hours=4)
 #: one per chunk at roughly one every five seconds. Tripping it spuriously needs
 #: a single generation call to stall for five minutes, which nothing measured
 #: here comes close to.
+#:
+#: **That last sentence was true and the timeout fired anyway, twice, on the
+#: very next run.** It assumed a heartbeat that is recorded is a heartbeat that
+#: is sent. `activity.heartbeat` only records; the activity's event loop flushes
+#: it — and `extract_semantics` was an `async def` with no `await` in it,
+#: running a synchronous per-chunk network call, so the loop was held for the
+#: whole document and flushed nothing. Measured on
+#: `ver_0b71d21eeb3228f54437d9cf`, 600 chunks: both attempts completed all 600
+#: calls, projected them and billed ~$4.72 each into an attempt Temporal had
+#: already failed — **$9.45 for a run that ended `failed`**, and a worker frozen
+#: for 97 minutes (its workflow queries came back all at once as
+#: `query task not found, or already expired`).
+#:
+#: So this constant is sound and was never the bug. The bug was that nothing
+#: could send what it measures; the extraction runs in a thread now. A heartbeat
+#: timeout on this stage again means a genuinely stalled call, which is what it
+#: was always supposed to mean.
 PAID_HEARTBEAT_TIMEOUT = timedelta(minutes=5)
 
 #: A paid activity is retried far less eagerly than a free one. Every attempt

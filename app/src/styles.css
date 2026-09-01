@@ -1160,13 +1160,21 @@ button.link.active {
 
 /* The canvas scales with the window rather than scrolling: a node-link picture
    cut off at the edge hides exactly the relationship it was drawn to show.
-   Scoped to a direct child of `.graph-main` so the legend's swatches, which
-   share `.graph-canvas` precisely so their marks cannot drift from the real
-   ones, do not inherit a full-width box. */
-.graph-main > .graph-canvas {
-  width: 100%;
-  height: auto;
-  max-height: 34rem;
+   Scoped through `.graph-stage` so the legend's swatches, which share
+   `.graph-canvas` precisely so their marks cannot drift from the real ones, do
+   not inherit a full-width box.
+
+   **The stage is not decoration, and neither is `position` on both children.**
+   The library view paints its edges on a `<canvas>` beneath the SVG, so
+   something has to establish a containing block and take its height from the
+   SVG, which stays in flow. And an absolutely positioned element paints in step
+   8 of the painting algorithm while a static in-flow one paints in step 4 — so
+   positioning *only* the canvas puts it on top of the nodes and the picture
+   becomes a flat wash with nothing on it. Both are positioned, and the ground,
+   the border and the gesture cursor live on the stage: an opaque background on
+   the SVG would hide the canvas underneath it. */
+.graph-stage {
+  position: relative;
   display: block;
   background: var(--graph-bg);
   border: 1px solid var(--line);
@@ -1174,6 +1182,46 @@ button.link.active {
   /* Suppresses the double-tap-to-zoom delay, so a tap on a node registers at
      once instead of 300ms later. */
   touch-action: manipulation;
+}
+
+.graph-stage > .graph-edges {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  /* The edges are a picture, not a target: every pointer event belongs to the
+     SVG above. */
+  pointer-events: none;
+}
+
+/* Two shapes, because the two views are not built the same way: the document
+   view still hangs its SVG straight off `.graph-main`, and only the library
+   view has a stage under it. Both selectors are needed — dropping the first
+   silently takes the document view's canvas down to a replaced element's
+   default 300x150, and no test in this project can see that. */
+.graph-main > .graph-canvas,
+.graph-main > .graph-stage > .graph-canvas {
+  width: 100%;
+  height: auto;
+  max-height: 34rem;
+  display: block;
+}
+
+/* The document view has no canvas underneath, so it keeps the ground itself. */
+.graph-main > .graph-canvas {
+  background: var(--graph-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  touch-action: manipulation;
+}
+
+.graph-main > .graph-stage > .graph-canvas {
+  position: relative;
+  z-index: 1;
+  /* Transparent, not `--graph-bg`: the ground belongs to the stage, and
+     painting it here would cover the edges drawn beneath. */
+  background: transparent;
 }
 
 .graph-canvas .edge {
@@ -1292,11 +1340,17 @@ button.link.active {
 
 /* Hover, keyboard focus and selection are one mechanism: the component keeps a
    single `active` node from both pointer and focus events, marks it and its
-   incident edge `is-active`, and everything else takes the dim. */
+   incident edge `is-active`, and everything else takes the dim.
+
+   **The transition belongs to the small side.** It used to sit on the dim, so
+   selecting one node started an opacity animation on every element in the
+   canvas at once — up to 12,626 of them on the real library, ticked for 120 ms.
+   The dim lands at once now and the *lit* nodes are what animate, of which
+   there are at most a few hundred. It also reads better: attention should snap
+   to what was lit, and the 120 ms should belong to the thing coming up. */
 .graph-canvas.is-probing .node,
 .graph-canvas.is-probing .edge {
   opacity: 0.2;
-  transition: opacity 120ms ease-out;
 }
 
 .graph-canvas.is-probing .edge.is-active {
@@ -1315,6 +1369,28 @@ button.link.active {
 
 .graph-canvas.is-probing .node.is-active {
   opacity: 1;
+  transition: opacity 120ms ease-out;
+}
+
+/* The hovered concept's name, drawn once for the whole canvas rather than once
+   per node. Hidden by default and shown by the delegated listener; `display`
+   rather than `opacity` so it is out of hit-testing while it is away. */
+.graph-hover {
+  display: none;
+}
+
+.graph-hover.is-showing {
+  display: block;
+}
+
+.graph-hover text {
+  font-size: 33px;
+  fill: var(--fg);
+  pointer-events: none;
+  paint-order: stroke fill;
+  stroke: var(--graph-halo);
+  stroke-width: 3;
+  stroke-linejoin: round;
 }
 
 /* Drawn rather than left to the user agent: an outline on an SVG `<g>` renders
@@ -1520,8 +1596,19 @@ button.link.active {
   /* Taller than the document view's: the overview is the picture, and its
      nodes are small enough that the extra rows are what make labels findable. */
   max-height: 44rem;
+}
+
+/* The gesture belongs to the stage, because the stage is what the pointer is
+   over — the SVG sits on top of it but the canvas does not, and a cursor set
+   only on the SVG would flicker across the letterbox bands `xMidYMid meet`
+   leaves when `max-height` bites. */
+.graph-overview .graph-stage {
   cursor: grab;
   touch-action: none;
+}
+
+.graph-overview .graph-stage:active {
+  cursor: grabbing;
 }
 
 /* The document graph now shares the overview's pan gesture. Individual
@@ -1568,6 +1655,110 @@ button.link.active {
   margin-top: 0.5rem;
 }
 
+/* -- the controls that decide what is drawn ---------------------------------
+ *
+ * A fieldset of its own, separate from the row above, because the two kinds of
+ * control behave differently and the reader deserves to know which is which:
+ * everything here is derived from an envelope already in memory — measured at
+ * 0.88 ms on the real library — and the confidence floor above still spends a
+ * request. A reader who cannot tell them apart learns to distrust both.
+ *
+ * Declared *below* the shared 76rem query near the top of this file, so it
+ * carries its own — the reason `.graph-layout` records: a media query is not a
+ * stronger rule, only a conditional one, and at equal specificity the later
+ * rule wins. */
+.graph-tuner {
+  display: grid;
+  grid-template-columns: minmax(18rem, 30rem) minmax(10rem, 1fr) auto;
+  gap: 0.5rem 1.25rem;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin: 0.75rem 0 0;
+  padding: 0.6rem 0.9rem;
+}
+
+@media (max-width: 76rem) {
+  .graph-tuner {
+    grid-template-columns: 1fr;
+  }
+}
+
+.graph-tuner > legend {
+  padding: 0 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.graph-degree {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.1rem 0.6rem;
+  align-items: center;
+}
+
+.graph-degree > label {
+  grid-row: 1 / 3;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.graph-degree-slider {
+  grid-column: 2;
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* The stops, as real elements. A range input renders `<datalist>` ticks in
+   Blink and not in WebKitGTK, so the labels cannot live there. */
+.graph-degree-stops {
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.graph-degree-stops li {
+  text-align: center;
+}
+
+.graph-degree-stops li:first-child {
+  text-align: left;
+}
+
+.graph-degree-stops li:last-child {
+  text-align: right;
+}
+
+/* Tabular figures and a floor width, or the row reflows every time a digit
+   changes — the same reason `.metric-value` has them. */
+.graph-degree-count {
+  grid-column: 2;
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-height: 1.3em;
+}
+
+.graph-toggles {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.graph-toggles label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
 .graph-filters {
   display: flex;
   align-items: center;
@@ -1586,14 +1777,30 @@ button.link.active {
 }
 
 /* The keyboard path to every node, including the ones the degree filter keeps
-   off the canvas. Scrolls on its own so the pane does not grow past the
-   canvas beside it. */
-.graph-index {
-  list-style: none;
-  margin: 0.4rem 0 0;
-  padding: 0;
+   off the canvas, grouped into a books list and a concepts list so the two
+   kinds are not read as one undifferentiated pile. The pair scrolls together
+   so the whole group stays within the canvas's height. */
+.graph-index-groups {
   max-height: 26rem;
   overflow-y: auto;
+}
+
+.graph-index-heading {
+  margin: 0.6rem 0 0.2rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.graph-index-group:first-child .graph-index-heading {
+  margin-top: 0.4rem;
+}
+
+.graph-index {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .graph-index li button {
@@ -1748,5 +1955,218 @@ button.link.active {
 @media (max-width: 76rem) {
   .scores {
     grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr));
+  }
+}
+
+/* --- the audit ledger ------------------------------------------------------
+ *
+ * What a run did, opened from a version row in the Library and from a finished
+ * item in the Import queue. It renders inside a table cell that already spans
+ * five columns, so everything here has to survive being narrow.
+ */
+
+.audit {
+  margin: 0.6rem 0 0;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.audit-head {
+  display: grid;
+  /* `auto-fit` rather than a fixed count: four figures at a wide window, two at
+     a narrow one, and no breakpoint to keep in step with the query below. */
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.35rem 1rem;
+  margin: 0 0 0.6rem;
+}
+
+.audit-head div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.audit-head dt {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.audit-head dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-table th {
+  text-align: left;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  padding: 0.3rem 0.5rem 0.3rem 0;
+}
+
+.audit-table td {
+  padding: 0.35rem 0.5rem 0.35rem 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+/* A charge belonging to the stage above it, revealed on demand. Indented and
+   dimmed so the ledger still reads as one row per stage when they are open. */
+.audit-table tr.audit-charge td {
+  padding-left: 1.2rem;
+  border-bottom: none;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.audit-table .locator {
+  margin-right: 0.35rem;
+}
+
+.audit-warnings {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.audit-log {
+  margin-top: 0.6rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+}
+
+.audit-events {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0.5rem 0.6rem;
+  /* Its own scroller: a run with retries has hundreds of lines, and the page
+     body must never grow a second scrollbar for a panel inside a table cell. */
+  max-height: 22rem;
+  overflow-y: auto;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.audit-events li {
+  padding: 0.1rem 0;
+}
+
+.audit-runs .field-inline {
+  margin-bottom: 0.5rem;
+}
+
+/* Declared *below* the shared query at the top of this file, so it carries its
+   own. A media query is not a stronger rule; it is only a conditional one, and
+   at equal specificity the later declaration wins regardless of the query. */
+@media (max-width: 76rem) {
+  .audit-head {
+    grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  }
+
+  /* The two columns a narrow cell can afford to lose: the ledger's point is the
+     stage, its duration and its cost, and the timestamp is recoverable from the
+     raw log below. */
+  .audit-table th:nth-child(2),
+  .audit-table td:nth-child(2) {
+    display: none;
+  }
+}
+
+/* --- the import queue ------------------------------------------------------
+ *
+ * Every run this library has, newest first, read from the catalog. It replaced
+ * a screen that held one run in memory and forgot it on approval.
+ */
+
+.chosen-files {
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.queue {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.queue-item {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.queue-row {
+  display: grid;
+  /* `max-content` on the title deliberately, the same choice `.run-row` makes:
+     a stretching title pushes the badge to the far edge of a wide window and
+     the row stops reading as a row. */
+  grid-template-columns: auto minmax(0, max-content) auto 1fr auto auto auto;
+  align-items: baseline;
+  gap: 0.5rem;
+  justify-content: start;
+}
+
+.queue-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.queue-spend {
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.queue-item progress {
+  vertical-align: middle;
+  width: 8rem;
+}
+
+/* Declared below the shared query at line 822, so it repeats it. A media query
+   is not a stronger rule; it is only a conditional one, and at equal
+   specificity the later declaration wins whether or not the query matches. */
+@media (max-width: 76rem) {
+  .queue-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  /* Everything after the title wraps under it rather than squeezing into
+     columns too narrow to read.
+
+     `justify-self: start` is not tidiness: without it every stacked cell fills
+     the `1fr` column, and the kind badge — a pill with a border — stretched the
+     full width of the row and read as a text field. Seen at 620px in a
+     screenshot; jsdom lays out no grid, so nothing in the suite could say so. */
+  .queue-row > :nth-child(n + 3) {
+    grid-column: 2;
+    justify-self: start;
   }
 }

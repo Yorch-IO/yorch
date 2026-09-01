@@ -479,8 +479,12 @@ describe("the controls", () => {
     expect(concept.getAttribute("class")).toContain("is-hovered");
     expect(overlay.querySelector("text")?.textContent).toBe("Gracia");
     expect(overlay.getAttribute("class")).toContain("is-showing");
-    // It sits where the node sits, which is what "beside its circle" means.
-    expect(overlay.getAttribute("transform")).toBe(concept.getAttribute("transform"));
+    // It sits where the node sits — position only, since the counter-scale is
+    // now the overlay's own child group rather than copied off the node, which
+    // is what lets a hovered *book* (whose own transform carries no scale at
+    // all) keep a fixed screen size too.
+    const [translate] = concept.getAttribute("transform")?.match(/translate\([^)]*\)/) ?? [];
+    expect(overlay.getAttribute("transform")).toBe(translate);
 
     // And there is exactly one of them, whatever the graph holds.
     expect(document.querySelectorAll(".graph-hover")).toHaveLength(1);

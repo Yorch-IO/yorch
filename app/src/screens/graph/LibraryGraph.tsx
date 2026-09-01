@@ -439,7 +439,13 @@ export function LibraryGraph({
       }
       node.classList.add("is-hovered");
       text.textContent = node.dataset.label ?? "";
-      hoverLabel.setAttribute("transform", node.getAttribute("transform") ?? "");
+      // Position only: a book's own transform carries no scale, a concept's
+      // does, and the overlay's own child group already applies the current
+      // 1/zoom counter-scale — copying the node's transform wholesale would
+      // leave a hovered book's label scaling with zoom instead of staying a
+      // fixed screen size.
+      const [translate] = node.getAttribute("transform")?.match(/translate\([^)]*\)/) ?? [];
+      hoverLabel.setAttribute("transform", translate ?? "");
       hoverLabel.classList.add("is-showing");
     };
 
@@ -761,15 +767,6 @@ export function LibraryGraph({
                     </g>
                   );
                 })}
-                {/* The hovered concept's full name. One element for the whole
-                    canvas, moved and filled imperatively — see the delegated
-                    listener above. Inside the panned group so it travels with
-                    the picture, and inverse-scaled like the concepts so it
-                    keeps its size on screen. */}
-                <g className="graph-hover" ref={setHoverLabel} aria-hidden="true">
-                  <text className="concept-label" x={CONCEPT_RADIUS + 8} dominantBaseline="middle" />
-                </g>
-
                 {layout.filter((p) => p.kind === "concept").map((p) => {
                   const dimmed = lit !== null && !lit.has(p.id);
                   const found = matches !== null && matches.has(p.id);
@@ -813,6 +810,20 @@ export function LibraryGraph({
                     </g>
                   );
                 })}
+
+                {/* The hovered node's full name. One element for the whole
+                    canvas, moved and filled imperatively — see the delegated
+                    listener above. Painted last, or a concept drawn after it
+                    would cover the label of a hovered book, and a neighbouring
+                    concept would cover the label of a hovered concept. Inside
+                    the panned group so it travels with the picture, and
+                    inverse-scaled so it keeps its size on screen regardless of
+                    which kind of node it is labelling. */}
+                <g className="graph-hover" ref={setHoverLabel} aria-hidden="true">
+                  <g transform={`scale(${1 / zoom})`}>
+                    <text className="concept-label" x={CONCEPT_RADIUS + 8} dominantBaseline="middle" />
+                  </g>
+                </g>
               </g>
             </svg>
             </div>

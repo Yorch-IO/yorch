@@ -216,25 +216,51 @@ class Qdrant:
                 {"points": [p.as_json() for p in batch]},
             )
 
-    def scroll_all(self) -> list[dict[str, Any]]:
-        """Page through every point's payload, for whole-collection audits."""
+    def scroll(
+        self, filters: "dict[str, str] | None" = None
+    ) -> list[dict[str, Any]]:
+        """Page through matching points as ``{"id": ..., "payload": {...}}``.
+
+        Two things this gives an audit that :meth:`scroll_all` cannot. The
+        **filter** keeps a per-document read off the whole collection — one
+        collection holds every library of every organisation here. And the
+        **id**, which `scroll_all` drops: a point id is
+        ``point_id(version_id, chunk_index)``, so checking that the ids present
+        are exactly the ones the version derives is what detects a tail left
+        behind by a longer previous chunking. A payload alone cannot say that,
+        because a stale point's payload is perfectly well-formed.
+
+        Shares `_filter` with search and removal, so an audit cannot select a
+        set that a search would have read differently. An empty filter is
+        allowed here, unlike in the removal path: reading every point is what
+        `scroll_all` has always meant.
+        """
         out: list[dict[str, Any]] = []
         offset: Any = None
+        selector = self._filter(filters or {})
         while True:
             body: dict[str, Any] = {
                 "limit": 256,
                 "with_payload": True,
                 "with_vector": False,
             }
+            if selector:
+                body["filter"] = selector
             if offset is not None:
                 body["offset"] = offset
             result = self._ok(
                 "POST", f"/collections/{self.collection}/points/scroll", body
             )["result"]
-            out.extend(p["payload"] for p in result["points"])
+            out.extend(
+                {"id": p["id"], "payload": p["payload"]} for p in result["points"]
+            )
             offset = result.get("next_page_offset")
             if offset is None:
                 return out
+
+    def scroll_all(self) -> list[dict[str, Any]]:
+        """Page through every point's payload, for whole-collection audits."""
+        return [p["payload"] for p in self.scroll()]
 
     # --- removal ------------------------------------------------------------
     #

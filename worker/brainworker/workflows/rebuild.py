@@ -52,6 +52,12 @@ class RebuildWorkflow:
         self._approval: Approval | None = None
         self._report: RebuildReport | None = None
         self._stage = "starting"
+        #: See `IngestWorkflow`: the counter is the audit trail's total order and
+        #: its idempotency key, and it lives here rather than in the database
+        #: because Temporal retries the activity that writes the row.
+        self._seq: int = 0
+        self._registered: bool = False
+        self._pending: list[dict[str, object]] = []
 
     # -- signals and queries ----------------------------------------------
 
@@ -83,7 +89,10 @@ class RebuildWorkflow:
     async def _run(
         self, library_id: str, document_id: str, run_id: str, tenant: str
     ) -> RebuildResult:
-        self._stage = "loading"
+        # Before the run row exists — `load_rebuild_inputs` is what creates it —
+        # so this transition is buffered rather than written. Same as ingest's
+        # `staging` and `registering`.
+        await self._enter(run_id, "loading")
         inputs: RebuildInputs = await workflow.execute_activity(
             reb.load_rebuild_inputs,
             args=[library_id, document_id, run_id, workflow.info().workflow_id, tenant],
@@ -95,7 +104,9 @@ class RebuildWorkflow:
         # one stage that can spend. It over-reports on purpose: a user who
         # approved a smaller number than they were billed has been misled, and
         # the reverse has not.
-        self._stage = "estimating"
+        await self._flush_pending(run_id)
+
+        await self._enter(run_id, "estimating")
         estimate: Estimate = await workflow.execute_activity(
             act.estimate_cost,
             args=[
@@ -148,20 +159,15 @@ class RebuildWorkflow:
 
         spent: list[Spend] = []
 
-        # Rebuild sets `self._stage` for the query handler but persisted nothing
-        # after its gate, so the catalog read `awaiting_approval` until the run
-        # finished — the same lie `IngestWorkflow._set_stage` used to tell, and
-        # the reason anything listing runs cannot trust `state` without this.
-        # One write rather than five: the stages below are short and a person
-        # watching needs "this is running", not a play-by-play.
-        await workflow.execute_activity(
-            act.set_run_stage,
-            args=[run_id, "embedding", "running"],
-            start_to_close_timeout=WRITE_TIMEOUT,
-            retry_policy=_RETRY,
-        )
-
-        self._stage = "embedding"
+        # Rebuild used to set `self._stage` for the query handler and persist
+        # nothing after its gate, so the catalog read `awaiting_approval` until
+        # the run finished — the same lie `IngestWorkflow._set_stage` used to
+        # tell. It was one write rather than five on the grounds that the stages
+        # below are short and a person watching needs "this is running" rather
+        # than a play-by-play. That reasoning was about the *cursor*; the trail
+        # is a different question, and "which of the five did it die in" is
+        # exactly what a person reads afterwards. So each one records now.
+        await self._enter(run_id, "embedding")
         indexed: Indexed = await workflow.execute_activity(
             paid.embed_and_index,
             args=[
@@ -176,7 +182,7 @@ class RebuildWorkflow:
         )
         spent.append(indexed.spend)
 
-        self._stage = "projecting"
+        await self._enter(run_id, "projecting")
         graph = await workflow.execute_activity(
             act.project_structure,
             args=[
@@ -192,7 +198,7 @@ class RebuildWorkflow:
 
         replayed = False
         if inputs.semantics is not None:
-            self._stage = "replaying semantics"
+            await self._enter(run_id, "replaying semantics")
             semantics: Semantics = await workflow.execute_activity(
                 reb.replay_semantics,
                 args=[inputs.source_run_id, inputs.registered, inputs.semantics],
@@ -202,7 +208,7 @@ class RebuildWorkflow:
             spent.append(semantics.spend)
             replayed = True
 
-        self._stage = "activating"
+        await self._enter(run_id, "activating")
         await workflow.execute_activity(
             act.activate_version,
             # Three arguments, not four. Temporal maps a payload onto an
@@ -232,13 +238,7 @@ class RebuildWorkflow:
     # -- gate --------------------------------------------------------------
 
     async def _gate(self, run_id: str) -> Approval:
-        self._stage = "awaiting_approval"
-        await workflow.execute_activity(
-            act.set_run_stage,
-            args=[run_id, "awaiting_approval", "awaiting_approval"],
-            start_to_close_timeout=WRITE_TIMEOUT,
-            retry_policy=_RETRY,
-        )
+        await self._enter(run_id, "awaiting_approval", "awaiting_approval")
         try:
             await workflow.wait_condition(
                 lambda: self._approval is not None, timeout=GATE_TIMEOUT
@@ -257,9 +257,45 @@ class RebuildWorkflow:
     # -- bookkeeping -------------------------------------------------------
 
     async def _finish(self, run_id: str, state: str) -> None:
+        self._seq += 1
         await workflow.execute_activity(
             act.record_run_outcome,
-            args=[run_id, state, None, None],
+            args=[
+                run_id, state, None, None,
+                self._seq, workflow.now(), self._stage,
+            ],
+            start_to_close_timeout=WRITE_TIMEOUT,
+            retry_policy=_RETRY,
+        )
+
+    async def _enter(
+        self, run_id: str, stage: str, state: str = "running"
+    ) -> None:
+        """Move into a stage and leave a row saying so. See `IngestWorkflow._enter`."""
+        self._stage = stage
+        self._seq += 1
+        if not self._registered:
+            self._pending.append(
+                {"seq": self._seq, "at": workflow.now(), "stage": stage}
+            )
+            return
+        await workflow.execute_activity(
+            act.set_run_stage,
+            # Every argument explicit, defaults included: Temporal lines payloads
+            # up with parameters by arity.
+            args=[run_id, stage, state, self._seq, workflow.now()],
+            start_to_close_timeout=WRITE_TIMEOUT,
+            retry_policy=_RETRY,
+        )
+
+    async def _flush_pending(self, run_id: str) -> None:
+        if not self._pending:
+            return
+        pending, self._pending = self._pending, []
+        self._registered = True
+        await workflow.execute_activity(
+            act.record_run_events,
+            args=[run_id, pending],
             start_to_close_timeout=WRITE_TIMEOUT,
             retry_policy=_RETRY,
         )
@@ -273,7 +309,10 @@ class RebuildWorkflow:
         try:
             await workflow.execute_activity(
                 act.record_run_outcome,
-                args=[run_id, "failed", kind, detail[:2000]],
+                args=[
+                    run_id, "failed", kind, detail[:2000],
+                    self._seq + 1, workflow.now(), self._stage,
+                ],
                 start_to_close_timeout=WRITE_TIMEOUT,
                 retry_policy=RetryPolicy(maximum_attempts=2),
             )

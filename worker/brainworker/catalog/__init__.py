@@ -18,6 +18,7 @@ from .repo import (
     LibraryOwnedByAnother,
     ProjectTotals,
     Run,
+    RunEvent,
     RunSummary,
     Version,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "MigrationError",
     "ProjectTotals",
     "Run",
+    "RunEvent",
     "RunSummary",
     "Version",
     "apply_migrations",

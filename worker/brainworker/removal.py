@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import config
+from .audit import audited
 from .catalog import Catalog
 from .graph import Graph
 from .graph.schema import LEGACY_TENANT_ID
@@ -97,8 +98,14 @@ def remove_document(
     library_id: str,
     document_id: str,
     tenant: str = LEGACY_TENANT_ID,
+    run_id: str | None = None,
 ) -> Removal:
-    """Remove a document, and every version it was the last to hold."""
+    """Remove a document, and every version it was the last to hold.
+
+    `run_id` is the caller's workflow id when there is one. The paid plane
+    reaches here through `RemovalWorkflow`; the free plane calls this directly
+    and lets :func:`audit.audited` mint one.
+    """
     with Catalog(settings.database_url) as catalog:
         document = catalog.document(
             document_id, library_id=library_id, tenant_id=tenant
@@ -123,6 +130,36 @@ def remove_document(
 
     result = Removal(document_id=document_id, versions_removed=sole,
                      versions_kept=shared)
+
+    with audited(
+        settings,
+        kind="removal",
+        tenant_id=tenant_id,
+        run_id=run_id,
+        document_id=document_id,
+    ) as step:
+        _remove_document(settings, library_id, document_id, tenant_id,
+                         sole, shared, holders, result, step)
+
+    log.info(
+        "removed document %s from %s: %d points, %s",
+        document_id, library_id, result.qdrant_points, result.graph,
+    )
+    return result
+
+
+def _remove_document(
+    settings, library_id, document_id, tenant_id, sole, shared, holders, result, step
+) -> None:
+    """The three stores, in the one order that leaves a crash retryable.
+
+    Projections first and the catalog last, because the catalog is the source of
+    truth and the other two are derived from it: a crash after the catalog row is
+    gone leaves points and nodes that nothing can find again to retry. The two
+    `step` calls name that order in the trail, which is the whole reason a
+    removal is worth recording at all.
+    """
+    step("projections")
 
     # 1. Qdrant.
     with _qdrant(settings) as q:
@@ -155,14 +192,9 @@ def remove_document(
         result.graph = proj.remove_document(graph, document_id).as_dict()
 
     # 3. Catalog, last and only now.
+    step("catalog")
     with Catalog(settings.database_url) as catalog:
         result.catalog = catalog.remove_document(document_id, library_id=library_id)
-
-    log.info(
-        "removed document %s from %s: %d points, %s",
-        document_id, library_id, result.qdrant_points, result.graph,
-    )
-    return result
 
 
 def remove_version(
@@ -171,6 +203,7 @@ def remove_version(
     library_id: str,
     version_id: str,
     tenant: str = LEGACY_TENANT_ID,
+    run_id: str | None = None,
 ) -> Removal:
     """Remove one version, leaving its document and any other versions standing.
 
@@ -195,17 +228,26 @@ def remove_version(
 
     result = Removal(versions_removed=[version_id])
 
-    with _qdrant(settings) as q:
-        if q.exists():
-            result.qdrant_points = q.delete_by_filter(
-                {"library_id": library_id, "version_id": version_id}
-            )
+    with audited(
+        settings,
+        kind="removal",
+        tenant_id=tenant_id,
+        run_id=run_id,
+        version_id=version_id,
+    ) as step:
+        step("projections")
+        with _qdrant(settings) as q:
+            if q.exists():
+                result.qdrant_points = q.delete_by_filter(
+                    {"library_id": library_id, "version_id": version_id}
+                )
 
-    with Graph(settings.memgraph_url) as graph:
-        result.graph = proj.remove_version(graph, version_id).as_dict()
+        with Graph(settings.memgraph_url) as graph:
+            result.graph = proj.remove_version(graph, version_id).as_dict()
 
-    with Catalog(settings.database_url) as catalog:
-        result.catalog = catalog.remove_version(version_id)
+        step("catalog")
+        with Catalog(settings.database_url) as catalog:
+            result.catalog = catalog.remove_version(version_id)
 
     return result
 

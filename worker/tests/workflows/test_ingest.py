@@ -9,6 +9,7 @@ survives replay. Whether an extractor works is what the activity tests measure.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 import pytest
 from temporalio import activity
@@ -16,6 +17,7 @@ from temporalio.client import Client, WorkflowFailureError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from brainworker import stages as worker_stages
 from brainworker.artifacts import ArtifactRef
 from brainworker.pipeline import (
     ChunkKindCount,
@@ -197,10 +199,34 @@ async def activate_version(*_args) -> None:
 OUTCOMES: list[str] = []
 
 
+#: Every transition the workflow recorded, as (seq, stage, outcome).
+#:
+#: The real activity writes these to `run_event`; here they are collected so a
+#: test can assert the trail itself — which is the only way to see that a stage
+#: was entered at all, since seven of them touch nothing else.
+EVENTS: list[tuple[int, str, str | None]] = []
+
+
+#: Typed exactly like the real activities, and deliberately not `*args`.
+#:
+#: An untyped double accepts any arity, and Temporal maps payloads onto
+#: parameters *by* arity — so a `*args` double kept five workflow tests passing
+#: against a workflow the real converter could not run. That already happened
+#: once here, when `evaluate_index` grew a sixth parameter. These signatures are
+#: the guard against it happening again.
 @activity.defn(name="record_run_outcome")
-async def record_run_outcome(*args) -> None:
-    if len(args) >= 2:
-        OUTCOMES.append(args[1])
+async def record_run_outcome(
+    run_id: str,
+    state: str,
+    error_kind: str | None = None,
+    error_detail: str | None = None,
+    seq: int | None = None,
+    at: datetime | None = None,
+    stage: str | None = None,
+) -> None:
+    OUTCOMES.append(state)
+    if seq is not None and stage is not None:
+        EVENTS.append((seq, stage, state))
     return None
 
 
@@ -319,7 +345,23 @@ async def extract_semantics(*_args) -> Semantics:
 
 
 @activity.defn(name="set_run_stage")
-async def set_run_stage(*_args) -> None:
+async def set_run_stage(
+    run_id: str,
+    stage: str,
+    state: str | None = None,
+    seq: int | None = None,
+    at: datetime | None = None,
+) -> None:
+    if seq is not None:
+        EVENTS.append((seq, stage, None))
+    return None
+
+
+@activity.defn(name="record_run_events")
+async def record_run_events(run_id: str, events: list[dict]) -> None:
+    """The buffered pair: `staging` and `registering`, which precede the run row."""
+    for e in events:
+        EVENTS.append((int(e["seq"]), str(e["stage"]), None))
     return None
 
 
@@ -337,6 +379,7 @@ def activities(**kw):
         activate_version,
         record_run_outcome,
         set_run_stage,
+        record_run_events,
         kw.get("correct_text", correct_text),
         chunk_final,
         embed_and_index,
@@ -358,6 +401,7 @@ async def env():
 @pytest.fixture(autouse=True)
 def _clear():
     SPENT.clear()
+    EVENTS.clear()
     PERSISTED.clear()
     PROMOTED.clear()
     EVALUATED_INTO.clear()
@@ -499,6 +543,7 @@ async def test_identical_content_stops_before_extraction(env: WorkflowEnvironmen
         stage_source, register(created=False, already_indexed=True), counting_extract,
         preview(), estimate_cost, resolver(), learn_profile, project_structure,
         link_duplicate, activate_version, record_run_outcome, set_run_stage,
+        record_run_events,
         correct_text, chunk_final, embed_and_index, extract_semantics,
     ]
     async with Worker(
@@ -536,6 +581,7 @@ async def test_reindex_deliberately_walks_past_the_duplicate_guard(
         stage_source, register(created=False, already_indexed=True), counting_extract,
         preview(), estimate_cost, resolver(), learn_profile, project_structure,
         link_duplicate, activate_version, record_run_outcome, set_run_stage,
+        record_run_events,
         correct_text, chunk_final, embed_and_index, extract_semantics,
     ]
     async with Worker(
@@ -589,13 +635,22 @@ async def test_a_failing_activity_records_the_run_before_failing(
         raise FileNotFoundError("no such file: /workspace/inbox/calvino.pdf")
 
     @activity.defn(name="record_run_outcome")
-    async def capture(run_id: str, state: str, kind=None, detail=None) -> None:
+    async def capture(
+        run_id: str,
+        state: str,
+        kind: str | None = None,
+        detail: str | None = None,
+        seq: int | None = None,
+        at: datetime | None = None,
+        stage: str | None = None,
+    ) -> None:
         recorded.append((state, kind, detail))
 
     acts = [
         missing_file, register(), extract_text, preview(), estimate_cost,
         resolver(), learn_profile, project_structure, link_duplicate,
-        activate_version, capture, set_run_stage, correct_text, chunk_final,
+        activate_version, capture, set_run_stage, record_run_events,
+        correct_text, chunk_final,
         embed_and_index, extract_semantics,
     ]
     async with Worker(
@@ -1374,3 +1429,178 @@ async def test_a_kept_candidate_becomes_the_runs_measurement(env: WorkflowEnviro
 
     assert EVALUATED_INTO == ["scores", "scores_candidate"]
     assert PROMOTED, "a kept candidate left the run describing the old index"
+
+
+# -- the audit trail --------------------------------------------------------
+
+
+async def test_every_stage_the_run_passes_through_leaves_an_event(
+    env: WorkflowEnvironment,
+):
+    """The trail is the only record seven of these stages leave anywhere.
+
+    `run.stage` is a single column each transition overwrites, so before this
+    existed the free half of the pipeline — staging, registering, extracting,
+    profiling, previewing, chunking, activating — vanished the moment the run
+    ended, and `cost_entry.created_at` was the only per-stage timestamp that
+    survived, for the eight stages that spend and no others.
+
+    Asserted as a prefix-and-membership check rather than an exact list because
+    which stages run depends on the switches; what must hold for *any* run is
+    that the free stages are there, that the order is the workflow's own, and
+    that the last row is the one carrying the outcome.
+    """
+    acts = activities()
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(
+            env,
+            request(auto_approve=True),
+            StageOptions(correct=False, extract_semantics=False),
+            acts,
+        )
+        await handle.result()
+
+    seqs = [seq for seq, _, _ in EVENTS]
+    assert seqs == sorted(seqs), "the trail is out of order"
+    assert len(set(seqs)) == len(seqs), "a sequence number was reused"
+    assert seqs[0] == 1, "the counter must start at one, not zero"
+
+    stages = [stage for _, stage, _ in EVENTS]
+    # The seven that used to leave nothing at all.
+    for free in ("staging", "registering", "extracting", "profiling",
+                 "previewing", "chunking", "activating"):
+        assert free in stages, f"{free} left no trace"
+    # Buffered before the run row existed, and flushed in order once it did.
+    assert stages[:2] == ["staging", "registering"]
+    # Every name is one the vocabulary knows, or the UI cannot order or
+    # translate it.
+    assert set(stages) <= set(worker_stages.INGEST_STAGES)
+
+    outcomes = [(stage, outcome) for _, stage, outcome in EVENTS if outcome]
+    assert outcomes == [("done", "succeeded")], (
+        "exactly one event carries an outcome, it is the last, and it names the "
+        f"stage the run was in: got {outcomes}"
+    )
+    assert EVENTS[-1][2] == "succeeded"
+
+
+async def test_a_failed_run_closes_its_trail_naming_the_stage_that_failed(
+    env: WorkflowEnvironment,
+):
+    """"It ended failed" is half an answer; "it ended failed in `correcting`" is
+    the whole one, and it is the half `run.state` cannot hold."""
+
+    @activity.defn(name="correct_text")
+    async def boom(run_id: str, extraction: Extraction) -> Correction:
+        raise RuntimeError("el proveedor devolvió 503")
+
+    acts = [a for a in activities() if a is not correct_text] + [boom]
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(
+            env,
+            request(auto_approve=True),
+            StageOptions(extract_semantics=False),
+            acts,
+        )
+        with pytest.raises(WorkflowFailureError):
+            await handle.result()
+
+    assert EVENTS[-1][1] == "correcting"
+    assert EVENTS[-1][2] == "failed"
+
+
+async def test_the_counter_never_repeats_a_number_a_retry_could_reuse(
+    env: WorkflowEnvironment,
+):
+    """The whole idempotency story, asserted where it actually lives.
+
+    `ON CONFLICT (run_id, seq) DO NOTHING` in the catalog only helps if the
+    workflow hands a retried transition the number it handed the first one. That
+    is a property of the counter being on the workflow object rather than of the
+    database, so it is checked here: a stage entered twice — `extracting` runs
+    again when a learned profile needs the text re-read — must occupy two
+    distinct sequence numbers, never one reused.
+    """
+    acts = activities(
+        resolver=resolver(rules=ProfileRules(header_patterns=["^CALVINO$"]))
+    )
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(
+            env,
+            request(auto_approve=True),
+            StageOptions(correct=False, extract_semantics=False),
+            acts,
+        )
+        await handle.result()
+
+    extracting = [seq for seq, stage, _ in EVENTS if stage == "extracting"]
+    assert len(extracting) == 2, "the re-extraction should be its own event"
+    assert len(set(extracting)) == 2, "a repeated stage must not reuse its number"
+
+
+async def test_the_raw_history_translates_against_a_real_temporal(
+    env: WorkflowEnvironment,
+):
+    """The one part of the events route a fake cannot check.
+
+    `_event_row` reads whichever `*_event_attributes` field is set on the proto
+    rather than branching per type, so a new event kind renders with whatever it
+    happens to carry instead of rendering blank — and that only works if the
+    field names are what this thinks they are. A hand-built double would agree
+    with whatever the code assumed. A real history does not.
+    """
+    from brainworker.api import main as api
+
+    acts = activities()
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(
+            env,
+            request(auto_approve=True),
+            StageOptions(correct=False, extract_semantics=False),
+            acts,
+        )
+        await handle.result()
+
+        rows = []
+        named: dict[int, str] = {}
+        async for event in handle.fetch_history_events():
+            kind = api._event_kind(event)
+            if kind in api._EVENTS_SHOWN:
+                rows.append(api._event_row(event, kind, named))
+
+    kinds = [r["type"] for r in rows]
+    assert "WorkflowExecutionStarted" in kinds
+    assert "WorkflowExecutionCompleted" in kinds
+    assert "ActivityTaskScheduled" in kinds
+    # The noise a person cannot act on is filtered, and it is most of a history.
+    assert "WorkflowTaskScheduled" not in kinds
+
+    scheduled = [r for r in rows if r["type"] == "ActivityTaskScheduled"]
+    assert scheduled, "no activity was scheduled?"
+    assert {r["activity"] for r in scheduled} >= {"stage_source", "register_document"}, (
+        "an activity event with no activity name is the failure mode this test "
+        "exists for"
+    )
+    assert all(isinstance(r["id"], int) for r in rows)
+    assert all(r["at"].startswith("20") for r in rows)
+
+    # **Only `ActivityTaskScheduled` carries the activity type.** Started and
+    # Completed reference it by `scheduled_event_id`, so without carrying the
+    # name forward two thirds of the log is anonymous — including the one row
+    # this panel exists for, because the *attempt* is on `ActivityTaskStarted`.
+    started = [r for r in rows if r["type"] == "ActivityTaskStarted"]
+    assert started, "no activity started?"
+    assert all(r["activity"] for r in started), (
+        "an ActivityTaskStarted with no activity name is the failure this "
+        f"carries the name forward to avoid: {started[:3]}"
+    )
+    completed = [r for r in rows if r["type"] == "ActivityTaskCompleted"]
+    assert all(r["activity"] for r in completed)

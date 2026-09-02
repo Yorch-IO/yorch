@@ -141,7 +141,7 @@ def test_costs_accumulate_rather_than_overwrite(catalog: Catalog):
         "run_1", stage="correction", provider="vertex", model="gemini-2.5-flash",
         input_tokens=1000, output_tokens=500, usd=0.0334,
     )
-    assert len(catalog.costs("run_1")) == 2
+    assert len(catalog.costs("run_1", tenant_id=LEGACY_TENANT_ID)) == 2
     total = catalog.total_cost("run_1")
     assert total["input_tokens"] == 2000
     assert total["usd"] == pytest.approx(0.0668)
@@ -352,7 +352,7 @@ def test_run_history_and_cost_survive_the_document_they_were_spent_on(
 
     catalog.remove_document("doc_1", library_id="lib_1")
 
-    costs = catalog.costs("run_1")
+    costs = catalog.costs("run_1", tenant_id=LEGACY_TENANT_ID)
     # `float(...)` because `usd` is a numeric column and comes back as Decimal,
     # while `Cost.usd` is annotated `float | None`. Harmless everywhere it is
     # serialised; worth knowing before comparing one.
@@ -668,3 +668,169 @@ def test_a_library_created_without_a_name_falls_back_to_its_id(catalog: Catalog)
 
     rows = {b["id"]: b for b in catalog.libraries(tenant_id=LEGACY_TENANT_ID)}
     assert rows["lib_sin_nombre"]["name"] == "lib_sin_nombre"
+
+
+# -- the audit trail --------------------------------------------------------
+
+
+def _at(minute: int):
+    from datetime import datetime, timezone
+
+    return datetime(2026, 9, 1, 14, minute, tzinfo=timezone.utc)
+
+
+def test_a_replayed_transition_writes_one_row_not_two(catalog: Catalog):
+    """The whole point of `(run_id, seq)` being unique.
+
+    Temporal retries the activity that writes this row — a refused catalog, a
+    worker restart, an ordinary timeout — and a trail that grew a duplicate on
+    every retry would make "how long did correction take" unanswerable in
+    exactly the runs where somebody needs to ask.
+
+    The retry carries the same `seq` *and* the same `at`, because both come from
+    the workflow: `workflow.now()` is fixed when the activity is first scheduled.
+    A timestamp taken in SQL would move under the retry and silently stretch the
+    previous stage's measured duration.
+    """
+    catalog.start_run(
+        tenant_id=LEGACY_TENANT_ID, run_id="run_1", workflow_id="wf-1", kind="index"
+    )
+    for _ in range(3):
+        catalog.set_run_stage("run_1", "correcting", seq=4, at=_at(2))
+
+    events = catalog.run_events("run_1", tenant_id=LEGACY_TENANT_ID)
+    assert [(e.seq, e.stage) for e in events] == [(4, "correcting")]
+    assert events[0].at == _at(2)
+
+
+def test_the_trail_is_ordered_by_the_counter_not_by_the_clock(catalog: Catalog):
+    """`workflow.now()` does not advance inside a workflow task.
+
+    Two transitions decided in the same task carry the same timestamp, so
+    ordering by `at` would put them in whatever order the planner happened to
+    choose. `seq` is the workflow's own counter and the only total order there
+    is.
+    """
+    catalog.start_run(
+        tenant_id=LEGACY_TENANT_ID, run_id="run_1", workflow_id="wf-1", kind="index"
+    )
+    catalog.set_run_stage("run_1", "projecting", seq=2, at=_at(0))
+    catalog.set_run_stage("run_1", "chunking", seq=1, at=_at(0))
+
+    assert [e.stage for e in catalog.run_events("run_1", tenant_id=LEGACY_TENANT_ID)] == [
+        "chunking",
+        "projecting",
+    ]
+
+
+def test_only_the_last_event_carries_an_outcome(catalog: Catalog):
+    """A stage's duration is the next event's `at` minus its own, and the
+    terminal row is what closes the last one. It names the stage the run was in
+    when it ended, not a synthetic `finished` stage — "it failed in `semantics`"
+    is the sentence somebody reading a red row needs."""
+    catalog.start_run(
+        tenant_id=LEGACY_TENANT_ID, run_id="run_1", workflow_id="wf-1", kind="index"
+    )
+    catalog.set_run_stage("run_1", "semantics", seq=1, at=_at(0))
+    catalog.finish_run(
+        "run_1", "failed", error_kind="activity_failed",
+        seq=2, at=_at(9), stage="semantics",
+    )
+
+    events = catalog.run_events("run_1", tenant_id=LEGACY_TENANT_ID)
+    assert [(e.stage, e.outcome) for e in events] == [
+        ("semantics", None),
+        ("semantics", "failed"),
+    ]
+    assert events[-1].detail == "activity_failed"
+    assert (events[-1].at - events[0].at).total_seconds() == 9 * 60
+
+
+def test_an_event_for_a_run_that_does_not_exist_is_dropped(catalog: Catalog):
+    """Which is why the workflow buffers the transitions that precede the row.
+
+    `tenant_id` is derived from the run in the INSERT — the same rule
+    `record_cost` and `record_artifact` follow, so an event and its run can never
+    disagree about who owns them. The cost of that rule is this: with no run to
+    select from, the INSERT writes nothing and says nothing. `staging` and
+    `registering` happen before `register_document`, so they are held on the
+    workflow and flushed once the row exists.
+    """
+    catalog.set_run_stage("run_ghost", "staging", seq=1, at=_at(0))
+    assert catalog.run_events("run_ghost", tenant_id=LEGACY_TENANT_ID) == []
+
+
+def test_the_buffered_transitions_land_once_the_run_exists(catalog: Catalog):
+    from brainworker.catalog import RunEvent
+
+    catalog.start_run(
+        tenant_id=LEGACY_TENANT_ID, run_id="run_1", workflow_id="wf-1", kind="index"
+    )
+    buffered = [
+        RunEvent(seq=1, at=_at(0), stage="staging", outcome=None, detail=None),
+        RunEvent(seq=2, at=_at(1), stage="registering", outcome=None, detail=None),
+    ]
+    catalog.record_run_events("run_1", buffered)
+    # Flushed twice, because the flush is itself an activity Temporal may retry.
+    catalog.record_run_events("run_1", buffered)
+
+    assert [e.stage for e in catalog.run_events("run_1", tenant_id=LEGACY_TENANT_ID)] == [
+        "staging",
+        "registering",
+    ]
+
+
+def test_a_trail_is_not_readable_by_another_organisation(catalog: Catalog):
+    """An id is not authorization. `_salt()` folds the tenant into a derived id
+    to stop collisions, and a member of one organisation holding the same file as
+    another can recompute it — only a predicate refuses a read."""
+    catalog.start_run(
+        tenant_id=LEGACY_TENANT_ID, run_id="run_1", workflow_id="wf-1", kind="index"
+    )
+    catalog.set_run_stage("run_1", "correcting", seq=1, at=_at(0))
+    catalog.record_cost(
+        "run_1", stage="correction", provider="vertex", model="gemini-3.6-flash",
+        input_tokens=10, output_tokens=5, usd=0.01,
+    )
+
+    assert catalog.run_events("run_1", tenant_id="acme") == []
+    assert catalog.costs("run_1", tenant_id="acme") == []
+    assert catalog.run("run_1", tenant_id="acme") is None
+    assert catalog.run("run_1", tenant_id=LEGACY_TENANT_ID) is not None
+
+
+def test_a_charge_comes_back_as_a_number_not_a_decimal(catalog: Catalog):
+    """`cost_entry.usd` is `numeric(12, 6)`, so psycopg hands back a `Decimal`
+    and `Cost.usd`'s `float | None` annotation is a lie.
+
+    It sat in the defect list for weeks as "harmless wherever it is only
+    serialised", and that was true until the audit ledger started *summing*
+    these: the total reached the wire as the JSON string `"0.000000"`, which the
+    Rust client's `Option<f64>` refuses outright. Measured against a real run on
+    2026-09-01. The cast lives in SQL, like `recent_runs`'s.
+    """
+    catalog.start_run(
+        tenant_id=LEGACY_TENANT_ID, run_id="run_1", workflow_id="wf-1", kind="index"
+    )
+    catalog.record_cost(
+        "run_1", stage="embedding", provider="vertex", model="gemini-embedding-2",
+        input_tokens=3000, output_tokens=0, usd=0.00045,
+    )
+    [charge] = catalog.costs("run_1", tenant_id=LEGACY_TENANT_ID)
+    assert isinstance(charge.usd, float)
+    # The property the annotation always claimed and did not have: it can be
+    # added to a float without raising.
+    assert charge.usd + 0.0 == pytest.approx(0.00045)
+
+
+def test_an_unpriced_charge_stays_none_rather_than_becoming_zero(catalog: Catalog):
+    """The cast must not turn "no price known" into a confident zero."""
+    catalog.start_run(
+        tenant_id=LEGACY_TENANT_ID, run_id="run_1", workflow_id="wf-1", kind="index"
+    )
+    catalog.record_cost(
+        "run_1", stage="embedding", provider="vertex", model="unreleased",
+        input_tokens=10, usd=None,
+    )
+    [charge] = catalog.costs("run_1", tenant_id=LEGACY_TENANT_ID)
+    assert charge.usd is None

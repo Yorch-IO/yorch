@@ -124,6 +124,27 @@ class Run:
 
 
 @dataclass
+class RunEvent:
+    """One transition in a run's life, in the order it happened.
+
+    Not a start and an end but a single moment: a stage's duration is the next
+    event's `at` minus this one's, and the terminal event — the only one
+    carrying an `outcome` — closes the last stage. A stage that started and
+    never ended is therefore unrepresentable, which matters because that is
+    exactly the shape a crashed run would leave behind and exactly what would be
+    indistinguishable from a stage still working.
+    """
+
+    seq: int
+    at: datetime
+    stage: str
+    #: One of `succeeded`, `failed`, `cancelled`, `blocked`, and only on the row
+    #: that closes the run. NULL everywhere else.
+    outcome: str | None
+    detail: str | None
+
+
+@dataclass
 class ProjectTotals:
     """What the whole installation holds, counted once each.
 
@@ -171,8 +192,20 @@ class RunSummary:
     started_at: datetime
     finished_at: datetime | None
     error_kind: str | None
+    #: Why it ended that way, truncated to 2000 characters by the workflow.
+    #:
+    #: Joined to the summary rather than left to `GET /runs/{id}` because a
+    #: queue has to be able to say *why* a row is red without a second request
+    #: per failed run.
+    error_detail: str | None
     title: str | None
     library_id: str | None
+    #: Both nullable and both `ON DELETE SET NULL`: cost and run history
+    #: deliberately outlive the document they were spent on. A queue row whose
+    #: document is gone still has a bill and an audit trail worth reading, and
+    #: these are what let a caller ask for one.
+    document_id: str | None
+    version_id: str | None
     #: What this run has been billed so far, summed from `cost_entry`.
     #:
     #: `None`, never zero, when no stage has recorded a price — the same rule
@@ -422,8 +455,8 @@ class Catalog:
         """
         sql = """
             SELECT r.id, r.workflow_id, r.kind, r.state, r.stage,
-                   r.started_at, r.finished_at, r.error_kind,
-                   d.title, d.library_id,
+                   r.started_at, r.finished_at, r.error_kind, r.error_detail,
+                   d.title, d.library_id, r.document_id, r.version_id,
                    -- Cast in SQL, not in Python: `cost_entry.usd` is
                    -- `numeric(12, 6)`, so psycopg hands back a `Decimal` and the
                    -- annotation would be a lie the way `Cost.usd`'s already is —
@@ -440,6 +473,124 @@ class Catalog:
         with self._conn() as conn:
             with conn.cursor(row_factory=class_row(RunSummary)) as cur:
                 return cur.execute(sql, (tenant_id, max(1, limit))).fetchall()
+
+    #: The columns every `RunSummary` query selects, so a field added to the
+    #: dataclass cannot be selected by one of them and forgotten by the other.
+    _RUN_SUMMARY_COLUMNS = """
+        r.id, r.workflow_id, r.kind, r.state, r.stage,
+        r.started_at, r.finished_at, r.error_kind, r.error_detail,
+        d.title, d.library_id, r.document_id, r.version_id,
+        (SELECT sum(ce.usd) FROM cost_entry ce
+          WHERE ce.run_id = r.id)::float8 AS usd_so_far
+    """
+
+    def runs(
+        self,
+        *,
+        tenant_id: str,
+        limit: int = 25,
+        before: tuple[datetime, str] | None = None,
+        kinds: Sequence[str] | None = None,
+        states: Sequence[str] | None = None,
+        library_id: str | None = None,
+        document_id: str | None = None,
+        version_id: str | None = None,
+    ) -> list[RunSummary]:
+        """The queue: every run this organisation has, newest first.
+
+        Separate from :meth:`recent_runs`, which is the Home screen's and is
+        deliberately limit-only — a landing page shows the last ten and needs no
+        cursor. This one is what a person scrolls, so it filters and it pages.
+
+        **Keyset paging on `(started_at, id)`, not an OFFSET.** Runs are started
+        continuously and an OFFSET shifts under a list being appended to at the
+        top, which shows a row twice or skips one. The id breaks ties:
+        `started_at` defaults to `now()` and several runs enqueued from one
+        multi-file drop can land in the same microsecond.
+
+        `library_id` filters through the document join, so a run whose document
+        has been removed is not reachable by it — `run.document_id` is
+        `ON DELETE SET NULL` because history outlives the document. That is the
+        right trade for a per-library queue, and the reason the unfiltered call
+        still returns those runs.
+        """
+        where = ["r.tenant_id = %s"]
+        params: list[Any] = [tenant_id]
+        if kinds:
+            where.append("r.kind = ANY(%s)")
+            params.append(list(kinds))
+        if states:
+            where.append("r.state = ANY(%s)")
+            params.append(list(states))
+        if library_id:
+            where.append("d.library_id = %s")
+            params.append(library_id)
+        if document_id:
+            where.append("r.document_id = %s")
+            params.append(document_id)
+        if version_id:
+            where.append("r.version_id = %s")
+            params.append(version_id)
+        if before is not None:
+            where.append("(r.started_at, r.id) < (%s, %s)")
+            params.extend(before)
+        params.append(max(1, limit))
+
+        sql = f"""
+            SELECT {self._RUN_SUMMARY_COLUMNS}
+              FROM run r
+              LEFT JOIN document d ON d.id = r.document_id
+             WHERE {" AND ".join(where)}
+             ORDER BY r.started_at DESC, r.id DESC
+             LIMIT %s
+        """
+        with self._conn() as conn:
+            with conn.cursor(row_factory=class_row(RunSummary)) as cur:
+                return cur.execute(sql, tuple(params)).fetchall()
+
+    def run(self, run_id: str, *, tenant_id: str) -> RunSummary | None:
+        """One run, by id, from the catalog alone.
+
+        This is what makes a finished run readable at all. `GET /runs/{id}`
+        answers from Temporal — `describe()` for the state, a query for the
+        stage — and Temporal forgets a run when its retention expires, at which
+        point the route reports `state: null` and `stage: null` for a run whose
+        every column is still sitting in Postgres.
+
+        Takes a required `tenant_id` even though the id alone would find the row.
+        An id is not authorization: `_salt()` folds the tenant into a derived id
+        to stop collisions, and a member of one organisation who holds the same
+        file as another can recompute it. Only a predicate refuses a read.
+        """
+        sql = f"""
+            SELECT {self._RUN_SUMMARY_COLUMNS}
+              FROM run r
+              LEFT JOIN document d ON d.id = r.document_id
+             WHERE r.id = %s AND r.tenant_id = %s
+        """
+        with self._conn() as conn:
+            with conn.cursor(row_factory=class_row(RunSummary)) as cur:
+                return cur.execute(sql, (run_id, tenant_id)).fetchone()
+
+    def run_events(self, run_id: str, *, tenant_id: str) -> list[RunEvent]:
+        """What the run did, in order. Ordered by `seq`, never by `at`.
+
+        `at` is `workflow.now()`, which does not advance inside a workflow task:
+        two transitions decided in the same task carry the same timestamp, and
+        ordering by it would put them in whatever order the planner chose. `seq`
+        is the workflow's own counter and is the only total order there is.
+        """
+        with self._conn() as conn:
+            with conn.cursor(row_factory=class_row(RunEvent)) as cur:
+                return cur.execute(
+                    """
+                    SELECT e.seq, e.at, e.stage, e.outcome, e.detail
+                      FROM run_event e
+                     WHERE e.run_id = %s AND e.tenant_id = %s
+                     ORDER BY e.seq
+                    """,
+                    (run_id, tenant_id),
+                ).fetchall()
 
     def ensure_folder(
         self,
@@ -864,12 +1015,96 @@ class Catalog:
             )
         return run_id
 
-    def set_run_stage(self, run_id: str, stage: str, *, state: str | None = None) -> None:
+    def set_run_stage(
+        self,
+        run_id: str,
+        stage: str,
+        *,
+        state: str | None = None,
+        seq: int | None = None,
+        at: datetime | None = None,
+    ) -> None:
+        """Move the run's cursor, and — when told where it sits — record it.
+
+        Both writes go through one connection on purpose. `run.stage` says where
+        a run is *now* and is overwritten on every transition; `run_event` says
+        what it did and is append-only. Splitting them across two activities
+        would let a retry land one without the other and leave the trail
+        disagreeing with the cursor about the same moment.
+
+        `seq` and `at` come from the workflow, never from here: see
+        :meth:`_insert_event` for why that is the whole idempotency story.
+        """
         with self._conn() as conn:
             conn.execute(
                 "UPDATE run SET stage = %s, state = COALESCE(%s, state) WHERE id = %s",
                 (stage, state, run_id),
             )
+            if seq is not None and at is not None:
+                self._insert_event(conn, run_id, seq=seq, at=at, stage=stage)
+
+    @staticmethod
+    def _insert_event(
+        conn: Any,
+        run_id: str,
+        *,
+        seq: int,
+        at: datetime,
+        stage: str,
+        outcome: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        """Append one transition, idempotently.
+
+        Two properties make a Temporal retry a no-op, and neither of them lives
+        here — the database only enforces what the workflow already guarantees:
+
+        - `seq` is a counter on the workflow object, so a retried transition
+          carries the number it carried the first time and `ON CONFLICT DO
+          NOTHING` drops it.
+        - `at` is `workflow.now()`, fixed when the activity was first scheduled,
+          so a retry records when the stage was *entered* rather than when the
+          retry landed. `now()` here would move the timestamp under a retry and
+          silently stretch the previous stage's measured duration.
+
+        `tenant_id` is derived from the run in the INSERT, exactly as
+        :meth:`record_cost` and :meth:`record_artifact` do, so an event and its
+        run can never disagree about who owns them. **The consequence is that an
+        event for a run that does not exist yet is silently dropped**, which is
+        why `IngestWorkflow` buffers the two transitions that precede
+        `register_document` instead of relying on this.
+        """
+        conn.execute(
+            """
+            INSERT INTO run_event (run_id, seq, at, stage, outcome, detail, tenant_id)
+            SELECT %s, %s, %s, %s, %s, %s, r.tenant_id
+              FROM run r WHERE r.id = %s
+            ON CONFLICT (run_id, seq) DO NOTHING
+            """,
+            (run_id, seq, at, stage, outcome, detail, run_id),
+        )
+
+    def record_run_events(self, run_id: str, events: list[RunEvent]) -> None:
+        """Flush transitions that happened before the run row existed.
+
+        `staging` and `registering` run before `register_document`, so their
+        inserts would find no run to derive a tenant from. The workflow holds
+        them and calls this once the row is there. Same idempotency: each
+        carries the `seq` it was given, so a retried flush inserts nothing.
+        """
+        if not events:
+            return
+        with self._conn() as conn:
+            for event in events:
+                self._insert_event(
+                    conn,
+                    run_id,
+                    seq=event.seq,
+                    at=event.at,
+                    stage=event.stage,
+                    outcome=event.outcome,
+                    detail=event.detail,
+                )
 
     def finish_run(
         self,
@@ -878,7 +1113,17 @@ class Catalog:
         *,
         error_kind: str | None = None,
         error_detail: str | None = None,
+        seq: int | None = None,
+        at: datetime | None = None,
+        stage: str | None = None,
     ) -> None:
+        """Close the run, and close its last stage with it.
+
+        The terminal event names the stage the run was *in* when it ended, not a
+        stage of its own: "at 14:07, in `semantics`, this ended `failed`" is the
+        sentence somebody reading a red row needs, and inventing a synthetic
+        `finished` stage would push the real answer one row further away.
+        """
         with self._conn() as conn:
             conn.execute(
                 """
@@ -888,6 +1133,16 @@ class Catalog:
                 """,
                 (state, error_kind, error_detail, run_id),
             )
+            if seq is not None and at is not None and stage is not None:
+                self._insert_event(
+                    conn,
+                    run_id,
+                    seq=seq,
+                    at=at,
+                    stage=stage,
+                    outcome=state,
+                    detail=error_kind,
+                )
 
     def attach_version(self, run_id: str, document_id: str, version_id: str) -> None:
         with self._conn() as conn:
@@ -971,13 +1226,35 @@ class Catalog:
                  usd, run_id),
             )
 
-    def costs(self, run_id: str) -> list[Cost]:
+    def costs(self, run_id: str, *, tenant_id: str) -> list[Cost]:
+        """Every charge this run made, in the order it made them.
+
+        The tenant predicate is on the query as well as on whatever guard the
+        route ran, and that is not belt-and-braces: this statement reads another
+        organisation's model names and bill straight out of the catalog, which is
+        the same pair of guards `retrieve.search` keeps for `tenant_id` in a
+        Qdrant filter.
+
+        `ORDER BY id` rather than by `created_at`, because two charges inside one
+        stage can share a timestamp and insertion order is the real sequence.
+        """
         with self._conn() as conn:
             with conn.cursor(row_factory=class_row(Cost)) as cur:
                 return cur.execute(
-                    "SELECT stage, provider, model, input_tokens, output_tokens, usd "
-                    "FROM cost_entry WHERE run_id = %s ORDER BY id",
-                    (run_id,),
+                    # Cast in SQL, not in Python, for the reason `recent_runs`
+                    # already gives: `cost_entry.usd` is `numeric(12, 6)`, so
+                    # psycopg hands back a `Decimal` and the `float | None`
+                    # annotation is a lie. Harmless while a row is only
+                    # serialised one at a time — which is why it sat in the
+                    # defect list rather than being fixed — and *not* harmless
+                    # here, because the ledger sums these: the total came out of
+                    # `/runs/{id}/audit` as the JSON **string** `"0.000000"`,
+                    # which the Rust client's `Option<f64>` refuses outright.
+                    # Measured against a real run, 2026-09-01.
+                    "SELECT stage, provider, model, input_tokens, output_tokens, "
+                    "usd::float8 AS usd "
+                    "FROM cost_entry WHERE run_id = %s AND tenant_id = %s ORDER BY id",
+                    (run_id, tenant_id),
                 ).fetchall()
 
     def total_cost(self, run_id: str) -> dict[str, Any]:

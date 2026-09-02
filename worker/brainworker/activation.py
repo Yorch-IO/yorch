@@ -31,6 +31,7 @@ import logging
 from dataclasses import dataclass, field
 
 from . import config
+from .audit import audited
 from .catalog import Catalog
 from .graph import Graph
 from .graph import projection as proj
@@ -60,7 +61,7 @@ class Activation:
 
 
 def activate_version(
-    library_id: str, version_id: str, *, tenant_id: str
+    library_id: str, version_id: str, *, tenant_id: str, run_id: str | None = None
 ) -> Activation:
     """Promote `version_id`, for the organisation that owns it.
 
@@ -110,18 +111,30 @@ def activate_version(
         for document_id in documents:
             catalog.activate(document_id, version_id)
 
-    with Graph(settings.memgraph_url) as graph:
-        for document_id, row in rows.items():
-            proj.activate(
-                graph,
-                proj.VersionNode(
-                    library=library_id,
-                    source_key=row.source_key,
-                    content_sha256=version.content_sha256,
-                    title=row.title,
-                    tenant_id=tenant_id,
-                ),
-            )
+    # Recorded only now, because everything above is the authorization check and
+    # a run row for a version this caller may not touch would be a leak dressed
+    # as an audit trail.
+    with audited(
+        settings,
+        kind="activate",
+        tenant_id=tenant_id,
+        run_id=run_id,
+        document_id=documents[0],
+        version_id=version_id,
+    ) as step:
+        step("activating")
+        with Graph(settings.memgraph_url) as graph:
+            for document_id, row in rows.items():
+                proj.activate(
+                    graph,
+                    proj.VersionNode(
+                        library=library_id,
+                        source_key=row.source_key,
+                        content_sha256=version.content_sha256,
+                        title=row.title,
+                        tenant_id=tenant_id,
+                    ),
+                )
 
     log.info("activated %s for %s", version_id, ", ".join(documents))
     return Activation(version_id=version_id, documents=documents)

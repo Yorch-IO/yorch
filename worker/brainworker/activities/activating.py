@@ -28,7 +28,7 @@ from typing import Any
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from .. import activation
+from .. import activation, audit
 
 log = logging.getLogger(__name__)
 
@@ -58,12 +58,18 @@ async def promote_version(
     but the legacy one, and Temporal maps payloads onto parameters by arity — so
     a default here is also a parameter a caller can silently fail to fill.
     """
+    workflow_id = audit.current_workflow_id()
     try:
         # Keyword-only on the other side, so a lambda rather than positional
         # arguments through `to_thread`.
         promoted = await asyncio.to_thread(
             lambda: activation.activate_version(
-                library_id, version_id, tenant_id=tenant
+                library_id,
+                version_id,
+                tenant_id=tenant,
+                # The workflow's own id, so the run row this writes is the one
+                # `GET /runs/{workflowId}` resolves.
+                run_id=workflow_id,
             )
         )
     except activation.ActivationError as e:

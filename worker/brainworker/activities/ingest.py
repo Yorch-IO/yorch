@@ -18,12 +18,14 @@ import logging
 import pathlib
 from collections import Counter
 from dataclasses import asdict
+from datetime import datetime
+from typing import Any
 
 from temporalio import activity
 
 from .. import config
 from ..artifacts import ArtifactRef, ArtifactStore
-from ..catalog import Catalog
+from ..catalog import Catalog, RunEvent
 from ..graph import Graph
 from ..graph import projection as proj
 from ..graph.schema import document_id as make_document_id
@@ -1440,15 +1442,68 @@ async def activate_version(
 
 @activity.defn(name="record_run_outcome")
 async def record_run_outcome(
-    run_id: str, state: str, error_kind: str | None = None, error_detail: str | None = None
+    run_id: str,
+    state: str,
+    error_kind: str | None = None,
+    error_detail: str | None = None,
+    seq: int | None = None,
+    at: datetime | None = None,
+    stage: str | None = None,
 ) -> None:
+    """Close the run, and close its last stage in the same statement pair.
+
+    `seq`, `at` and `stage` come from the workflow — never from here. See
+    `Catalog._insert_event`: the workflow's counter and `workflow.now()` are what
+    make a retry a no-op, and a timestamp taken here would move under one.
+    """
     settings = _settings()
     with Catalog(settings.database_url) as catalog:
-        catalog.finish_run(run_id, state, error_kind=error_kind, error_detail=error_detail)
+        catalog.finish_run(
+            run_id,
+            state,
+            error_kind=error_kind,
+            error_detail=error_detail,
+            seq=seq,
+            at=at,
+            stage=stage,
+        )
 
 
 @activity.defn(name="set_run_stage")
-async def set_run_stage(run_id: str, stage: str, state: str | None = None) -> None:
+async def set_run_stage(
+    run_id: str,
+    stage: str,
+    state: str | None = None,
+    seq: int | None = None,
+    at: datetime | None = None,
+) -> None:
     settings = _settings()
     with Catalog(settings.database_url) as catalog:
-        catalog.set_run_stage(run_id, stage, state=state)
+        catalog.set_run_stage(run_id, stage, state=state, seq=seq, at=at)
+
+
+@activity.defn(name="record_run_events")
+async def record_run_events(run_id: str, events: list[dict[str, Any]]) -> None:
+    """Flush the transitions that happened before the run row existed.
+
+    Takes dicts rather than `RunEvent`s because the workflow buffers them before
+    any dataclass the catalog owns is in scope, and because a payload that
+    crosses the converter is better off being the plain shape it will be
+    reassembled from anyway.
+    """
+    settings = _settings()
+    with Catalog(settings.database_url) as catalog:
+        catalog.record_run_events(
+            run_id,
+            [
+                RunEvent(
+                    seq=int(e["seq"]),
+                    at=e["at"] if isinstance(e["at"], datetime)
+                    else datetime.fromisoformat(str(e["at"])),
+                    stage=str(e["stage"]),
+                    outcome=e.get("outcome"),
+                    detail=e.get("detail"),
+                )
+                for e in events
+            ],
+        )

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -137,6 +137,21 @@ class IngestWorkflow:
         self._report: GateReport | None = None
         self._correction: Correction | None = None
         self._stage: str = "starting"
+        #: The audit trail's total order, and its idempotency key.
+        #:
+        #: A counter on the workflow object rather than a sequence in the
+        #: database, because Temporal retries the activity that writes the row:
+        #: a retried transition has to carry the number it carried the first
+        #: time, or the trail grows a duplicate every time the catalog blinks.
+        #: `workflow.now()` is fixed at the same moment for the same reason.
+        self._seq: int = 0
+        #: Whether `register_document` has run, which is whether a `run` row
+        #: exists to hang an event off. `_insert_event` derives its tenant from
+        #: that row, so an event written before it is silently dropped.
+        self._registered: bool = False
+        #: Transitions that happened before the row existed, flushed once it
+        #: does. Two, in practice: `staging` and `registering`.
+        self._pending: list[dict[str, object]] = []
 
     # -- signals and queries ----------------------------------------------
 
@@ -221,7 +236,7 @@ class IngestWorkflow:
     async def _run(
         self, request: IngestRequest, options: StageOptions, run_id: str
     ) -> IngestResult:
-        self._stage = "staging"
+        await self._enter(run_id, "staging")
         staged: Staged = await workflow.execute_activity(
             act.stage_source,
             request,
@@ -229,13 +244,16 @@ class IngestWorkflow:
             retry_policy=_RETRY,
         )
 
-        self._stage = "registering"
+        await self._enter(run_id, "registering")
         registered: Registered = await workflow.execute_activity(
             act.register_document,
             args=[request, staged, run_id, workflow.info().workflow_id],
             start_to_close_timeout=WRITE_TIMEOUT,
             retry_policy=_RETRY,
         )
+        # The run row exists from here, so the two transitions that preceded it
+        # can be written and every later one goes straight through.
+        await self._flush_pending(run_id)
 
         # These exact bytes are already indexed under another path. The link was
         # written by `register_document`; re-running the pipeline would spend
@@ -267,7 +285,7 @@ class IngestWorkflow:
         # that selects a profile is computed from the evidence this pass
         # produces, so which rules apply is unknowable until the document has
         # been read once.
-        self._stage = "extracting"
+        await self._enter(run_id, "extracting")
         extraction: Extraction = await workflow.execute_activity(
             act.extract_text,
             # `None` is passed explicitly rather than left to the default.
@@ -281,7 +299,7 @@ class IngestWorkflow:
             retry_policy=_RETRY,
         )
 
-        self._stage = "profiling"
+        await self._enter(run_id, "profiling")
         decision: ProfileDecision = await workflow.execute_activity(
             act.resolve_profile,
             args=[registered.version_id, run_id, extraction, options],
@@ -290,7 +308,7 @@ class IngestWorkflow:
         )
         extraction = await self._reextract(request, run_id, extraction, decision)
 
-        self._stage = "previewing"
+        await self._enter(run_id, "previewing")
         preview: Preview = await workflow.execute_activity(
             act.preview_chunks,
             args=[run_id, extraction, options, decision],
@@ -339,8 +357,7 @@ class IngestWorkflow:
             and not approved.ignore_profile
             and not extraction.structured
         ):
-            self._stage = "learning"
-            await self._set_stage(run_id, "learning")
+            await self._enter(run_id, "learning")
             decision = await workflow.execute_activity(
                 paid.learn_profile,
                 args=[run_id, extraction, decision],
@@ -362,8 +379,7 @@ class IngestWorkflow:
         )
         correction: Correction | None = None
         if approved.correct and not extraction.structured:
-            self._stage = "correcting"
-            await self._set_stage(run_id, "correcting")
+            await self._enter(run_id, "correcting")
             correction = await workflow.execute_activity(
                 paid.correct_text,
                 args=[run_id, extraction],
@@ -404,7 +420,7 @@ class IngestWorkflow:
         # The chunks that actually get indexed. Always recomputed rather than
         # reused from the preview: after correction the preview's offsets index
         # a byte stream that no longer exists.
-        self._stage = "chunking"
+        await self._enter(run_id, "chunking")
         chunked: Chunked = await workflow.execute_activity(
             paid.chunk_final,
             args=[
@@ -416,8 +432,7 @@ class IngestWorkflow:
             retry_policy=_RETRY,
         )
 
-        self._stage = "projecting"
-        await self._set_stage(run_id, "projecting")
+        await self._enter(run_id, "projecting")
         projected: dict[str, int] = await workflow.execute_activity(
             act.project_structure,
             args=[request, staged, registered, run_id, chunked.chunks],
@@ -427,8 +442,7 @@ class IngestWorkflow:
 
         indexed: Indexed | None = None
         if approved.embed:
-            self._stage = "embedding"
-            await self._set_stage(run_id, "embedding")
+            await self._enter(run_id, "embedding")
             indexed = await workflow.execute_activity(
                 paid.embed_and_index,
                 args=[run_id, request.library_id, registered, staged, chunked],
@@ -443,8 +457,7 @@ class IngestWorkflow:
         # questions and never asking them.
         scores: Scores | None = None
         if approved.generate_evalset and approved.embed:
-            self._stage = "evaluating"
-            await self._set_stage(run_id, "evaluating")
+            await self._enter(run_id, "evaluating")
             evalset: EvalSet = await workflow.execute_activity(
                 paid.build_evalset,
                 args=[
@@ -498,8 +511,7 @@ class IngestWorkflow:
 
         semantics: Semantics | None = None
         if approved.extract_semantics:
-            self._stage = "semantics"
-            await self._set_stage(run_id, "semantics")
+            await self._enter(run_id, "semantics")
             semantics = await workflow.execute_activity(
                 paid.extract_semantics,
                 args=[run_id, registered, chunked, approved],
@@ -535,8 +547,10 @@ class IngestWorkflow:
         # would refuse to publish documents whose only fault is being ordinary.
         blocked = self._structural_block(decision, approved)
         if blocked:
-            await self._finish(run_id, "blocked", "structural_mismatch", blocked)
+            # Before `_finish`, not after: the terminal event names the stage
+            # the run was in when it ended, and this is that stage.
             self._stage = "blocked"
+            await self._finish(run_id, "blocked", "structural_mismatch", blocked)
             return IngestResult(
                 run_id=run_id,
                 document_id=registered.document_id,
@@ -552,7 +566,7 @@ class IngestWorkflow:
         # Activation is last, and only reached once every projection completed.
         # A version that became answerable halfway through would return chunks
         # with no citations, or citations pointing at text that was replaced.
-        self._stage = "activating"
+        await self._enter(run_id, "activating")
         await workflow.execute_activity(
             act.activate_version,
             args=[request, staged, registered],
@@ -560,8 +574,8 @@ class IngestWorkflow:
             retry_policy=_RETRY,
         )
 
-        await self._finish(run_id, "succeeded")
         self._stage = "done"
+        await self._finish(run_id, "succeeded")
 
         return IngestResult(
             run_id=run_id,
@@ -592,8 +606,7 @@ class IngestWorkflow:
         if request.auto_approve:
             return Approval(approved=True, options=options, reason="auto")
 
-        self._stage = "awaiting_approval"
-        await self._set_stage(run_id, "awaiting_approval", "awaiting_approval")
+        await self._enter(run_id, "awaiting_approval", "awaiting_approval")
 
         try:
             await workflow.wait_condition(
@@ -618,8 +631,9 @@ class IngestWorkflow:
         may reasonably want to look at before paying to embed it.
         """
         self._approval = None
-        self._stage = "awaiting_correction_review"
-        await self._set_stage(run_id, "awaiting_correction_review", "awaiting_approval")
+        await self._enter(
+            run_id, "awaiting_correction_review", "awaiting_approval"
+        )
         try:
             await workflow.wait_condition(
                 lambda: self._approval is not None, timeout=GATE_TIMEOUT
@@ -674,8 +688,7 @@ class IngestWorkflow:
         chunking is what makes the comparison honest, and the writer's tail prune
         is what stops the longer chunking's leftovers surviving the trip.
         """
-        self._stage = "tuning"
-        await self._set_stage(run_id, "tuning")
+        await self._enter(run_id, "tuning")
         outcome: TuneOutcome = await workflow.execute_activity(
             paid.propose_tuning,
             args=[run_id, registered, chunked, evalset, decision, scores],
@@ -773,7 +786,7 @@ class IngestWorkflow:
         """
         if extraction.structured or not decision.rules.needs_reextraction:
             return extraction
-        self._stage = "extracting"
+        await self._enter(run_id, "extracting")
         return await workflow.execute_activity(
             act.extract_text,
             args=[request, run_id, decision.rules],
@@ -781,8 +794,60 @@ class IngestWorkflow:
             retry_policy=_RETRY,
         )
 
-    async def _set_stage(
+    async def _enter(
         self, run_id: str, stage: str, state: str = "running"
+    ) -> None:
+        """Move into a stage, and leave a row saying so.
+
+        **Every** transition goes through here now, including the eight that
+        used to be a bare assignment: `staging`, `registering`, `extracting`,
+        `profiling`, `previewing`, `chunking`, `activating`. Those were the ones
+        that vanished — `run.stage` is a single column each write destroys, so
+        the free half of the pipeline left no trace at all once the workflow
+        ended, and the only per-stage timestamp that survived a run was
+        `cost_entry.created_at`, which exists only for stages that spend.
+
+        Recording them costs one local INSERT and no new dependency: everything
+        from `extracting` onward already runs after `register_document`, which
+        cannot itself proceed without the catalog. The two that genuinely
+        precede it are buffered rather than written, because `_insert_event`
+        derives its tenant from the `run` row and would silently drop them.
+
+        `workflow.now()` is deterministic and replay-safe, and it is what makes
+        a retried write land the timestamp it was first given rather than the
+        one the retry happened at.
+        """
+        self._stage = stage
+        self._seq += 1
+        if not self._registered:
+            self._pending.append(
+                {"seq": self._seq, "at": workflow.now(), "stage": stage}
+            )
+            return
+        await self._set_stage(run_id, stage, state, self._seq, workflow.now())
+
+    async def _flush_pending(self, run_id: str) -> None:
+        """Write the transitions that happened before there was a row to hang
+        them off. Idempotent for the same reason every other event write is:
+        each carries the `seq` it was given."""
+        if not self._pending:
+            return
+        pending, self._pending = self._pending, []
+        self._registered = True
+        await workflow.execute_activity(
+            act.record_run_events,
+            args=[run_id, pending],
+            start_to_close_timeout=WRITE_TIMEOUT,
+            retry_policy=_RETRY,
+        )
+
+    async def _set_stage(
+        self,
+        run_id: str,
+        stage: str,
+        state: str = "running",
+        seq: int | None = None,
+        at: datetime | None = None,
     ) -> None:
         """Record the stage, and say the run is running unless it is waiting.
 
@@ -801,7 +866,12 @@ class IngestWorkflow:
         """
         await workflow.execute_activity(
             act.set_run_stage,
-            args=[run_id, stage, state],
+            # Every argument passed explicitly, including the two that have
+            # defaults. Temporal maps payloads onto parameters by **arity**: a
+            # five-parameter activity handed three arguments cannot be lined up,
+            # so the converter gives up and passes raw dicts — which surfaces
+            # three frames away as an attribute error on a `dict`.
+            args=[run_id, stage, state, seq, at],
             start_to_close_timeout=WRITE_TIMEOUT,
             retry_policy=_RETRY,
         )
@@ -833,9 +903,13 @@ class IngestWorkflow:
         The value is constrained in `run_state_check`, which Prisma owns in the
         sibling checkout — `20260831140000_run_blocked`.
         """
+        self._seq += 1
         await workflow.execute_activity(
             act.record_run_outcome,
-            args=[run_id, state, error_kind, error_detail],
+            args=[
+                run_id, state, error_kind, error_detail,
+                self._seq, workflow.now(), self._stage,
+            ],
             start_to_close_timeout=WRITE_TIMEOUT,
             retry_policy=_RETRY,
         )
@@ -847,9 +921,13 @@ class IngestWorkflow:
         if isinstance(cause, ApplicationError):
             kind = cause.type or kind
         try:
+            self._seq += 1
             await workflow.execute_activity(
                 act.record_run_outcome,
-                args=[run_id, "failed", kind, detail[:2000]],
+                args=[
+                    run_id, "failed", kind, detail[:2000],
+                    self._seq, workflow.now(), self._stage,
+                ],
                 start_to_close_timeout=WRITE_TIMEOUT,
                 retry_policy=RetryPolicy(maximum_attempts=2),
             )

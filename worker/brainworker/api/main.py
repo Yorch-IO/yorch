@@ -15,15 +15,17 @@ import pathlib
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 import httpx
 import psycopg
 from fastapi import FastAPI, HTTPException
+from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client
 
-from .. import config
+from .. import auditlog, config
 from ..artifacts import ArtifactRef, ArtifactStore
 from ..catalog import Catalog, MigrationError, current_version, require_schema
 from ..graph import DEFAULT_CONFIDENCE_FLOOR, Graph, GraphError
@@ -636,6 +638,269 @@ async def run_status(workflow_id: str) -> dict[str, Any]:
     if (scores := _measured_scores(s.workspace, workflow_id, artifacts)) is not None:
         body["scores"] = scores
     return body
+
+
+# ---------------------------------------------------------------------------
+# The queue, and what a run actually did
+# ---------------------------------------------------------------------------
+#
+# `GET /runs/{id}` answers "where is this now", and it answers it from Temporal.
+# That is the right source for a live run and the wrong one for a finished one:
+# Temporal forgets a run when retention expires, at which point that route
+# reports `state: null` and `stage: null` for a run whose every column is still
+# in Postgres. These three routes are the other half.
+#
+# `/runs` is the queue. `/runs/{id}/audit` is the durable ledger and reads only
+# the catalog. `/runs/{id}/events` is the raw Temporal history — the one source
+# that shows retries and heartbeat timeouts no application code recorded, and
+# the one that goes away.
+
+
+#: How many raw history events to translate before saying "truncated".
+#:
+#: A history is a few dozen events for an ordinary import and grows with retries.
+#: The cap is about the *reader*, not the transport: past a few hundred lines
+#: nobody is reading, and the ledger above already says what happened.
+EVENT_CAP = 500
+
+#: The event types worth showing a person.
+#:
+#: `WorkflowTaskScheduled/Started/Completed` are the bulk of any history and say
+#: nothing anybody can act on — they are the workflow being woken up to decide
+#: what to do next. `WorkflowTaskFailed` is kept, because that one is a bug.
+_EVENTS_SHOWN = frozenset(
+    {
+        "WorkflowExecutionStarted",
+        "WorkflowExecutionCompleted",
+        "WorkflowExecutionFailed",
+        "WorkflowExecutionCanceled",
+        "WorkflowExecutionTerminated",
+        "WorkflowExecutionTimedOut",
+        "WorkflowExecutionSignaled",
+        "WorkflowTaskFailed",
+        "ActivityTaskScheduled",
+        "ActivityTaskStarted",
+        "ActivityTaskCompleted",
+        "ActivityTaskFailed",
+        "ActivityTaskTimedOut",
+        "ActivityTaskCancelRequested",
+        "ActivityTaskCanceled",
+        "TimerStarted",
+        "TimerFired",
+        "TimerCanceled",
+    }
+)
+
+
+def _cursor(value: str | None) -> tuple[datetime, str] | None:
+    """Decode `before`, which is `{started_at ISO}|{run id}`.
+
+    Two parts because the sort is `(started_at, id)`: `started_at` defaults to
+    `now()` and several runs enqueued from one multi-file drop land in the same
+    microsecond, so a timestamp alone would drop or repeat a row at the page
+    boundary. A cursor that will not parse is ignored rather than refused — the
+    caller gets the first page, which is a recoverable answer, instead of a 400
+    on a string they did not construct.
+    """
+    if not value:
+        return None
+    stamp, _, run_id = value.partition("|")
+    try:
+        return datetime.fromisoformat(stamp), run_id
+    except ValueError:
+        return None
+
+
+@app.get("/runs")
+async def runs(
+    limit: int = 25,
+    before: str | None = None,
+    kinds: str | None = None,
+    states: str | None = None,
+    library_id: str | None = None,
+    document_id: str | None = None,
+    version_id: str | None = None,
+) -> dict[str, Any]:
+    """The persistent queue: every run this organisation has, newest first.
+
+    Catalog only, and therefore answerable when Temporal is down — the same
+    reasoning `/project-summary` records for `recent_runs`. What a run is
+    *doing* belongs to `/runs/{id}`; what it *was* belongs here, and that is what
+    makes an import queue survive the window being closed.
+
+    Not an extension of `/project-summary`: that route is the landing screen's,
+    is capped at ten, and has no cursor because nobody scrolls it.
+    """
+    s = settings()
+    capped = max(1, min(limit, 100))
+    with Catalog(s.database_url) as catalog:
+        rows = catalog.runs(
+            # This plane *is* the legacy organisation, and saying so at the call
+            # site is what makes it a decision rather than an accident.
+            tenant_id=LEGACY_TENANT_ID,
+            limit=capped + 1,
+            before=_cursor(before),
+            kinds=_csv(kinds),
+            states=_csv(states),
+            library_id=library_id,
+            document_id=document_id,
+            version_id=version_id,
+        )
+    # One more than asked for, so "is there another page" is answered without a
+    # count over the whole table.
+    more = len(rows) > capped
+    rows = rows[:capped]
+    return {
+        "runs": [asdict(r) for r in rows],
+        "next_before": (
+            f"{rows[-1].started_at.isoformat()}|{rows[-1].id}" if more and rows else None
+        ),
+    }
+
+
+@app.get("/runs/{workflow_id}/audit")
+async def run_audit(workflow_id: str) -> dict[str, Any]:
+    """Every stage the run passed through, what it cost, and what it produced.
+
+    Reads only the catalog, deliberately, so it answers for a run Temporal has
+    forgotten — which is every run older than the retention period, and which is
+    exactly when somebody goes looking. A 404 here means no such run in this
+    organisation, never "Temporal does not remember it".
+    """
+    s = settings()
+    with Catalog(s.database_url) as catalog:
+        run = catalog.run(workflow_id, tenant_id=LEGACY_TENANT_ID)
+        if run is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "kind": "run_not_found",
+                    "message": f"no existe la ejecución {workflow_id!r}",
+                },
+            )
+        events = catalog.run_events(workflow_id, tenant_id=LEGACY_TENANT_ID)
+        costs = catalog.costs(workflow_id, tenant_id=LEGACY_TENANT_ID)
+        artifacts = catalog.artifacts(workflow_id)
+        # Keyed by version rather than by run, which is why this is fetched
+        # separately and is empty for a run that never reached one. The row
+        # carries no `kind`, so a caller cannot tell a plain collision from the
+        # heading disagreement that withholds activation — that distinction
+        # exists only on the Temporal payload today.
+        warnings = (
+            catalog.open_profile_warnings(run.version_id) if run.version_id else []
+        )
+    return auditlog.build(run, events, costs, artifacts, warnings)
+
+
+@app.get("/runs/{workflow_id}/events")
+async def run_events(workflow_id: str) -> dict[str, Any]:
+    """The raw workflow history: retries, timeouts, signals, and what caused them.
+
+    This is the only source that shows what no application code recorded. The
+    run that charged semantic extraction twice looked, from every other angle,
+    like one long stage — the heartbeat timeout, the closed attempt and the
+    second identical pass are visible here and nowhere else.
+
+    **`available: false` rather than a 404 or an empty list.** Temporal keeps
+    history only for its retention period, and "the history has aged out" and
+    "this run did nothing" must not render the same — the rule
+    `/project-summary` already applies to a leg it could not read. A caller that
+    sees `[]` with `available: true` is looking at a run that genuinely produced
+    no events worth showing.
+    """
+    client = await temporal()
+    handle = client.get_workflow_handle(workflow_id)
+    events: list[dict[str, Any]] = []
+    truncated = False
+    # Which activity each scheduled event was for.
+    #
+    # **Only `ActivityTaskScheduled` carries the activity type.** Started,
+    # Completed, Failed and TimedOut reference it by `scheduled_event_id`
+    # instead, so reading the name off each event leaves two thirds of the log
+    # anonymous — and the row that matters most is one of them, because the
+    # *attempt* is on `ActivityTaskStarted`. Without this, the single line this
+    # panel exists to show reads "ActivityTaskStarted · intento 2" with no
+    # indication of which activity retried.
+    named: dict[int, str] = {}
+    try:
+        async for event in handle.fetch_history_events():
+            kind = _event_kind(event)
+            if kind not in _EVENTS_SHOWN:
+                continue
+            if len(events) >= EVENT_CAP:
+                truncated = True
+                break
+            events.append(_event_row(event, kind, named))
+    except Exception as e:
+        log.info("no history for %s: %s", workflow_id, e)
+        return {"available": False, "truncated": False, "events": []}
+    return {"available": True, "truncated": truncated, "events": events}
+
+
+def _event_kind(event: Any) -> str:
+    """`EVENT_TYPE_ACTIVITY_TASK_STARTED` -> `ActivityTaskStarted`.
+
+    The CamelCase form is what Temporal's own UI shows and what anybody
+    searching for one of these will type.
+
+    **`event_type` is a plain `int`, not an enum object.** protobuf's Python
+    runtime represents enum fields as integers, so `getattr(t, "name", str(t))`
+    reads as careful and silently yields `"3"` — which matches nothing in
+    `_EVENTS_SHOWN`, so the whole history filters down to an empty list and the
+    route reports a run that did nothing. Found by translating a real history
+    rather than a hand-built double, which would have agreed with the
+    assumption.
+    """
+    name = EventType.Name(event.event_type).removeprefix("EVENT_TYPE_")
+    return "".join(part.capitalize() for part in name.split("_"))
+
+
+def _event_row(event: Any, kind: str, named: dict[int, str]) -> dict[str, Any]:
+    """One line, with the activity and attempt when the event carries them.
+
+    Attributes live on a per-type `*_event_attributes` field, so this reads
+    whichever one is set rather than branching per type — a new event type then
+    renders with whatever it happens to carry instead of rendering blank.
+
+    `named` carries the activity forward from the scheduling event to the ones
+    that only reference it. See `run_events`: without it the retry line, which
+    is the reason this panel exists, has no name on it.
+    """
+    attrs = None
+    for field in event.DESCRIPTOR.fields:
+        if field.name.endswith("_event_attributes") and event.HasField(field.name):
+            attrs = getattr(event, field.name)
+            break
+
+    activity = None
+    if attrs is not None and hasattr(attrs, "activity_type"):
+        activity = attrs.activity_type.name
+        named[event.event_id] = activity
+    elif attrs is not None:
+        scheduled = getattr(attrs, "scheduled_event_id", 0)
+        activity = named.get(scheduled)
+    attempt = getattr(attrs, "attempt", None) if attrs is not None else None
+
+    detail = None
+    failure = getattr(attrs, "failure", None) if attrs is not None else None
+    if failure is not None and getattr(failure, "message", ""):
+        detail = failure.message[:500]
+
+    stamp = event.event_time.ToDatetime().replace(tzinfo=timezone.utc)
+    return {
+        "id": event.event_id,
+        "at": stamp.isoformat(),
+        "type": kind,
+        "activity": activity,
+        "attempt": attempt or None,
+        "detail": detail,
+    }
+
+
+def _csv(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    return [part for part in (p.strip() for p in value.split(",")) if part] or None
 
 
 # ---------------------------------------------------------------------------

@@ -53,6 +53,7 @@ ACTIVITIES = [
     ingest.project_structure,
     ingest.activate_version,
     ingest.record_run_outcome,
+    ingest.record_run_events,
     ingest.set_run_stage,
     paid.learn_profile,
     paid.correct_text,

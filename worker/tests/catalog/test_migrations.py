@@ -36,6 +36,7 @@ def test_applying_every_migration_creates_every_table(database_url: str):
         "20260826180000_tenant_required",
         "20260831140000_run_blocked",
         "20260831160000_run_kind_ask",
+        "20260901120000_run_event",
     ]
     assert {
         "library",
@@ -47,6 +48,7 @@ def test_applying_every_migration_creates_every_table(database_url: str):
         "run",
         "run_artifact",
         "cost_entry",
+        "run_event",
         "profile_warning",
         "schema_migration",
         "tenant",
@@ -89,6 +91,7 @@ def test_require_schema_accepts_a_catalog_ahead_of_the_code(database_url: str):
         "20260826120000_tenancy",
         "20260826180000_tenant_required",
         "20260831140000_run_blocked",
+        "20260831160000_run_kind_ask",
         m.REQUIRED_MIGRATION,
     ]
 

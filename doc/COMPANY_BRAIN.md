@@ -2406,3 +2406,316 @@ En un producto gratuito eso es una laguna. En uno **de pago** es la factura de
 una organización, porque la factura es `SUM(cost_entry)` filtrado por
 `tenant_id`. Anotado aquí y en la lista de defectos; arreglarlo es una actividad
 nueva y su propia decisión.
+
+## El grafo de la biblioteca, leído desde memoria — 2026-09-01
+
+La pestaña Grafo abría en la vista de toda la biblioteca, y cada movimiento de un
+filtro costaba una ida y vuelta **más** una simulación de fuerzas completa
+ejecutada de forma síncrona dentro de un `useMemo` durante el render. Reescrita.
+Todo lo de abajo está medido contra la pila en marcha, tenant `preprod`, 73
+libros, `lib_teologia`.
+
+### El punto de partida
+
+| grado ≥ | conceptos | aristas | `settle()` en el hilo del render |
+|---|---|---|---|
+| 3 (por defecto) | 858 | 4.963 | **209 ms** |
+| 2 | 2.034 | 7.315 | **497 ms** |
+| 1 (todo) | 12.775 | 18.056 | **3.859 ms** |
+
+Y el mismo trabajo con los datos ya en memoria:
+
+| operación | medida |
+|---|---|
+| `library_mentions` completa (grado ≥ 1, suelo 0,5) en Memgraph | **17.814 filas / 2,25 MB CSV en 183 ms**, proceso `mgconsole` incluido |
+| el sobre como JSON de la ruta | **3,48 MB** (12.626 conceptos, 17.814 aristas) |
+| `JSON.parse` | **10,5 ms** |
+| índices de adyacencia (CSR sobre todo el espacio de nodos) | **5,4 ms**, una vez |
+| **derivar la vista completa de un umbral** | **0,88 ms** |
+| histograma para etiquetar los cinco topes | **0,07 ms** |
+| heap neto retenido por (plano, biblioteca, suelo) | **≈ 3,7 MB** |
+
+El servidor nunca fue el cuello de botella: ~50 ms de Memgraph contra 209-3.859
+ms de maquetación en el hilo del render.
+
+### Por qué el filtro de grado puede vivir en el cliente
+
+`library_mentions` calcula `documents = count(v)` en su segundo `WITH` y aplica
+`WHERE documents >= $min_documents` **después**, así que el grado de un concepto
+no depende del umbral con el que se pidió. Para un
+`(biblioteca, tenant, suelo)` fijo, la respuesta del servidor a *k* es
+exactamente las filas del sobre a `min_documents = 1` con `documents >= k`. No es
+una aproximación: `graphModel.test.ts` reimplementa el plegado de la ruta FastAPI
+y lo compara contra una segunda implementación.
+
+Sobrevive incluso al recorte, lo que no es obvio: el `ORDER BY` empieza por
+`documents DESC`, **la misma clave del filtro**, así que las filas de un umbral
+son un *prefijo* del orden y el `LIMIT` corta la misma cola en los dos. Reordenar
+esa cláusula a `mentions DESC, documents DESC` lo rompería en silencio.
+
+El **suelo de confianza sí sigue en el servidor**, y no por comodidad: el grado
+se cuenta *después* del predicado del suelo, así que ningún cliente puede
+re-derivarlo desde un sobre pedido con otro suelo.
+
+### `mention_limit`: 20.000 → 60.000
+
+Medido: **17.814 filas a `min_documents = 1` con el suelo en 0,5 — el 89% del
+tope de 20.000**, que se fijó contra 15.367 filas medidas el 2026-08-24. Eso era
+una consulta ocasional y ahora es el sobre estándar en cada carga, y el síntoma
+de pasarse no sería un rechazo sino un **grafo silenciosamente más pequeño en
+todos los umbrales**. 60.000 son ~240 libros al ritmo actual de 247 filas por
+libro, y está por encima del techo duro de filas a cualquier suelo: una fila es
+un par (versión, concepto) distinto y el grafo entero tiene 27.991 `MENTIONS`.
+
+Cambia en dos ficheros, `worker/brainworker/graph/queries.py` y su fork
+`../yorch-tauri-backend/src/graph/queries.ts`, y `queries.parity.spec.ts` los
+compara campo por campo contra el registro de Python volcado en vivo —
+**verificado rompiéndolo**: con un lado en 55.000 falla con el diff exacto.
+
+```bash
+cd worker && uv run pytest tests/graph/test_queries.py tests/api/test_overview_routes.py -q
+cd ../yorch-tauri-backend && npx jest src/graph/     # 45 tests, la paridad no salta
+```
+
+Y como cambia `queries.py`, la imagen se reconstruye con **los tres overlays** o
+el cambio no llega al contenedor.
+
+### La escalera de atlas, y la medición que la forzó
+
+`settle`'s `k = SPACING * sqrt(W*H/n)` escala con el número de nodos, así que dos
+corridas sobre subconjuntos distintos de una misma biblioteca son imágenes
+globalmente distintas. Medido sobre la distribución de grados real, las dos
+ajustadas al mismo lienzo de 1200×820 (diagonal 1.452 px):
+
+| estrategia | movimiento medio al cambiar de umbral | separación entre nodos a grado 3 | worker total |
+|---|---|---|---|
+| cinco atlas independientes | **162 px (11,1%)** | — | 7,5 s |
+| lo mismo, con un ajuste común | 214 px (14,7%) — **peor** | — | 6,0 s |
+| escalera caliente de cinco `settle` | 93 px (6,4%) | — | 6,3 s |
+| solo filtrar un atlas base | **0 px** | **6 px** — un coágulo | 6,4 s |
+| **base + relajación de 60 ticks** | **40-48 px (2,8-3,3%)** | **16 px** | **5,9 s** |
+
+Alinear dos atlas independientes con la mejor rotación y escala solo bajaba de
+162 a 110 px: difieren estructuralmente, no por una transformación global.
+
+La escalera que se implementó:
+
+| | | medido |
+|---|---|---|
+| 1 | el umbral por defecto, en frío | 226 ms — la primera imagen |
+| 2 | el base al umbral más ancho, sembrado con el anterior | 5.531 ms |
+| 3 | los otros cuatro, relajados desde el base, 60 ticks | 141 ms los cuatro |
+
+La relajación es legibilidad, no adorno: filtrar el base sin relajar deja una
+distancia media al vecino más cercano de **6 px contra 16 px**, porque los
+conceptos de grado alto se apiñan en el centro.
+
+`settle` creció un `start`/`heat` opcional y aditivo para esto; las 15
+aserciones de `force.test.ts` siguen valiendo sin tocarlas.
+
+### El worker, y el CSP resuelto midiendo
+
+`vite build` emite `graphAtlas.worker-*.js` como fichero propio de 4,5 kB
+referenciado por URL, y `grep blob:` sobre el bundle da **cero**. Con
+`default-src 'self'` y sin `worker-src` declarado, un worker del mismo origen
+está permitido por herencia. La forma literal
+`new Worker(new URL("./x.worker.ts", import.meta.url), { type: "module" })` es la
+que el empaquetador reconoce; asignar la URL a una variable antes no emite chunk
+y da 404 en producción mientras funciona en desarrollo.
+
+jsdom no define `Worker`, así que **toda la suite recorre la ruta en línea** —
+por eso `graphAtlas.worker.ts` es una bomba de mensajes sin lógica.
+
+### Las aristas al canvas
+
+17.814 `<line>` fuera del DOM al umbral más ancho. Dos cosas que costó:
+
+- **`lineWidth` es estado del contexto**, así que un ancho por arista fuerza un
+  `stroke()` por arista. Cuantizado en seis cubetas son ≤6 llamadas, y ≤12 con
+  selección.
+- **`scale(value, max, min, span)` de `radial.ts` toma un *span*.** La llamada
+  que había, `scale(e.mentions, maxEdge, 0.6, 2.4)`, dibuja anchos de 0,6 a
+  **3,0**, no a 2,4.
+
+### La puerta
+
+```bash
+cd app && npm run typecheck && npx vitest run && npm run build   # 348 passed, 32 files
+npx vitest run -t "define no key"                                 # el escáner i18n
+cd ../worker && uv run pytest -q                                  # 516 passed, 78 skipped
+```
+
+### Lo que sigue sin verificarse, y por qué
+
+Tres preguntas, y las tres necesitan la ventana:
+
+1. **Si 12.626 nodos SVG panean a 60 fps en WebKitGTK.** La contingencia está
+   diseñada y no construida: bajar al canvas también los conceptos por debajo de
+   la banda actual, con hit-test sobre una rejilla del atlas.
+2. **El color y la opacidad de las aristas en los dos temas.** Un volcado
+   estático no tiene píxeles de canvas. Un token que falta pinta *nada* a
+   propósito, así que el fallo es ruidoso cuando alguien mire.
+3. **Si la rueda arreglada funciona con una rueda de verdad**, y si la
+   interpolación de 300 ms se lee como un movimiento a los 40-48 px reales.
+
+Y la salvedad que lo complica: el plano libre sirve el tenant *legacy*, que desde
+el 2026-08-31 solo tiene `lib_pruebas` — 2 documentos, 1 versión indexada. Los 73
+libros están en `preprod`, alcanzable solo por el plano de pago. Las preguntas de
+volumen exigen entrar con el plano cloud; cualquier otra cosa es un payload
+sintético y hay que decirlo.
+
+## Auditar un índice ya construido — 2026-09-02
+
+`auditlog.py` responde «qué hizo esta ejecución». Faltaba la pregunta de debajo:
+**si el índice que dejó sigue siendo coherente consigo mismo**. Una ejecución
+puede terminar bien, facturar honestamente, dejar un rastro completo y aun así
+dejar una versión cuyos puntos de Qdrant, nodos del grafo y `chunks.jsonl` no
+describen el mismo documento — y ninguno de esos tres desacuerdos falla nada.
+
+`worker/scripts/audit_version.py` recorre cinco patas contra cualquier `ver_…`,
+cada una con su propia bandera `available`, y **no escribe nada**. Las
+comparaciones viven en `worker/brainworker/auditversion.py`, puras y con 34
+pruebas: el valor de una auditoría está en lo que *compara*, y una prueba que
+necesitara un Postgres, un Memgraph y un Qdrant en pie para verificar una
+diferencia de conjuntos se correría lo bastante poco como para no valer nada.
+
+Nada se reimplementa. Un identificador de punto, un ámbito de payload y un
+`claim_id` son justamente lo que se está comprobando, así que una auditoría que
+los derivase con su propia aritmética solo podría confirmar su propia aritmética:
+salen de `brainworker.indexing`, `brainworker.graph.schema` y `docagent.qdrant`.
+El Cypher son literales de este repositorio — nunca plantillas que un planificador
+pueda nombrar — y `assert_read_only` rechaza cualquiera que adquiera una cláusula
+de escritura, así que la herramienta no puede volverse escritora porque alguien
+edite una cadena.
+
+Se añadió una cosa al motor: `Qdrant.scroll(filters)`, que devuelve el **id** del
+punto además del payload. `scroll_all` lo tiraba, y el id es lo único que puede
+decir si la colección conserva una cola que una fragmentación más larga dejó
+atrás — el payload de un punto rancio está perfectamente bien formado.
+
+### El primer caso: `02-PuertasEternas_INT.pdf.corrected`
+
+`ver_0cde0e3196d06e4259a32a52`, tenant `preprod`, `lib_teologia`, activa.
+El libro más caro que ha producido esta instalación y el de peor calidad medida.
+
+**La estructura está limpia, y eso también es un resultado.** 234 fragmentos,
+**234 de 234 vanos byte-exactos** contra `raw.txt` (231.059 bytes), índices
+contiguos `0..233`, 99,52% del fichero cubierto. 234 puntos en Qdrant, todos con
+el id que `point_id(version, índice)` deriva, **ninguno con la cola rancia** que
+`prune_tail` existe para quitar, y ningún campo de payload equivocado. En el
+grafo: 234 fragmentos, 27 secciones, 234 citas, 1.300 afirmaciones, **un solo
+prefijo de título en los localizadores** y **cero nodos con otro tenant**.
+
+**Y las semánticas no dejaron nada atrás.** 1.300 afirmaciones producidas,
+1.300 en el grafo, 0 rancias. 1.010 nombres de concepto plegados en 974 ids por
+`canonical_concept`, los 974 presentes. 1.256 `MENTIONS` exactas. Cero
+afirmaciones huérfanas. Las dos ejecuciones canceladas nunca llegaron a
+extracción, así que el defecto del MERGE no llegó a dispararse aquí.
+
+### Lo que sí encontró: un tercio de la factura no compró nada
+
+| ejecución | estado | etapas | USD |
+|---|---|---|---|
+| `ingest-…176f024f` | cancelada | perfil 0,007896 · embedding 0,011915 · **evalset 0,575250** | **0,595061** |
+| `ingest-…b5cbf4d9` | cancelada | **corrección 0,601452** | **0,601452** |
+| `ingest-…a2ca526d` | correcta | embedding 0,005680 · **evalset 0,571013** · evaluación 0,000485 · semántica 1,983474 · tuning 0 | 2,560652 |
+| | | | **3,757165** |
+
+**El conjunto de evaluación se generó dos veces**: 0,575250 + 0,571013 =
+**1,146263**, de los cuales 0,575250 se fue con una ejecución cancelada. Y los
+0,601452 de corrección compraron un `corrected.txt` que el índice vivo no usa —
+la ejecución que triunfó no tiene etapa `correcting`, así que sus vanos indexan
+`raw.txt`. En total **1,196513 de 3,757165 — el 31,8% — se gastó en ejecuciones
+que se cancelaron**, y el índice que existe costó 2,560652.
+
+Nada de esto está mal en el código: cancelar cuesta lo que cuesta. Lo que no
+existía era una forma de verlo. La pata del rastro agrupa el gasto por etapa
+*a través de* las ejecuciones de una versión y nombra las que se cobraron en más
+de una.
+
+**La primera ejecución no tiene ni una fila de `run_event`** — es anterior al
+rastro — y eso se informa como *no disponible*, nunca como una ejecución que no
+hizo nada. Sus 0,595061 caen enteros en el grupo `stage: null` de
+`auditlog.build`, que es exactamente el caso que esa función documenta.
+
+**Y el aviso de perfil #47 es el defecto de `_topical_overlap`, vivo**:
+`similarity 0.0` con `collides_with` nombrando **el propio fichero del
+documento**. La auditoría lo marca `comparable: false` en vez de repetir la
+cifra, porque para un `.txt` ese 0,0 significa «no hay base para juzgar» y se lee
+como el caso más peligroso.
+
+### La medición se reprodujo, y salió gratis
+
+Con `--measure`, contra el índice tal como está hoy y con el mismo conjunto de 80
+preguntas del artefacto:
+
+| | registrado | vuelto a medir | Δ | ¿fuera del margen ±0,0401? |
+|---|---|---|---|---|
+| recall@1 | 0,5375 | 0,5125 | −0,0250 | no |
+| recall@5 | 0,8125 | **0,8125** | 0,0000 | no |
+| MRR@10 | 0,6587 | 0,6472 | −0,0115 | no |
+| dense-only@5 | 0,7250 | 0,7250 | 0,0000 | no |
+| suelo de ruido | 0,4967 | 0,4967 | 0,0000 | no |
+
+**Coste: 0 tokens.** Cada vector de consulta salió de `docagent.embedcache` — la
+etapa `evaluating` embebió esas mismas 80 preguntas bajo ese mismo modelo, y la
+caché se indexa por (modelo, ancho, tarea, texto). No es algo que dar por
+supuesto, así que se informa: un número distinto de cero ahí es gasto real.
+
+`min_score` 0,60 contra un suelo de 0,4967 — honesto, con 0,1033 de holgura.
+
+**La pregunta corrompida existe y no es la causa.** Una de las 80 está guardada
+percent-encoded (`%C3%82%C2%BFQu%C3%A9 caracter%C3%ADsticas…`, `chunk_index`
+225) y **no está entre los 15 fallos registrados**: encontró su fragmento dentro
+del top 5 pese a la codificación. Excluirla sube recall@1 a 0,557 y MRR a 0,6702
+y **baja** recall@5 a 0,8101. Así que el 0,8125 de este libro no se explica por
+ahí.
+
+### El defecto que la auditoría tuvo primero fue suyo
+
+Un `char_span` indexa **uno** de hasta tres flujos que una ejecución deja lado a
+lado, y nada registra cuál: `raw.txt` (extracción cruda), `extracted.txt`
+(extracción con las reglas del perfil aplicadas — un segundo pase que el
+pipeline hace siempre que adopta un perfil) y `corrected.txt` (la corrección
+reescribe el texto, que es por lo que tiene que correr antes de fragmentar).
+
+Elegir por precedencia parece correcto y es una conjetura, y falla en la
+dirección cara: un índice correcto informado como roto, por una herramienta cuyo
+único trabajo es que la crean. Medido sobre `ver_0ebf4f0b50a27202db3fcca6`:
+**`raw.txt` verifica 8 de 600 vanos y `extracted.txt` verifica 600 de 600.**
+
+Así que `choose_stream` los puntúa todos y elige por las cifras, e imprime las de
+los demás al lado. Cuando uno verifica entero no queda juicio que hacer; cuando
+ninguno lo hace, la comparación *es* el hallazgo, y dice si un flujo está
+ligeramente desplazado o si todos son ajenos — que son defectos distintos.
+
+### El 62% de semánticas rancias ya no se reproduce
+
+`CLAUDE.md` registra, medido el 2026-09-01 sobre
+`ver_0b71d21eeb3228f54437d9cf`, un grafo con 5.001 afirmaciones donde la
+ejecución extrajo 3.055, **8.043 en total y 4.988 (62%) dejadas atrás**.
+Medido de nuevo el 2026-09-02, por dos caminos independientes:
+
+```
+afirmaciones producidas por la reindexación   3.055
+alcanzables por DERIVED_FROM desde la versión 3.055
+con source_chunk_id de esta versión (sin arista) 3.055
+MENTIONS desde la versión                     3.497  (= las producidas)
+huérfanas                                         0
+```
+
+Las 4.988 se borraron. **Lo que las borró no está registrado en ninguna parte**,
+y el mecanismo sigue intacto: `project_claims` y `project_semantic_edges` siguen
+haciendo MERGE y el único `DELETE` de afirmaciones del módulo sigue siendo el de
+`_DELETE_VERSION`, que quita una versión entera. Así que la entrada del defecto
+se queda; lo que cambia es que su cifra es histórica y esta instalación ya no la
+puede enseñar.
+
+### Verificado
+
+Tres versiones distintas, con `--measure` en una; con Memgraph apuntado a un
+puerto muerto, donde las patas del grafo informan `available: false` nombrando la
+URL que intentaron y las otras tres siguen respondiendo; y con un `ver_…`
+inexistente. `550 passed, 78 skipped` en el worker y `194 passed, 15 skipped` en
+el motor. Después: 6.202 puntos en la colección, 234 en la versión y
+`cost_entry` sumando 3,757165 — las mismas cifras que antes de auditar.

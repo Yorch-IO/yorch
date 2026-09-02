@@ -54,16 +54,30 @@ uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # 462 passed, 78 skipped
-# 528 passed, 12 skipped with the stack up — and the Bolt port must come
-# from `docker`, not `infra/.env`: BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789
+cd worker && uv sync && uv run pytest -q           # 550 passed, 78 skipped
+# With the stack up the graph/ and catalog/ integration tests run instead of
+# skipping; that figure was last taken as 528 passed, 12 skipped, before the 34
+# audit tests were added. The Bolt port must come from `docker`, not
+# `infra/.env`: BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789. Do **not** point that
+# run at a disposable BRAIN_QDRANT_COLLECTION to be safe — tests/answering read
+# the real index and 12 of them fail against an empty collection.
 # graph/ and catalog/ are integration tests: they skip, naming the URL they
 # tried, when Memgraph or Postgres is down, and neither fixture wipes anything.
 uv run pytest tests/unit/test_artifacts.py -k rewritten -q
 
+# Audit one indexed version, read-only. The three stores as the app publishes
+# them; `infra/.env` names the ports and the password but no DATABASE_URL,
+# because the containers build theirs from compose — and 5432 is a *different*
+# Postgres. `--measure` re-runs the recorded recall measurement.
+BRAIN_WORKSPACE_DIR=~/.local/share/io.sek.companybrain/workspace \
+BRAIN_QDRANT_URL=http://127.0.0.1:6433 \
+BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789 \
+BRAIN_DATABASE_URL="postgresql://brain:$BRAIN_PG_PASSWORD@127.0.0.1:5532/brain" \
+uv run python scripts/audit_version.py ver_… [--measure] [--json out.json]
+
 # Desktop app
 cd app && npm install
-npm run typecheck && npx vitest run && npm run build   # 242 passed
+npm run typecheck && npx vitest run && npm run build   # 348 passed
 npx vitest run -t "define no key"                  # single test by name
 COMPANY_BRAIN_REPO_ROOT=/home/jjimenez/yorch npm run tauri dev
 
@@ -273,6 +287,25 @@ driver, so there is one owner of the schema and one set of models.
   because the badge promises one. The planning assumption was "hundreds of
   concepts"; it was wrong by twenty times, and nothing but running the query
   would have said so.
+  **The default is 3 since 2026-09-01, not 2.** Re-measured that day after the
+  orphan sweep: 12,823 concepts, **2,034 at degree ≥ 2 and 858 at ≥ 3** — the
+  same 16% surviving `≥ 2` as in August, so the ratio is stable in this corpus
+  and the August figures can still be read as current. 2 was chosen as "the
+  subgraph that has edges between books at all", which is the right *definition*
+  and was still two thousand nodes on a 630px canvas. The next step up is ≥ 5 at
+  322, which begins reading as a map of general topics rather than of the bridges
+  between these particular books. The number lives in one place — the
+  `library_mentions` template's `Param` default — and both planes derive their
+  route default from it (`_template_default`, `templateDefault`), which
+  `queries.parity.spec.ts` compares. On the client it lives in
+  `app/src/lib/graphModel.ts` as `THRESHOLDS` and `DEFAULT_THRESHOLD`, imported
+  by the screen rather than repeated in it, because the derivation and the
+  control must not disagree about what the stops are.
+  **Since 2026-09-01 the degree filter no longer reaches the server at all.**
+  The app fetches `min_documents = 1` once and derives every threshold from that
+  envelope — see *The degree filter is an equality, not an approximation* below.
+  So the request never carries a threshold, and the template's default matters
+  only to a caller that is not this app.
 - **`library_mentions` aggregates twice, and its `ORDER BY` names the returned
   aliases.** The first `WITH` collapses chunks into one weight per (book,
   concept); the second counts books per concept so the degree filter can apply to
@@ -291,6 +324,22 @@ driver, so there is one owner of the schema and one set of models.
   `test_every_template_that_raises_its_ceiling_is_hidden_from_the_planner` is
   what keeps them from being separated. `get()` and `bind()` are untouched, so
   the API still calls them by id exactly as it calls any other.
+  **`mention_limit` is 60,000 since 2026-09-01, and it became load-bearing that
+  day.** It was 20,000, set against 15,367 rows measured 2026-08-24. Re-measured
+  on the same library, now 73 books: **17,814 rows at `min_documents = 1` with
+  the floor at 0.5 — 89% of the cap.** That used to be an occasional query and is
+  now the standing envelope the app fetches on every floor change, and the
+  symptom of going over would not be a refusal but a *silently smaller graph at
+  every threshold*. 60,000 is about 240 books at today's 247 rows per book, and
+  it is also above the hard ceiling on rows at any floor: a row is a distinct
+  (version, concept) pair and the whole graph holds 27,991 `MENTIONS`, so
+  lowering the floor can no longer cut this library. `default` moves with `cap`
+  because no caller has ever passed the parameter, so the default is the
+  operative number and `truncated.edges` is compared against it. The fork in
+  `../yorch-tauri-backend/src/graph/queries.ts` carries both numbers and its
+  comment; `queries.parity.spec.ts` compares them field for field against the
+  Python registry dumped live, **verified by breaking it** — one side at 55,000
+  fails with the exact diff.
 - **`/project-summary` degrades instead of failing, and never reports zero for
   "could not ask".** Every other read turns a down Memgraph into a 503, which is
   right for a screen whose whole content is the graph. Home is the screen the app
@@ -463,6 +512,20 @@ driver, so there is one owner of the schema and one set of models.
   `chunks.jsonl` and `semantics.json`, so only embedding can spend. Rebuild is
   *not* "reindex with correction off": correction changes the text's length, so
   that produces different `char_span`s and a silently different index.
+
+- **A `char_span` indexes one of three streams, and nothing records which.** A
+  run can leave `raw.txt` (extraction before any rule), `extracted.txt`
+  (extraction with the learned profile's rules applied — a *second* pass the
+  pipeline makes whenever a profile is adopted) and `corrected.txt` side by side,
+  and the offsets belong to exactly one of them. No artifact, column or event
+  says so. Choosing by precedence reads as obvious and is a guess, and it fails
+  in the expensive direction: measured on `ver_0ebf4f0b50a27202db3fcca6`,
+  **`raw.txt` verifies 8 of 600 spans where `extracted.txt` verifies 600 of
+  600** — a byte-exact index that a precedence rule would report as broken.
+  Anything checking a span against a file has to score every stream present and
+  choose by the numbers; `auditversion.choose_stream` is the one that does, and
+  it prints the losers' scores beside the winner's so a total failure is
+  distinguishable from a slight offset.
 
 - **The embedding model belongs to the collection, not to the engine.**
   `docagent.vertex.EMBED_MODEL` is `gemini-embedding-001`, which is what the CLI
@@ -998,6 +1061,41 @@ bound imperatively with `{ passive: false }` precisely because React's `onWheel`
 cannot `preventDefault` — if that binding is wrong, the page scrolls instead of
 the canvas zooming, and nothing in the suite would say so.
 
+**That last sentence turned out to be describing a live defect, and it was found
+by reading rather than by pressing.** The binding *was* wrong: the effect
+depended on `[zoomBy]`, whose identity never changed, so it ran once at mount —
+when the `<svg>` had not been rendered — and never again. **The wheel had never
+zoomed this canvas.** It is a callback ref now, which cannot be scheduled before
+its node exists, and it zooms towards the pointer rather than the centre. The
+test for it is the first one the wheel has ever had, and it fails against both
+the old binding and a centred zoom.
+
+**Three questions about the library graph are still open, and all three need the
+window.** As of 2026-09-01 the screen has been rebuilt — one envelope in memory,
+five layouts from a worker, edges on a canvas, an imperative drag — and 348 tests
+plus a screenshot pass at 1440 and 900 in both themes cover what they can. What
+they cannot:
+1. **Whether 12,626 SVG nodes pan at 60 fps in WebKitGTK.** The edges left the
+   DOM, which removes 17,814 elements, and a drag is now one attribute write per
+   frame — but ~13,000 elements in one SVG is still an unmeasured amount for that
+   engine. The contingency is designed and not built: draw the concepts below
+   the current band on the canvas too, keep SVG for the books, the top band and
+   anything selected, and hit-test through a uniform grid over the atlas.
+2. **The edge colour and alpha in both themes.** A canvas cannot resolve a
+   custom property, so the tokens are read with `getComputedStyle` and re-read on
+   a `prefers-color-scheme` change — and a static `innerHTML` dump has no canvas
+   pixels, so the screenshot pass cannot see the result. A missing token paints
+   nothing rather than a plausible grey, deliberately, so the failure is loud
+   when somebody does look.
+3. **Whether the wheel fix works with a real wheel**, and whether the 300 ms
+   tween reads as a movement rather than a shuffle at the real 40-48 px.
+
+And the caveat that makes this awkward: the free plane serves the **legacy**
+tenant, which since 2026-08-31 holds only `lib_pruebas` — 2 documents, 1 indexed
+version. The 73-book corpus is in `preprod`, reachable only through the paid
+plane. So the volume questions above need the cloud plane signed in; anything
+else is a synthetic payload, and should be reported as one.
+
 **The Graph screen is the exception, and how it was looked at is worth
 copying.** Its redesign on 2026-08-21 was rendered to static HTML from a
 throwaway vitest file (`render` plus `document.body.innerHTML`, the stylesheet
@@ -1030,6 +1128,23 @@ shell is a full-height grid with its own scroller, so a shot file must override
 fold is cropped out of the screenshot; and headless Chrome does not default to
 light, so pass `--blink-settings=preferredColorScheme=1` and inject the dark
 tokens by hand for the dark shots.
+
+**Two more, from the 2026-09-01 run on the rebuilt library graph — and both were
+defects in the shot file rather than in the screen, which is its own lesson: a
+harness that renders the page wrong will happily tell you the page is wrong.**
+`.app` is a grid of `15rem 1fr`, so with no sidebar in the dump `main` lands in
+the *first* column and the whole screen renders 225 px wide; the file has to
+override `grid-template-columns` and not only `height`. And the dark token block
+already contains its own `:root`, so wrapping it in another produces
+`:root { :root { … } }` — invalid, silently ignored, and **the dark shots come
+out pixel-identical to the light ones**. That one is worth naming because the
+failure looks like a pass.
+
+A third thing the same run settled, and the only way to settle it in a static
+dump: **tint the canvas.** A `<canvas>` has no pixels in an `innerHTML` dump, so
+its stacking cannot be seen — give `.graph-edges` a translucent background in the
+shot file only, and if the nodes are visible over the wash the canvas is
+underneath. A flat rectangle with nothing on it is the failure.
 
 One measurement the screenshots produced and nobody has acted on: at the
 narrowest two-column width the media query allows (1216px, since `rem` in a
@@ -1087,6 +1202,25 @@ an empty graph produces no NaN. It also runs the real library's shape — 67 boo
 and 1,719 concepts — to keep the quadratic version from coming back: repulsion
 goes through a uniform grid, and the whole settle takes about 0.4 s.
 
+**The library graph's rewrite added six more modules on the same principle**, and
+the split is worth knowing before looking for a behaviour in the component:
+`graphModel.ts` is the envelope as typed arrays plus every derivation over it
+(the degree filter, the adjacency CSR, the histogram, the search index, the
+composed view filters); `graphAtlas.ts` is the chain of layouts and its message
+protocol, and imports no React because **the worker imports it**;
+`graphAtlas.worker.ts` is a message pump with no logic in it, because jsdom
+defines no `Worker` and it is the one file the suite cannot execute;
+`viewport.ts` is the arithmetic of looking — `fitBox`, `clientToView`, `zoomAt`,
+`panBy` — which exists because jsdom implements neither `getScreenCTM` nor
+`createSVGPoint` and returns zeros from `getBoundingClientRect`, so a zoom that
+read the pointer through the SVG's own matrix could not be asserted at all;
+`graphPainter.ts` draws the edges through an **injected** context, because
+jsdom's `getContext("2d")` returns `null` and that makes the null case a test
+rather than a crash; and `tween.ts` is the interpolation, whose NaN rules a CSS
+transition cannot express. The hooks that touch the DOM — `useAtlas`,
+`useEdgeCanvas`, `useLayoutTween`, `libraryGraphStore` — hold no decisions worth
+asserting and are the thin part on purpose.
+
 The two older suites still scan *source text* — `i18n.test.ts` for unused keys,
 `LibraryScreen.test.ts` for the property that a permanent removal cannot fire
 without passing through the confirm branch. They are no longer the only option,
@@ -1100,12 +1234,348 @@ returns correction *counts* rather than a diff, so the UI cannot show what
 changed; DOCX, PPTX, XLSX and CSV have never been run end to end (PDF and TXT
 have), and the owner has deprioritised checking them.
 
+### The audit trail: what a run did, and how it is kept
+
+Added 2026-09-01. `run.stage` answers "where is this now" and destroys the answer
+to "what did it do", because it is one column each transition overwrites — and
+**eight of `IngestWorkflow`'s stages never reached it at all**, so the free half
+of the pipeline left no trace once a run ended. `cost_entry.created_at` was the
+only per-stage timestamp that survived, for the eight stages that spend and no
+others. The product could bill $10 across sixteen stages and afterwards answer
+exactly one question about it: the aggregate.
+
+- **`run_event` is one row per *transition*, not a start row and an end row.** A
+  stage's duration is the next row's `at` minus its own, and the terminal row —
+  the only one carrying an `outcome` — closes the last stage. That makes "started
+  and never ended" unrepresentable, which matters because it is exactly the shape
+  a crashed run would leave and exactly what would be indistinguishable from a
+  stage still working. The terminal row names the stage the run was *in*:
+  "it failed" is half an answer and "it failed in `semantics`" is the whole one.
+- **Idempotency lives in the workflow, not in the database.** `seq` is a counter
+  on the workflow object and `at` is `workflow.now()`, so a retried transition
+  carries the number *and the timestamp* it carried the first time and
+  `ON CONFLICT (run_id, seq) DO NOTHING` drops it. `now()` in SQL would move
+  under a retry and silently stretch the previous stage's measured duration.
+- **The write rides along with the one that sets `run.stage`**, in one
+  connection. Two activities would let a retry land one without the other and
+  leave the trail disagreeing with the cursor about the same moment.
+- **`staging` and `registering` precede the `run` row**, and `_insert_event`
+  derives its tenant from that row — so an event written before it is *silently
+  dropped*. The workflow buffers those two and flushes them once
+  `register_document` returns. Nothing else in the pipeline needs this, because
+  everything from `extracting` onward already depends on the catalog.
+- **Removals and activations get run rows now** (`brainworker/audit.py`), which
+  needed `run_kind_check` widened exactly as `20260831160000_run_kind_ask` did
+  for questions: `record_cost` derives its tenant from the run, so no run row
+  means no bookkeeping of any kind. Those two are not workflows, so their `seq`
+  and `at` are taken locally — there is no replay to be deterministic for — and
+  every write is best-effort, because a removal refused by a blinking catalog is
+  worse than one that failed to record itself.
+- **The raw Temporal history is a second, separate route**, and it is the only
+  source that shows what no application code recorded — the heartbeat timeout, the
+  closed attempt, the second identical pass. It is fetched only when a person
+  expands the panel, and **`available: false` is not an empty list**: "the history
+  aged out" and "this run did nothing" must not render the same, which is
+  `/project-summary`'s own rule applied to a leg that expires rather than one
+  that is down.
+- **`event_type` on a `HistoryEvent` is a plain `int`.** `getattr(t, "name",
+  str(t))` reads as careful and silently yields `"3"`, which matches nothing in
+  the allowlist, so the whole history filters to an empty list and the route
+  reports a run that did nothing. Found by translating a *real* history in
+  `test_the_raw_history_translates_against_a_real_temporal`; a hand-built double
+  would have agreed with the assumption. Use `EventType.Name(...)`.
+
+### Auditing the index a run left behind
+
+The trail above answers "what did this run do". `worker/scripts/audit_version.py`
+answers the question underneath it — **is the index still coherent with its own
+artifacts** — for any `ver_…`, in five legs, writing nothing. Added 2026-09-02;
+the measurements it produced are in `doc/COMPANY_BRAIN.md`.
+
+- **The comparators are pure and live in `brainworker/auditversion.py`.** The
+  same testability decision `radial.ts` and `force.ts` embody on the other side
+  of the product: what is worth asserting is the comparison, and a test that
+  needed a Postgres, a Memgraph and a Qdrant standing up to check a set
+  difference would run rarely enough to be worth nothing. 34 tests, no store.
+- **It imports every identity rather than deriving one.** A point id, a payload
+  scope and a `claim_id` are the things under test, so an audit that computed
+  them itself could only confirm its own arithmetic. `version_scope`,
+  `graph.schema`, `docagent.qdrant.point_id`, `auditlog.build`,
+  `stages.COST_STAGES` and `projection._CANDIDATE_CONCEPTS` are all reused —
+  the last one deliberately, so a fourth route to a concept added there and not
+  here is loud rather than silent.
+- **The Cypher is server-owned literals, guarded.** `Graph.write` is the raw
+  route this codebase already uses for server-owned *reads* (`projection.py`
+  reads its removal candidates through it), and Memgraph would not have enforced
+  `default_access_mode="READ"` anyway. What makes it safe is that the statement
+  is a literal here; `assert_read_only` refuses one that acquires a write clause,
+  matched on word boundaries because a guard that flags `OFFSET` for `SET` is one
+  somebody turns off.
+- **The stale check is a set difference, not an estimate.** A run's own
+  `semantics.json` names exactly what it produced, so `left_behind` is
+  computable — and `missing` is reported beside it, because something the run
+  made and the graph lacks is a projection that did not finish, which no count of
+  the graph alone can see.
+- **Every leg carries its own `available`.** `/project-summary`'s rule per leg:
+  a stopped Memgraph renders as "could not ask", naming the URL it tried, while
+  artifacts and the ledger still answer. A leg that could not answer carries no
+  figures at all, so one cannot be quoted by accident.
+- **`--measure` is the only thing that can spend, and usually does not.**
+  Measured on the first real audit: **0 embedding tokens**, because the
+  `evaluating` stage had already embedded those same questions under that same
+  model and `docagent.embedcache` keys on (model, width, task, text). Reported
+  rather than assumed — a non-zero figure there is real spend.
+
+**What it found first is that a version's bill is not one run's bill.** Grouping
+`cost_entry` by stage *across* a version's runs is what makes a stage charged in
+more than one of them visible, and on `ver_0cde0e3196d06e4259a32a52` the eval set
+was generated twice for **$0.5753 + $0.5710**, the first of them inside a run that
+was cancelled. **$1.1965 of that document's $3.7572 — 31.8% — bought nothing**,
+and the index that exists cost $2.5607. Nothing in the code is wrong about that;
+cancelling costs what it costs. There was simply no way to see it, and no screen
+shows it yet.
+
+`Qdrant.scroll(filters)` was added to the engine for this: `scroll_all` returns
+payloads and drops the **id**, and the id is the only thing that can say whether
+a longer previous chunking left a tail behind — a stale point's payload is
+perfectly well-formed.
+
+### One stage, three spellings
+
+`brainworker/stages.py` and its fork `src/runs/stages.ts` exist because the
+audit view has to join three unrelated sets of string literals: what the
+workflow calls a stage (`learning`, `correcting`, `evaluating`), what a *charge*
+calls it (`profile`, `correction`, `evalset`+`evaluation`), and what an
+*artifact* calls it (`proposal`, `corrected_text`, `scores_candidate`). The
+overlap between the first two is three words.
+
+**Nothing was renamed**, and that is the decision: `learning` is in the `stage`
+column of every run this installation has done and `correction` is in every
+`cost_entry` row. The mapping is the fix. `stages.parity.spec.ts` dumps the
+Python module live at test time — never a committed fixture, for the reason
+`queries.parity.spec.ts` records about its own going stale.
+
+A charge that maps to no stage is **not dropped**: the three a question makes
+belong to no pipeline stage, so they land in a trailing `stage: null` group. That
+is what keeps the ledger's totals equal to `total_cost` rather than quietly less
+than the bill.
+
+### The import queue needs no client persistence, and that is not an accident
+
+Enqueuing *is* starting the workflow: the free stages cost nothing and the gate
+is where money is decided, so every queued item is a `run` row from the moment it
+exists. There is nothing to keep in `localStorage`, nothing to reconcile, and
+nothing that can drift — a relaunch, a crash or another machine all see the same
+queue. That is what let a drop of five books become five imports, each parked at
+its own gate for up to seven days, replacing a screen that kept `[first]` and
+counted the rest as "ignored".
+
+`ImportScreen` used to hold one run in `useState` and forget it on approval; a
+window reload, a plane switch or a second import silently dropped it, and after
+approving there was no feedback at all.
+
+### The library graph reads from memory now, and what that cost to get right
+
+Rewritten 2026-09-01. The degree control was a server filter, so every change was
+a round trip *and* a 320-tick force simulation run synchronously inside a
+`useMemo` during render. Measured on the real corpus (73 books, `lib_teologia`):
+209 ms of layout at the default threshold, 497 ms at ≥ 2, **3,859 ms at ≥ 1**.
+Measured against the same data once it is in memory: **deriving a threshold's
+whole view is 0.88 ms.** The work was never the filtering.
+
+**The degree filter is an equality, not an approximation.** `library_mentions`
+computes `documents = count(v)` in its second `WITH` and applies
+`WHERE documents >= $min_documents` only afterwards, so a concept's degree does
+not depend on the threshold it was fetched at. For one
+`(library, tenant, confidence_floor)` the server's answer at k is exactly the
+`min_documents = 1` envelope's rows with `documents >= k`.
+`graphModel.test.ts` reimplements the route's own folding and asserts it, rather
+than asserting the implementation against itself.
+It survives truncation too, which is not obvious: the `ORDER BY` begins with
+`documents DESC`, **the same key the filter uses**, so a threshold's rows are a
+prefix of the ordering and `LIMIT` cuts the same tail from both. Reordering that
+clause to `mentions DESC, documents DESC` would break this in silence, which is
+why a test names the reason. What does *not* survive is the flag:
+`truncated.edges` is derived per threshold, never copied, or a whole picture
+gets "recortado" printed over it.
+
+**The confidence floor stays a server filter, and that is not laziness.** A
+concept's degree is counted *after* the floor predicate, so no client can
+re-derive it from an envelope fetched at another floor. Each floor gets its own
+entry in the RAM store instead; the second visit to one costs nothing.
+
+**The envelope is 3.48 MB and it does not go to localStorage.** Measured:
+17,814 rows, 183 ms end to end, `JSON.parse` 10.5 ms, and about **3.7 MB net per
+entry** once the response objects are read into typed arrays and dropped — which
+is where 2.5 MB of uninterned edge id strings goes. `libraryGraphStore.ts` holds
+four (`FLOORS` offers five; four is "the floor you are on plus the three you
+tried"). It is a cache because refetching is *wasteful*, not because it is
+expensive, which is the opposite of why the Ask history is persisted.
+
+**A module, not a context, and the plane is in the key unconditionally.**
+`App.tsx` remounts every screen on a plane change, so a provider mounted inside
+that key would die exactly when the cache is most valuable. A module survives the
+remount — that is the feature — and the identity in the key is what stops it
+being a leak between organisations. It deliberately does **not** go through
+`scopedKey`: that helper leaves the local plane's key bare to avoid orphaning
+localStorage entries written before scoping existed, and a cache has nothing to
+orphan.
+
+**The layouts are a chain, not five independent runs.** `settle`'s
+`k = SPACING * sqrt(W*H/n)` scales with the node count, so two runs over
+different subsets of one library are globally different pictures. Measured on the
+real degree distribution, both fitted to the same canvas: **a threshold change
+moved every surviving node 162 px of a 1,452 px diagonal — 11%.** That is a
+shuffle, not a filter, and no easing hides it; aligning the two layouts with the
+best rotation and scale only reached 110 px, so they differ structurally. Nor
+does one shared fit help — it made it *worse*, 214 px, because the survivors
+occupy a different fraction of the field at every threshold.
+
+So `graphAtlas.ts` computes them as a ladder, each seeded from the last, and
+`settle` grew an additive `start`/`heat` for it (every existing `force.test.ts`
+assertion holds when they are absent):
+
+| | | measured |
+|---|---|---|
+| 1 | the default threshold, cold | 226 ms — this is the first picture |
+| 2 | the base at the widest threshold, seeded from it | 5,531 ms |
+| 3 | every other threshold, relaxed from the base, 60 ticks | 141 ms for four |
+
+**40-48 px between thresholds instead of 162**, in 5.9 s of worker rather than
+7.5. And the relaxation is legibility, not polish: filtering the base without it
+leaves a mean nearest-neighbour distance of **6 px against 16 px**, because
+high-degree concepts cluster in the middle, so a naive filter gives a clot rather
+than a map. The default view is emitted twice — cold at 226 ms and again once the
+base exists — which moves it 63 px, once, early, and is the price of it belonging
+to the same chain as everything else.
+
+**jsdom defines no `Worker`, so the inline path is the tested one.**
+`graphAtlas.worker.ts` is a message pump with no logic in it for exactly that
+reason; `atlasSteps` is a generator so the worker runs it to completion and a
+host without one steps it between timeouts. The worst case is the behaviour that
+shipped before any of this, staged and reporting progress, never a blank canvas.
+**The CSP question is settled by measurement, not argument**: `vite build` emits
+`graphAtlas.worker-*.js` as its own 4.5 kB file referenced by URL, and `grep
+blob:` over the bundle returns zero — so `default-src 'self'` with no
+`worker-src` permits it by fallback.
+
+**Edges are painted, nodes are not.** At the widest threshold that is 17,814
+`<line>` elements gone from a single SVG. They carry no click, no hover and no
+accessible name, so the accessibility tree loses nothing and every DOM assertion
+still reads the nodes. Two things this cost:
+- **`lineWidth` is context state**, so a width per edge forces one `stroke()`
+  per edge. Quantised into six buckets it is ≤6 calls, and ≤12 with a selection
+  (faded pass first, lit second — the paint-order contract as a draw order).
+- **`scale(value, max, min, span)` in `radial.ts` takes a *span*.** The call the
+  component made, `scale(e.mentions, maxEdge, 0.6, 2.4)`, draws widths from 0.6
+  to **3.0**. Reading that argument as an upper bound is a mistake worth making
+  only once; the constant is named `SPAN` now.
+
+**The stage, and the trap under it.** An absolutely positioned element paints in
+step 8 of the painting algorithm and a static in-flow one in step 4, so
+positioning *only* the canvas puts it above the nodes and the picture becomes a
+flat wash. Both are positioned, and the ground, border and gesture cursor moved
+to `.graph-stage` because an opaque background on the SVG would hide the canvas
+under it. A test asserts the DOM shape the stylesheet selects and **fails if the
+canvas is placed after the SVG**.
+And the near-miss worth keeping: `DocumentGraph` still hangs its SVG straight off
+`.graph-main`, so narrowing that rule to `.graph-main > .graph-stage >
+.graph-canvas` would have taken its canvas down to a replaced element's default
+300x150 — silently, because nothing in this project can see it. The stylesheet
+serves both shapes.
+
+**Continuous interactions never go through React; discrete ones may.** A drag
+fires a pointermove per frame and each `setPan` re-executed the render function
+and reconciled every node, so the picture moved by rebuilding the tree that draws
+it. A frame now costs one `setAttribute` on the group and one canvas repaint,
+whatever the graph holds, and state is set once on release. Hover is the same
+story: every `onMouseEnter` was a `setState`, so sweeping the pointer
+re-rendered the screen once per node crossed — and during a drag, on top of the
+pan. It is one delegated listener and **one** overlay `<text>` now, suppressed
+while dragging.
+**Zoom stays in state on purpose.** It is discrete, and each concept cancels the
+scale on itself, which is a write per node a render already does correctly.
+Making it imperative would mean moving the node radius into a CSS custom
+property, and whether WebKitGTK resolves `r` from `calc()` is not something this
+project can find out from a test.
+
+**The selection's transition belongs to the small side.** It sat on the dim, so
+selecting one node started an opacity animation on every element in the canvas at
+once. The dim lands at once now and the lit nodes are what animate, of which
+there are at most a few hundred — which also reads better, since attention should
+snap to what was lit.
+
+**And the tween's NaN rules follow from what the arrays mean.** A node the source
+layout never placed has nowhere to travel *from*, so it appears at its
+destination rather than flying in from the origin; a node the destination does
+not place stays unplaced rather than sliding to a corner it was never in. A CSS
+transition can express neither, which is why `tween.ts` is written by hand. It
+runs in `useLayoutEffect`: React has already rendered the new coordinates by the
+time an effect runs, and a passive one runs *after* paint, so the picture would
+jump to the destination and then animate back from where it used to be.
+
+### Three defects a screenshot found and no assertion could
+
+The recipe in *The Graph screen is the exception* was run again on 2026-09-01 for
+the queue and the ledger, and earned its keep a third time:
+
+- A queue row read **"esperando aprobación · esperando aprobación"** — the state
+  and the stage are the same word there — and **"completada · terminando"** for a
+  finished run, because `activity.stage.*` is a present-continuous progress
+  label. The stage now renders only while the run is going and only when it says
+  something the state did not.
+- The **kind badge stretched the full width of the row below 76rem**, reading as
+  a text field: a stacked grid cell fills its `1fr` column without
+  `justify-self: start`. jsdom lays out no grid, so nothing in the suite could
+  see it.
+- The ledger put the **charges toggle in the "Produced" column**, so a row read
+  `semantics 1 cargo(s)` as though the charge were an artifact — and printed
+  "sin precio" twice when every entry was unpriced.
+
+All three are pinned by tests now (`ImportQueue.test.tsx`), but none of them
+would have been written without looking.
+
+**And the extraction that produced `GateReview.tsx` mangled twelve translation
+keys**: a blanket `gate.profile` → `report.profile` rename hit the string
+literals as well as the property accesses. The i18n dead-key test caught every
+one. That test is not bookkeeping.
+
 ## Known defects, not yet fixed
 
 Distinct from the list above: this is shipped code that is wrong, not features
 that are missing. Each was found by running the thing, and each is recorded
 rather than fixed because the fix is somebody's decision or sits in another
 session's files.
+
+- **`DocumentGraph` shows a label where it means a count.** `DocumentGraph.tsx:671`
+  renders `t("graph.shared", { count: item.sharedConcepts })` under every outer
+  document card. `graph.shared` is `"Concepts in"` / `"Conceptos en"` and carries
+  no `{{count}}`, so the number is silently dropped and the card reads as a
+  stray label. The key it wants is `explore.shared`, which is
+  `"{{count}} shared"` / `"{{count}} compartidos"`. Found 2026-09-01 while
+  retiring the two keys the degree `<select>` used, and **nearly made worse**:
+  `graph.shared` was also that select's label, so it looked retired too.
+  The lesson generalises past this one line — **the i18n scan sees a key nothing
+  reads and is blind to a read with no key**, so deleting a key is not covered by
+  the same test that stops you adding a dead one. `DocumentGraph` was out of
+  scope for that session's work, which is why this is recorded rather than fixed.
+- **`DocumentGraph`'s wheel listener is never attached, and its pan runs 1.9x
+  fast.** Both are the same two defects the library view had, in the same shapes.
+  The effect at `DocumentGraph.tsx:509-518` depends on `[zoomBy]`, whose identity
+  never changes, so it runs once at mount — behind a guard that has not rendered
+  the `<svg>` yet — finds a null ref and never runs again. And `pan`
+  (`:519-523`) is added inside a group whose units are viewBox units while being
+  fed raw client pixels, so a drag moves the graph about twice as far as the
+  hand. The library view's fixes are a callback ref and a division by
+  `fit.scale * zoom`, both in `app/src/lib/viewport.ts`, and they port directly.
+  Left alone because that view was explicitly out of scope.
+- **`CONCEPT_RADIUS = 9` does not mean 18 px, and `geometry.ts:4` says it does.**
+  It is 18 *viewBox units*, which is 18 x the drawn scale: about 9.5 CSS px at
+  the narrowest two-column width the layout allows and 15 px at 1440. Same root
+  cause as the recorded 7.9px label defect, and the same one-line fix would close
+  both — a `--graph-fit` custom property carrying the scale, with `font-size:
+  calc(11px / var(--graph-fit))`. Not done, because it lands in the same place as
+  the CSS-`r` question below and neither can be judged without the window.
 
 - **`tenant_scope_pending` carries two opposite meanings, so its guidance is
   wrong for one of them.** The kind was minted for "this view is not segmented
@@ -1159,6 +1629,24 @@ session's files.
   document leaves citations naming it until something re-projects. Re-projection
   does now correct it — the citation prune replaces the stale node rather than
   adding to it — so a rebuild is the workaround.
+- **A rebuild's semantics stage is visibly free, and it should not be.**
+  `activities/rebuild.py:213` builds a `Spend(stage="semantics-replay", …)` on
+  the returned `Semantics` and **never calls `_charge`**, so no `cost_entry` row
+  is written — despite the comment claiming it "keeps the stage visible in the
+  run's ledger". Invisible until 2026-09-01, when the audit ledger started
+  rendering a per-stage cost and a rebuild's `replaying semantics` row came back
+  empty. The mapping is already in `stages.COST_STAGES`, so the fix is one
+  `_charge` call; recorded rather than done because a replay's real cost is a
+  question about whether re-projecting an artifact spends at all, and nobody has
+  measured it.
+
+- **The i18n dead-key scan matches on a prefix, so one key can hide another.**
+  `isUsed` looks for the literal key text anywhere in the source, and
+  `"import.startBatch"` contains `"import.start"` — so `import.start` survived
+  as a dead key that the test reported as used. Found on 2026-09-01 and removed
+  by hand. Any key that is a prefix of another has the same hole. The fix is to
+  match on a word boundary, or to require the key to appear inside quotes.
+
 - **`Cost.usd` is annotated `float | None` and holds `Decimal`.** The column is
   `numeric(12, 6)`, so psycopg returns `Decimal` and arithmetic against a float
   raises `TypeError: unsupported operand type(s) for -: 'float' and
@@ -1242,6 +1730,17 @@ session's files.
   `_COLLECT_ORPHAN_CONCEPTS` over the candidates. The set is computable with no
   guesswork, because the run's own `semantics.json` names exactly what it
   produced.
+  **That measurement no longer reproduces, and the mechanism is untouched.**
+  Re-measured 2026-09-02 on the same version by two independent routes — the
+  `DERIVED_FROM` traversal and a property match on `source_chunk_id` — the graph
+  holds **3,055 claims against the 3,055 the re-index produced, 0 left behind**,
+  and 3,497 `MENTIONS` against 3,497. The 4,988 were deleted; **what deleted them
+  is recorded nowhere**, and nothing in `projection.py` changed: the module's only
+  claim `DELETE` is still `_DELETE_VERSION`, which removes a whole version. So the
+  defect stands and its figure is historical — the next re-index of any version
+  will rebuild it. Two `semantics.json` still sit side by side in that version's
+  run directories (2,965 from the failed attempt, 3,055 from the re-index), which
+  is what makes the arithmetic checkable at all.
 
 - **A profile's `retrieval` block is measured, persisted, and never read by the
   thing it describes.** `answering/retrieve.py` uses module constants —

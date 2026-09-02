@@ -45,8 +45,13 @@ async def test_the_activity_hands_the_module_the_tenant_it_was_given(monkeypatch
     everybody who is paying."""
     seen: dict = {}
 
-    def fake_activate(library_id, version_id, *, tenant_id):
-        seen.update(library=library_id, version=version_id, tenant=tenant_id)
+    # Typed like the real function, `run_id` included. A double that swallowed
+    # kwargs would keep passing against a signature the activity can no longer
+    # call — the same way an untyped Temporal double hides an arity change.
+    def fake_activate(library_id, version_id, *, tenant_id, run_id=None):
+        seen.update(
+            library=library_id, version=version_id, tenant=tenant_id, run=run_id
+        )
         return activation.Activation(version_id=version_id, documents=["doc_1"])
 
     monkeypatch.setattr(activation, "activate_version", fake_activate)
@@ -58,6 +63,9 @@ async def test_the_activity_hands_the_module_the_tenant_it_was_given(monkeypatch
         "library": "lib_teologia",
         "version": "ver_0b71d21eeb3228f54437d9cf",
         "tenant": "tnt_f489b4a62220158ef6790c07",
+        # None outside an activity context, which is what lets `audited` mint
+        # its own id for the plane that has no workflow.
+        "run": None,
     }
     assert result == {
         "version_id": "ver_0b71d21eeb3228f54437d9cf",
@@ -70,7 +78,7 @@ async def test_a_refusal_keeps_its_kind_across_the_temporal_boundary(monkeypatch
     into a message costs the UI its ability to offer a fix."""
     from temporalio.exceptions import ApplicationError
 
-    def refuse(library_id, version_id, *, tenant_id):
+    def refuse(library_id, version_id, *, tenant_id, run_id=None):
         raise activation.ActivationError("no existe", kind="version_not_found")
 
     monkeypatch.setattr(activation, "activate_version", refuse)

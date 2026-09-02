@@ -22,7 +22,7 @@ from typing import Any
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from .. import config, removal
+from .. import audit, config, removal
 from ..graph.schema import LEGACY_TENANT_ID
 
 log = logging.getLogger(__name__)
@@ -47,12 +47,19 @@ async def remove_document(
     library_id: str, document_id: str, tenant: str = LEGACY_TENANT_ID
 ) -> dict[str, Any]:
     settings = config.load()
+    workflow_id = audit.current_workflow_id()
     try:
         # Keyword-only on the other side, so a lambda rather than positional
         # arguments through `to_thread`.
         removed = await asyncio.to_thread(
             lambda: removal.remove_document(
-                settings, library_id=library_id, document_id=document_id, tenant=tenant
+                settings,
+                library_id=library_id,
+                document_id=document_id,
+                tenant=tenant,
+                # The workflow's own id, so `GET /runs/{workflowId}` finds the
+                # row this removal writes rather than a second one nothing names.
+                run_id=workflow_id,
             )
         )
     except removal.RemovalError as e:
@@ -65,10 +72,15 @@ async def remove_version(
     library_id: str, version_id: str, tenant: str = LEGACY_TENANT_ID
 ) -> dict[str, Any]:
     settings = config.load()
+    workflow_id = audit.current_workflow_id()
     try:
         removed = await asyncio.to_thread(
             lambda: removal.remove_version(
-                settings, library_id=library_id, version_id=version_id, tenant=tenant
+                settings,
+                library_id=library_id,
+                version_id=version_id,
+                tenant=tenant,
+                run_id=workflow_id,
             )
         )
     except removal.RemovalError as e:

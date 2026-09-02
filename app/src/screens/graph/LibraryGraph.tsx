@@ -12,8 +12,8 @@ import {
 import { ATLAS_VIEW } from "../../lib/graphAtlas";
 // The thresholds and the default live beside the derivation that reads them,
 // so the control and the filter cannot disagree about what the stops are.
+import { clusterConcepts } from "../../lib/graphClusters";
 import {
-  clusterConcepts,
   DEFAULT_THRESHOLD,
   matchesQuery,
   neighbours,
@@ -305,13 +305,14 @@ export function LibraryGraph({
    *  measured on the running corpus, that field is free text from the
    *  extractor with 1,619 distinct values after folding case and accents
    *  alone, so a legend keyed on it would need hundreds of entries rather
-   *  than the ten a reader can actually tell apart. `clusterConcepts`'s own
-   *  doc comment in `graphModel.ts` has the measurement and the algorithm.
+   *  than the ten a reader can actually tell apart. `graphClusters.ts` has the
+   *  measurement and the algorithm.
    *
    *  Recomputed with the subgraph, so raising the degree threshold reclusters
-   *  what is actually on screen. `CLUSTER_TARGET` is a constant rather than a
-   *  control for now — nobody has asked for a specific count yet, and adding
-   *  the slider is one `useState` away from here when somebody does. */
+   *  what is actually on screen — measured on the real library, 21 ms at the
+   *  default threshold and 27 ms at "every book", which is why this can sit in
+   *  a `useMemo` at all. `CLUSTER_TARGET` is a constant rather than a control
+   *  for now; adding the slider is one `useState` away from here. */
   const clustering = useMemo(() => {
     if (index === null || sub === null) return null;
     return clusterConcepts(index, sub, CLUSTER_TARGET);

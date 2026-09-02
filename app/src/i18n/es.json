@@ -44,14 +44,23 @@
         "index": "indexación",
         "reindex": "reindexación",
         "rebuild": "reconstrucción",
-        "scan": "exploración"
+        "scan": "exploración",
+        "ask": "pregunta",
+        "removal": "eliminación",
+        "activate": "activación"
       },
       "state": {
         "running": "en curso",
         "awaiting_approval": "esperando aprobación",
         "succeeded": "completada",
         "failed": "fallida",
-        "cancelled": "cancelada"
+        "cancelled": "cancelada",
+        "blocked": "retenida",
+        "completed": "completada",
+        "canceled": "cancelada",
+        "terminated": "terminada desde fuera",
+        "timed_out": "agotó su tiempo",
+        "continued_as_new": "reiniciada como una ejecución nueva"
       }
     }
   },
@@ -169,7 +178,9 @@
       "sharedWith": "compartida con {{count}} documento(s) más",
       "noArtifacts": "sin artefactos que reproducir",
       "removeVersion": "Eliminar esta versión",
-      "activateVersion": "Hacer que sea la versión activa"
+      "activateVersion": "Hacer que sea la versión activa",
+      "showAudit": "estado del índice",
+      "hideAudit": "ocultar estado"
     },
     "confirm": {
       "title": "Eliminar «{{title}}» de forma permanente",
@@ -202,28 +213,27 @@
     "stageEmbed": "Generar embeddings e indexar",
     "stageSemantics": "Extraer conceptos y relaciones",
     "stageReview": "Revisar la corrección antes del resto del gasto",
-    "start": "Previsualizar",
     "working": "Trabajando…",
-    "waiting": "Extrayendo y fragmentando la ejecución {{id}} — esto no cuesta nada.",
     "stageLearnProfile": "Aprender las reglas del documento",
-    "runEnded": "La ejecución terminó antes de llegar a la compuerta de aprobación: {{state}}. No se ha cobrado ninguna etapa que no llegara a completarse. La API de control conserva lo que registró, así que la ejecución sigue siendo legible allí.",
-    "runState": {
-      "failed": "falló",
-      "cancelled": "se canceló",
-      "canceled": "se canceló",
-      "terminated": "se terminó desde fuera",
-      "timed_out": "agotó su tiempo",
-      "completed": "acabó sin publicar compuerta",
-      "continued_as_new": "se reinició como una ejecución nueva"
-    },
     "file": "Archivo",
     "dropHint": "Arrastra aquí un documento, o elígelo con el botón.",
     "choose": "Elegir archivo…",
-    "chooseOther": "Elegir otro…",
     "picking": "Abriendo…",
-    "oneAtATime": "Se tomó el primero. Archivos ignorados: {{count}}. Por ahora se importa de uno en uno.",
     "stageEvalset": "Medir la calidad de recuperación",
-    "stageTune": "Ajustar la recuperación (vuelve a embeber el documento)"
+    "stageTune": "Ajustar la recuperación (vuelve a embeber el documento)",
+    "chooseMore": "Añadir otro archivo",
+    "removeFile": "quitar",
+    "startBatch": "Preparar {{count}} archivo(s)",
+    "someRefused": "No se pudieron preparar {{count}} archivo(s)"
+  },
+  "queue": {
+    "title": "Importaciones",
+    "loading": "Leyendo la cola…",
+    "empty": "Todavía no se ha importado nada en esta biblioteca.",
+    "showDetail": "qué hizo",
+    "hideDetail": "ocultar",
+    "gateComing": "Leyendo el documento — la estimación aparece aquí cuando esté lista.",
+    "ended": "Terminó {{state}} · {{kind}}"
   },
   "gate": {
     "title": "Aprobar antes de gastar",
@@ -242,8 +252,6 @@
     "unpriced": "sin precio",
     "approve": "Aprobar e indexar",
     "reject": "Cancelar",
-    "approved": "Aprobado. La ejecución continúa en segundo plano.",
-    "rejected": "Cancelado. No se gastó nada y el documento se puede volver a importar.",
     "stages": {
       "correction": "Corrección",
       "embedding": "Embeddings",
@@ -367,7 +375,6 @@
     "loading": "Leyendo el grafo…",
     "failed": "No se pudo leer el grafo",
     "alt": "Grafo centrado en {{title}}: sus conceptos y los documentos que los comparten.",
-    "shared": "Conceptos en",
     "floor": "No se dibuja nada por debajo del {{floor}}% de confianza.",
     "proposed": "Ninguna línea une un concepto con un documento del anillo exterior. La API sí dice cuáles se comparten —y por eso se pueden resaltar— pero no dice con qué fragmento de cada documento, así que una línea por concepto sería una relación inventada. Selecciona un documento para ver cuáles comparte.",
     "noClaims": "Ninguna afirmación sobre este concepto supera el umbral.",
@@ -410,8 +417,7 @@
     "modeDocument": "Un libro",
     "search": "Buscar",
     "searchPlaceholder": "libro o concepto",
-    "sharedAll": "todos los libros, incluidos los de uno solo",
-    "sharedAtLeast": "al menos {{n}} libros",
+    "shared": "Conceptos en",
     "confidence": "Confianza",
     "show": "Mostrar",
     "zoomIn": "Acercar",
@@ -429,12 +435,25 @@
     "conceptBooks": "en {{count}} libros",
     "filterBooks": "Libros",
     "filterConcepts": "Conceptos",
+    "clusterLabel": "Grupo {{n}}",
+    "clusterNote": "Los conceptos se agrupan y colorean según qué libros los conectan — no por categoría — así que \"Grupo\" nombra un color, no un tema.",
     "overviewLegend": {
       "doc": "Un libro",
       "concept": "Un concepto",
       "size": "Tamaño: en cuántos libros aparece",
       "weight": "Grosor: menciones en ese libro"
-    }
+    },
+    "viewFilters": "Lo que se dibuja",
+    "degreeLabel": "Libros por concepto",
+    "degreeStopEach": "{{n}}+",
+    "degreeStopAll": "todos",
+    "degreeValueSome": "al menos {{n}} libros · {{shown}} de {{total}} conceptos dibujados",
+    "degreeValueAll": "todos los libros · {{shown}} de {{total}} conceptos dibujados",
+    "onlyBook": "Solo este libro",
+    "everyBook": "Todos los libros",
+    "searchOnly": "solo las coincidencias",
+    "hideIsolated": "ocultar lo que no une nada",
+    "refresh": "Recargar del grafo"
   },
   "claim": {
     "status": {
@@ -492,7 +511,73 @@
       "embedding": "vectorizando",
       "semantics": "extrayendo conceptos",
       "activating": "activando",
-      "done": "terminando"
+      "done": "terminando",
+      "evaluating": "midiendo el índice",
+      "tuning": "afinando",
+      "blocked": "retenida"
     }
+  },
+  "audit": {
+    "unattributed": "sin etapa",
+    "loading": "Leyendo lo que hizo esta ejecución…",
+    "kind": "Ejecución",
+    "started": "Comenzó",
+    "finished": "Terminó",
+    "stillGoing": "aún en marcha",
+    "total": "Cobrado",
+    "noTrail": "Esta ejecución es anterior al registro de etapas; sólo consta su total.",
+    "unpriced": "{{count}} cargo(s) sin precio conocido",
+    "showCharges": "{{count}} cargo(s)",
+    "hideCharges": "ocultar cargos",
+    "tokens": "{{input}} entrada · {{output}} salida",
+    "warning": "Las reglas vinieron del perfil {{profile}}, aprendido de {{other}}.",
+    "caveat": "Los precios son multiplicadores de terceros sobre recuentos de tokens medidos. Una etapa sin cifra no gastó; una marcada «sin precio» gastó con un modelo cuyo precio se desconoce.",
+    "showLog": "Ver el registro crudo del flujo",
+    "hideLog": "Ocultar el registro crudo del flujo",
+    "loadingLog": "Leyendo la historia del flujo…",
+    "logExpired": "Temporal ya no conserva la historia de esta ejecución. Las etapas de arriba vienen del catálogo y no se ven afectadas.",
+    "logTruncated": "Sólo se muestran los primeros eventos; hay más.",
+    "logEmpty": "La historia no tiene eventos que merezca mostrar.",
+    "attempt": "intento {{n}}",
+    "col": {
+      "stage": "Etapa",
+      "at": "A las",
+      "took": "Duró",
+      "cost": "Coste",
+      "produced": "Produjo"
+    },
+    "outcome": {
+      "succeeded": "terminó bien",
+      "failed": "falló",
+      "cancelled": "cancelada",
+      "blocked": "retenida"
+    },
+    "stage": {
+      "staging": "preparando el archivo",
+      "registering": "registrando",
+      "extracting": "extrayendo el texto",
+      "profiling": "resolviendo el perfil",
+      "previewing": "previsualizando fragmentos",
+      "awaiting_approval": "esperando aprobación",
+      "learning": "aprendiendo las reglas",
+      "correcting": "corrigiendo el texto",
+      "awaiting_correction_review": "esperando la revisión de la corrección",
+      "chunking": "fragmentando",
+      "projecting": "proyectando el grafo",
+      "embedding": "incrustando e indexando",
+      "evaluating": "midiendo el índice",
+      "tuning": "afinando",
+      "semantics": "extrayendo semántica",
+      "blocked": "retenida",
+      "activating": "activando",
+      "done": "terminado",
+      "loading": "cargando los artefactos",
+      "estimating": "estimando",
+      "replaying semantics": "reproduciendo la semántica",
+      "projections": "proyecciones",
+      "catalog": "catálogo"
+    },
+    "noRuns": "No consta ninguna ejecución para esta versión.",
+    "whichRun": "Ejecución"
   }
 }

@@ -44,14 +44,23 @@
         "index": "index",
         "reindex": "reindex",
         "rebuild": "rebuild",
-        "scan": "scan"
+        "scan": "scan",
+        "ask": "question",
+        "removal": "removal",
+        "activate": "activation"
       },
       "state": {
         "running": "running",
         "awaiting_approval": "awaiting approval",
         "succeeded": "succeeded",
         "failed": "failed",
-        "cancelled": "cancelled"
+        "cancelled": "cancelled",
+        "blocked": "withheld",
+        "completed": "completed",
+        "canceled": "cancelled",
+        "terminated": "terminated",
+        "timed_out": "timed out",
+        "continued_as_new": "restarted as a new run"
       }
     }
   },
@@ -169,7 +178,9 @@
       "sharedWith": "shared with {{count}} other document(s)",
       "noArtifacts": "no artifacts to replay",
       "removeVersion": "Remove this version",
-      "activateVersion": "Make this the active version"
+      "activateVersion": "Make this the active version",
+      "showAudit": "index status",
+      "hideAudit": "hide status"
     },
     "confirm": {
       "title": "Permanently remove “{{title}}”",
@@ -202,28 +213,27 @@
     "stageEmbed": "Embed and index for search",
     "stageSemantics": "Extract concepts and relations",
     "stageReview": "Review the correction before the rest of the spend",
-    "start": "Preview",
     "working": "Working…",
-    "waiting": "Extracting and chunking run {{id}} — this costs nothing.",
     "stageLearnProfile": "Learn the document's rules",
-    "runEnded": "The run ended before reaching the approval gate: {{state}}. Nothing was charged for a stage that did not complete. The control API keeps what it recorded, so the run is still readable there.",
-    "runState": {
-      "failed": "it failed",
-      "cancelled": "it was cancelled",
-      "canceled": "it was cancelled",
-      "terminated": "it was terminated",
-      "timed_out": "it timed out",
-      "completed": "it finished without publishing a gate",
-      "continued_as_new": "it was restarted as a new run"
-    },
     "file": "File",
     "dropHint": "Drag a document here, or choose one with the button.",
     "choose": "Choose a file…",
-    "chooseOther": "Choose another…",
     "picking": "Opening…",
-    "oneAtATime": "Took the first. Files ignored: {{count}}. One at a time for now.",
     "stageEvalset": "Measure retrieval quality",
-    "stageTune": "Tune retrieval (re-embeds the document)"
+    "stageTune": "Tune retrieval (re-embeds the document)",
+    "chooseMore": "Add another file",
+    "removeFile": "remove",
+    "startBatch": "Prepare {{count}} file(s)",
+    "someRefused": "{{count}} file(s) could not be prepared"
+  },
+  "queue": {
+    "title": "Imports",
+    "loading": "Reading the queue…",
+    "empty": "Nothing has been imported into this library yet.",
+    "showDetail": "what it did",
+    "hideDetail": "hide",
+    "gateComing": "Reading the document — the estimate appears here when it is ready.",
+    "ended": "Ended {{state}} · {{kind}}"
   },
   "gate": {
     "title": "Approve before spending",
@@ -242,8 +252,6 @@
     "unpriced": "not priced",
     "approve": "Approve and index",
     "reject": "Cancel",
-    "approved": "Approved. The run continues in the background.",
-    "rejected": "Cancelled. Nothing was spent and the document can be imported again.",
     "stages": {
       "correction": "Correction",
       "embedding": "Embedding",
@@ -367,7 +375,6 @@
     "loading": "Reading the graph…",
     "failed": "Could not read the graph",
     "alt": "Graph centred on {{title}}: its concepts and the documents sharing them.",
-    "shared": "Concepts in",
     "floor": "Nothing below {{floor}}% confidence is drawn.",
     "proposed": "No line joins a concept to an outer-ring document. The API does say which concepts are shared — that is what the highlighting uses — but not through which chunk of each document, so a line per concept would be an invented relation. Select a document to see which ones it shares.",
     "noClaims": "No claim about this concept clears the threshold.",
@@ -410,8 +417,7 @@
     "modeDocument": "One book",
     "search": "Search",
     "searchPlaceholder": "book or concept",
-    "sharedAll": "every book, including those in only one",
-    "sharedAtLeast": "at least {{n}} books",
+    "shared": "Concepts in",
     "confidence": "Confidence",
     "show": "Show",
     "zoomIn": "Zoom in",
@@ -429,12 +435,25 @@
     "conceptBooks": "in {{count}} books",
     "filterBooks": "Books",
     "filterConcepts": "Concepts",
+    "clusterLabel": "Group {{n}}",
+    "clusterNote": "Concepts are grouped and coloured by which books connect them — not by any category — so \"Group\" names a colour, not a topic.",
     "overviewLegend": {
       "doc": "A book",
       "concept": "A concept",
       "size": "Size: how many books mention it",
       "weight": "Thickness: mentions in that book"
-    }
+    },
+    "viewFilters": "What is drawn",
+    "degreeLabel": "Books per concept",
+    "degreeStopEach": "{{n}}+",
+    "degreeStopAll": "all",
+    "degreeValueSome": "at least {{n}} books · {{shown}} of {{total}} concepts drawn",
+    "degreeValueAll": "every book · {{shown}} of {{total}} concepts drawn",
+    "onlyBook": "Only this book",
+    "everyBook": "Every book",
+    "searchOnly": "only the matches",
+    "hideIsolated": "hide what joins nothing",
+    "refresh": "Reload from the graph"
   },
   "claim": {
     "status": {
@@ -492,7 +511,73 @@
       "embedding": "embedding",
       "semantics": "extracting concepts",
       "activating": "activating",
-      "done": "finishing"
+      "done": "finishing",
+      "evaluating": "measuring the index",
+      "tuning": "tuning",
+      "blocked": "withheld"
     }
+  },
+  "audit": {
+    "unattributed": "no stage",
+    "loading": "Reading what this run did…",
+    "kind": "Run",
+    "started": "Started",
+    "finished": "Finished",
+    "stillGoing": "still going",
+    "total": "Billed",
+    "noTrail": "This run predates the stage trail, so only its total is recorded.",
+    "unpriced": "{{count}} charge(s) with no known price",
+    "showCharges": "{{count}} charge(s)",
+    "hideCharges": "hide charges",
+    "tokens": "{{input}} in · {{output}} out",
+    "warning": "The rules came from profile {{profile}}, learned from {{other}}.",
+    "caveat": "Prices are third-party multipliers over measured token counts. A stage with no figure did not spend; one marked “not priced” spent against a model whose price is unknown.",
+    "showLog": "Show the raw workflow log",
+    "hideLog": "Hide the raw workflow log",
+    "loadingLog": "Reading the workflow history…",
+    "logExpired": "Temporal no longer holds this run's history. The stages above come from the catalog and are not affected.",
+    "logTruncated": "Only the first events are shown; there are more.",
+    "logEmpty": "The history holds no events worth showing.",
+    "attempt": "attempt {{n}}",
+    "col": {
+      "stage": "Stage",
+      "at": "At",
+      "took": "Took",
+      "cost": "Cost",
+      "produced": "Produced"
+    },
+    "outcome": {
+      "succeeded": "succeeded",
+      "failed": "failed",
+      "cancelled": "cancelled",
+      "blocked": "blocked"
+    },
+    "stage": {
+      "staging": "staging the file",
+      "registering": "registering",
+      "extracting": "extracting text",
+      "profiling": "resolving the profile",
+      "previewing": "previewing chunks",
+      "awaiting_approval": "awaiting approval",
+      "learning": "learning the rules",
+      "correcting": "correcting the text",
+      "awaiting_correction_review": "awaiting the correction review",
+      "chunking": "chunking",
+      "projecting": "projecting the graph",
+      "embedding": "embedding and indexing",
+      "evaluating": "measuring the index",
+      "tuning": "tuning",
+      "semantics": "extracting semantics",
+      "blocked": "withheld",
+      "activating": "activating",
+      "done": "done",
+      "loading": "loading the artifacts",
+      "estimating": "estimating",
+      "replaying semantics": "replaying semantics",
+      "projections": "projections",
+      "catalog": "catalog"
+    },
+    "noRuns": "No run recorded for this version.",
+    "whichRun": "Run"
   }
 }

@@ -13,6 +13,7 @@ import { ATLAS_VIEW } from "../../lib/graphAtlas";
 // The thresholds and the default live beside the derivation that reads them,
 // so the control and the filter cannot disagree about what the stops are.
 import {
+  clusterConcepts,
   DEFAULT_THRESHOLD,
   matchesQuery,
   neighbours,
@@ -72,9 +73,13 @@ const LIST_CAP = 200;
 /** How many more rows a scroll near the bottom of the list reveals. */
 const LIST_STEP = 200;
 
-/** Distinct colours the concept-type legend cycles through. Matches the number
- *  of `--graph-type-N` custom properties defined in `styles.css`. */
-const TYPE_PALETTE_SIZE = 8;
+/** Distinct colours the cluster legend cycles through. Matches the number of
+ *  `--graph-type-N` custom properties defined in `styles.css`. */
+const TYPE_PALETTE_SIZE = 10;
+
+/** How many colour groups `clusterConcepts` aims for. Not a control yet — see
+ *  the note where it is called for why a fixed number was chosen over one. */
+const CLUSTER_TARGET = 10;
 
 type Selection =
   | { kind: "doc"; id: string }
@@ -92,7 +97,6 @@ interface Placed {
   y: number;
   r: number;
   label: string;
-  conceptType: string | null;
 }
 
 /** The same badge as the document view and Explore, meaning the same thing. */
@@ -241,7 +245,6 @@ export function LibraryGraph({
         // landmarks, so varying them buys nothing and costs legibility.
         r: i < index.docCount ? 9 : CONCEPT_RADIUS,
         label: index.label[i] as string,
-        conceptType: index.conceptType[i] ?? null,
       });
     }
     return placed;
@@ -286,37 +289,64 @@ export function LibraryGraph({
    *  canvas. */
   const listed = useMemo(() => {
     if (index === null) return [];
-    const rows: { id: string; kind: "doc" | "concept"; label: string; conceptType: string | null }[] = [];
+    const rows: { id: string; index: number; kind: "doc" | "concept"; label: string }[] = [];
     for (let i = 0; i < index.ids.length; i += 1) {
       const kind = i < index.docCount ? ("doc" as const) : ("concept" as const);
       if (kind === "doc" ? !showBooks : !showConcepts) continue;
       const id = index.ids[i] as string;
       if (matches !== null && !matches.has(id)) continue;
-      rows.push({ id, kind, label: index.label[i] as string, conceptType: index.conceptType[i] ?? null });
+      rows.push({ id, index: i, kind, label: index.label[i] as string });
     }
     rows.sort((a, b) => a.label.localeCompare(b.label));
     return rows;
   }, [index, showBooks, showConcepts, matches]);
 
-  /** Every distinct `conceptType` in the envelope, alphabetised so the colour a
-   *  type gets does not depend on the order concepts happened to arrive in —
-   *  the same determinism `force.ts` seeds positions for. Palette wraps past
-   *  `TYPE_PALETTE_SIZE` rather than growing unboundedly: a corpus with more
-   *  than eight named types would stop being a legend and start being noise. */
-  const conceptTypeOrder = useMemo(() => {
-    if (index === null) return [];
-    const seen = new Set<string>();
-    for (const type of index.conceptType) {
-      if (type !== null) seen.add(type);
-    }
-    return [...seen].sort((a, b) => a.localeCompare(b));
-  }, [index]);
+  /** Concepts coloured by which books connect them, not by `conceptType`:
+   *  measured on the running corpus, that field is free text from the
+   *  extractor with 1,619 distinct values after folding case and accents
+   *  alone, so a legend keyed on it would need hundreds of entries rather
+   *  than the ten a reader can actually tell apart. `clusterConcepts`'s own
+   *  doc comment in `graphModel.ts` has the measurement and the algorithm.
+   *
+   *  Recomputed with the subgraph, so raising the degree threshold reclusters
+   *  what is actually on screen. `CLUSTER_TARGET` is a constant rather than a
+   *  control for now — nobody has asked for a specific count yet, and adding
+   *  the slider is one `useState` away from here when somebody does. */
+  const clustering = useMemo(() => {
+    if (index === null || sub === null) return null;
+    return clusterConcepts(index, sub, CLUSTER_TARGET);
+  }, [index, sub]);
 
-  const typeSlot = useCallback(
-    (type: string | null): number | null =>
-      type === null ? null : conceptTypeOrder.indexOf(type) % TYPE_PALETTE_SIZE,
-    [conceptTypeOrder],
+  const clusterSlot = useCallback(
+    (nodeIndex: number): number | null => {
+      if (clustering === null) return null;
+      const c = clustering.cluster[nodeIndex];
+      return c === undefined || c < 0 ? null : c % TYPE_PALETTE_SIZE;
+    },
+    [clustering],
   );
+
+  /** One legend row per colour, not per cluster: `CLUSTER_TARGET` is 10 and so
+   *  is the palette, but a subgraph more fragmented than that (see
+   *  `Clustering.count`'s own note) reuses a colour for more than one
+   *  cluster, and the legend must say so rather than print two identical
+   *  rows. */
+  const clusterLegend = useMemo(() => {
+    if (clustering === null || clustering.count === 0) return [];
+    const bySlot = new Map<number, number[]>();
+    for (let c = 0; c < clustering.count; c += 1) {
+      const slot = c % TYPE_PALETTE_SIZE;
+      const list = bySlot.get(slot);
+      if (list === undefined) bySlot.set(slot, [c]);
+      else list.push(c);
+    }
+    return [...bySlot.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([slot, ids]) => ({
+        slot,
+        label: ids.map((id) => t("graph.clusterLabel", { n: id + 1 })).join(", "),
+      }));
+  }, [clustering, t]);
 
   // A new filter or search is a different list, so the reader should not land
   // on it already scrolled three pages down a list that no longer exists.
@@ -819,7 +849,7 @@ export function LibraryGraph({
                   const dimmed = lit !== null && !lit.has(p.id);
                   const found = matches !== null && matches.has(p.id);
                   const chosen = selected?.id === p.id;
-                  const slot = typeSlot(p.conceptType);
+                  const slot = clusterSlot(p.index);
                   // The parent scales the position; this inverse scale keeps
                   // the node and its label at their screen-space size.
                   //
@@ -1003,18 +1033,18 @@ export function LibraryGraph({
                     total: listed.length,
                   })}
                 </p>
-                {conceptTypeOrder.length > 0 && (
-                  <ul className="graph-legend graph-type-legend">
-                    {conceptTypeOrder.map((type, i) => (
-                      <li key={type}>
-                        <span
-                          className={`dot node-dot type-${i % TYPE_PALETTE_SIZE}`}
-                          aria-hidden="true"
-                        />
-                        <span>{type}</span>
-                      </li>
-                    ))}
-                  </ul>
+                {clusterLegend.length > 0 && (
+                  <>
+                    <ul className="graph-legend graph-type-legend">
+                      {clusterLegend.map(({ slot, label }) => (
+                        <li key={slot}>
+                          <span className={`dot node-dot type-${slot}`} aria-hidden="true" />
+                          <span>{label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="muted small graph-note">{t("graph.clusterNote")}</p>
+                  </>
                 )}
                 {/* Grown by `LIST_STEP` on scroll rather than paginated with
                     buttons: the whole envelope is already in memory, so there
@@ -1030,7 +1060,7 @@ export function LibraryGraph({
                         </h4>
                         <ul className="graph-index">
                           {rows.map((p) => {
-                            const slot = typeSlot(p.conceptType);
+                            const slot = clusterSlot(p.index);
                             return (
                               <li key={p.id}>
                                 <button type="button" onClick={() => pick(p)}>

@@ -688,16 +688,25 @@ describe("the accessible list", () => {
     expect(within(groups).getByRole("button", { name: "Concepto 249" })).toBeTruthy();
   });
 
-  it("gives every concept type its own colour, in the list and on the canvas", async () => {
+  it("colours every drawn concept by its structural cluster, in the list and on the canvas", async () => {
+    // Not by `conceptType`: measured on the running corpus that field is free
+    // text with 1,619 distinct values after folding case and accents, so the
+    // colour comes from `clusterConcepts` — which books connect a concept to
+    // others — instead. Both "Gracia" and "Concilio" are drawn at the default
+    // threshold (`the accessible list` fixture data), and every drawn concept
+    // gets a cluster, merged together or not.
     await mounted();
-    // The fixture's only typed concept — the other two carry no `conceptType`.
     const list = within(document.querySelector(".graph-index-groups") as HTMLElement);
-    const dot = list.getByRole("button", { name: /Gracia/ }).querySelector(".node-dot");
-    expect(dot?.className).toContain("type-0");
-    expect(node("Gracia").getAttribute("class")).toContain("type-0");
-    expect(node("Concilio").getAttribute("class")).not.toMatch(/type-\d/);
+    const listDot = list.getByRole("button", { name: /Gracia/ }).querySelector(".node-dot");
+    const canvasClass = node("Gracia").getAttribute("class") ?? "";
+    expect(listDot?.className).toMatch(/type-\d/);
+    expect(canvasClass).toMatch(/type-\d/);
+    // The same cluster gets the same colour in both places.
+    const slot = /type-(\d)/.exec(canvasClass)?.[1];
+    expect(listDot?.className).toContain(`type-${slot}`);
+    expect(node("Concilio").getAttribute("class")).toMatch(/type-\d/);
 
     const legend = within(document.querySelector(".graph-type-legend") as HTMLElement);
-    expect(legend.getByText("Doctrina")).toBeTruthy();
+    expect(legend.getByText(t("graph.clusterLabel", { n: 1 }))).toBeTruthy();
   });
 });

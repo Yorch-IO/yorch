@@ -27,12 +27,12 @@
      Tracks --graph-bg and is named separately because it is a different job. */
   --graph-halo: #fbfcfd;
 
-  /* A concept's `conceptType` — a fact the extractor proposed, not a control
-     the reader set — gets its colour from this fixed, ordered palette
-     (Okabe-Ito, colourblind-safe) rather than from a hash of the string, so
-     the same type gets the same colour across a session and the legend can
-     name eight without running out. Wraps past eight; see `TYPE_PALETTE_SIZE`
-     in LibraryGraph.tsx. */
+  /* A concept's cluster — computed from which books connect it to others, not
+     a field the reader or the extractor set — gets its colour from this
+     fixed, ordered palette (Okabe-Ito, colourblind-safe, extended by two so
+     ten clusters is not wider than the palette) rather than from a hash, so
+     the same cluster id gets the same colour across a session. Wraps past ten;
+     see `TYPE_PALETTE_SIZE`/`CLUSTER_TARGET` in LibraryGraph.tsx. */
   --graph-type-0: #e69f00;
   --graph-type-1: #56b4e9;
   --graph-type-2: #009e73;
@@ -41,6 +41,8 @@
   --graph-type-5: #d55e00;
   --graph-type-6: #cc79a7;
   --graph-type-7: #7570b3;
+  --graph-type-8: #66a61e;
+  --graph-type-9: #a6761d;
 
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -78,6 +80,8 @@
     --graph-type-5: #ff8f4d;
     --graph-type-6: #e0a0c2;
     --graph-type-7: #a29be0;
+    --graph-type-8: #a3d977;
+    --graph-type-9: #d4a45c;
   }
 }
 
@@ -1314,6 +1318,8 @@ button.link.active {
 .graph-canvas .node.concept.type-5 .shape { fill: var(--graph-type-5); stroke: var(--graph-type-5); }
 .graph-canvas .node.concept.type-6 .shape { fill: var(--graph-type-6); stroke: var(--graph-type-6); }
 .graph-canvas .node.concept.type-7 .shape { fill: var(--graph-type-7); stroke: var(--graph-type-7); }
+.graph-canvas .node.concept.type-8 .shape { fill: var(--graph-type-8); stroke: var(--graph-type-8); }
+.graph-canvas .node.concept.type-9 .shape { fill: var(--graph-type-9); stroke: var(--graph-type-9); }
 
 /* The touch target. `fill: none` with `pointer-events: all` rather than a
    transparent fill: it is the one combination that is reliably hit-tested
@@ -1883,6 +1889,8 @@ button.link.active {
 .node-dot.type-5 { background: var(--graph-type-5); }
 .node-dot.type-6 { background: var(--graph-type-6); }
 .node-dot.type-7 { background: var(--graph-type-7); }
+.node-dot.type-8 { background: var(--graph-type-8); }
+.node-dot.type-9 { background: var(--graph-type-9); }
 
 /* A legend for a fieldset that needs no visible one: the two checkboxes label
    themselves, and the group still needs a name for a screen reader. */

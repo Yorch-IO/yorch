@@ -436,6 +436,14 @@ export function isolatedIn(index: GraphIndex, sub: Subgraph): Int32Array {
   return out.slice(0, n);
 }
 
+/** How far a cluster may grow past a perfectly even split (`conceptCount /
+ *  targetClusters`) before `clusterConcepts` refuses to merge into it. Below
+ *  1.0 no cluster could ever reach the average, which is a stricter promise
+ *  than "roughly ten groups" needs; 1.5 caps any one cluster at 15% of the
+ *  whole when the target is 10, which is what stops the failure this cap
+ *  exists for — see the note where it is used. */
+const SIZE_SLACK = 1.5;
+
 export interface Clustering {
   /** Cluster id per node index, dense from 0. `-1` for a book, and for a
    *  concept the subgraph does not reach — same meaning as `-1` everywhere
@@ -473,12 +481,17 @@ export interface Clustering {
  * book is exactly the pair such an edge represents, and it is where this
  * algorithm stops rather than forcing a merge a reader would not recognise.
  *
- * Approximate cluster sizes are the accepted trade-off, not a bug to fix: a
- * `targetClusters` of 10 over 900 well-connected concepts settles near 90
- * each because that is roughly how the co-occurrence weight distributes, not
- * because anything here balances it — a corpus with one dominant topic would
- * still produce one dominant cluster.
+ * **Sizes need a cap, not just a target count.** The first version merged
+ * purely by weight with no size limit, and on the real corpus that produced
+ * one cluster of 893 concepts and nine of one or two — a dense, well-connected
+ * library is not several comparably-sized regions with a few weak edges
+ * between them; it is closer to one thing almost everything co-occurs with at
+ * some weight, so "cut the lightest edges" cuts only the handful of truly
+ * isolated concepts and fuses the rest. `SIZE_SLACK` bounds how far any one
+ * cluster may grow past an even split, which is what makes ten clusters
+ * actually read as ten regions rather than one region and nine footnotes.
  *
+
  * Scoped to `sub` on purpose, so raising the degree threshold reclusters what
  * is actually on screen rather than clustering the whole envelope and then
  * discarding most of the answer.
@@ -531,7 +544,15 @@ export function clusterConcepts(
     .sort((x, y) => y.w - x.w);
 
   const parent = new Int32Array(total);
-  for (let i = index.docCount; i < total; i += 1) parent[i] = i;
+  const size = new Int32Array(total);
+  let conceptCount = 0;
+  for (let i = index.docCount; i < total; i += 1) {
+    parent[i] = i;
+    if (present[i] === 1) {
+      size[i] = 1;
+      conceptCount += 1;
+    }
+  }
   const find = (x: number): number => {
     while (parent[x] !== x) {
       parent[x] = parent[parent[x] as number] as number;
@@ -540,15 +561,26 @@ export function clusterConcepts(
     return x;
   };
 
-  let components = 0;
-  for (let i = index.docCount; i < total; i += 1) if (present[i] === 1) components += 1;
+  // Unbounded, this is where a dense real corpus goes wrong: measured on the
+  // running library, an unconstrained cut left one cluster of 893 concepts
+  // and nine of one or two — "cut the lightest edges" assumes several
+  // comparably-weighted regions to cut *between*, and a theology corpus is
+  // instead one thing almost everything co-occurs with at some weight, so
+  // nearly every edge stays above the few genuinely isolated ones. The cap
+  // below is what turns "10 clusters" back into 10 clusters that are each a
+  // plausible fraction of the whole, at the cost of the merge sometimes
+  // stopping before `targetClusters` is reached — see `Clustering.count`.
+  const cap = Math.max(1, Math.ceil((conceptCount / targetClusters) * SIZE_SLACK));
 
+  let components = conceptCount;
   for (const { a, b } of pairs) {
     if (components <= targetClusters) break;
     const ra = find(a);
     const rb = find(b);
     if (ra === rb) continue;
+    if ((size[ra] as number) + (size[rb] as number) > cap) continue;
     parent[ra] = rb;
+    size[rb] = (size[rb] as number) + (size[ra] as number);
     components -= 1;
   }
 

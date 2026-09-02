@@ -436,4 +436,61 @@ describe("clusterConcepts", () => {
     const { cluster } = clusterConcepts(index, sub, 2);
     expect(cluster[index.ids.indexOf("con_Solitario")]).toBe(-1);
   });
+
+  // Reproduces the failure a real library actually hit: 268 concepts drawn,
+  // and an unbounded version of this algorithm put 893 of a related 903 into
+  // one cluster and left nine of one or two — "cut the lightest edges" cuts
+  // only the handful of truly isolated concepts when almost every pair
+  // co-occurs at *some* weight, which a dense corpus is. This fixture builds
+  // exactly that shape: every concept shares a book with several others (so
+  // the graph is one connected mass, not several separable regions) plus a
+  // few concepts that share nothing with anything.
+  function denseCorpus(conceptCount: number, isolatedCount: number): LibraryGraph {
+    const bookCount = 20;
+    const documents: GraphDocument[] = Array.from({ length: bookCount }, (_, i) => ({
+      documentId: `d${i}`,
+      versionId: `ver_${i}`,
+      title: `Libro ${i}`,
+      format: "pdf",
+    }));
+    const concepts: GraphConcept[] = [];
+    const edges: GraphEdge[] = [];
+    for (let i = 0; i < conceptCount; i += 1) {
+      const id = `con_${i}`;
+      concepts.push({ id, name: `Concepto ${i}`, conceptType: null, mentions: 3, documents: 3 });
+      // Three books per concept, spread by a coprime stride so pairs overlap
+      // heavily without every concept sharing the exact same three books.
+      for (const offset of [0, 7, 13]) {
+        const book = (i + offset) % bookCount;
+        edges.push({ versionId: `ver_${book}`, conceptId: id, mentions: 1, confidence: 0.9 });
+      }
+    }
+    for (let i = 0; i < isolatedCount; i += 1) {
+      const id = `con_solo_${i}`;
+      concepts.push({ id, name: `Solo ${i}`, conceptType: null, mentions: 1, documents: 1 });
+      documents.push({ documentId: `di${i}`, versionId: `ver_solo_${i}`, title: `Solo ${i}`, format: "pdf" });
+      edges.push({ versionId: `ver_solo_${i}`, conceptId: id, mentions: 1, confidence: 0.9 });
+    }
+    return envelope({ documents, concepts, edges, minDocuments: 1 });
+  }
+
+  it("does not collapse a densely connected corpus into one giant cluster", () => {
+    const index = buildIndex(denseCorpus(268, 8));
+    const sub = subgraphAt(index, 1);
+    const total = 268 + 8;
+    const { cluster, count } = clusterConcepts(index, sub, 10);
+
+    const sizes = new Map<number, number>();
+    for (let i = index.docCount; i < index.ids.length; i += 1) {
+      const c = cluster[i] as number;
+      sizes.set(c, (sizes.get(c) ?? 0) + 1);
+    }
+    const largest = Math.max(...sizes.values());
+
+    expect(count).toBeGreaterThan(1);
+    // The old, uncapped algorithm put 893 of 903 comparable concepts (99%)
+    // into one cluster on the real library; the cap keeps any one cluster at
+    // or under 15% of the total (`SIZE_SLACK` applied to a 10-way split).
+    expect(largest).toBeLessThanOrEqual(Math.ceil((total / 10) * 1.5));
+  });
 });

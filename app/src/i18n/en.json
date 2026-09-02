@@ -435,7 +435,7 @@
     "conceptBooks": "in {{count}} books",
     "filterBooks": "Books",
     "filterConcepts": "Concepts",
-    "clusterLabel": "Group {{n}}",
+    "clusterLabelCount": "Group {{n}} ({{count}})",
     "clusterNote": "Concepts are grouped and coloured by which books connect them — not by any category — so \"Group\" names a colour, not a topic.",
     "overviewLegend": {
       "doc": "A book",

@@ -330,9 +330,16 @@ export function LibraryGraph({
    *  is the palette, but a subgraph more fragmented than that (see
    *  `Clustering.count`'s own note) reuses a colour for more than one
    *  cluster, and the legend must say so rather than print two identical
-   *  rows. */
+   *  rows. Each row also names how many concepts it holds, since "Grupo 3" on
+   *  its own answers "which colour" but not "is this the big one or the
+   *  leftover" — the question a reader actually has in front of a legend. */
   const clusterLegend = useMemo(() => {
-    if (clustering === null || clustering.count === 0) return [];
+    if (index === null || clustering === null || clustering.count === 0) return [];
+    const sizeOf = new Array<number>(clustering.count).fill(0);
+    for (let i = index.docCount; i < index.ids.length; i += 1) {
+      const c = clustering.cluster[i] as number;
+      if (c >= 0) sizeOf[c] = (sizeOf[c] as number) + 1;
+    }
     const bySlot = new Map<number, number[]>();
     for (let c = 0; c < clustering.count; c += 1) {
       const slot = c % TYPE_PALETTE_SIZE;
@@ -344,9 +351,11 @@ export function LibraryGraph({
       .sort((a, b) => a[0] - b[0])
       .map(([slot, ids]) => ({
         slot,
-        label: ids.map((id) => t("graph.clusterLabel", { n: id + 1 })).join(", "),
+        label: ids
+          .map((id) => t("graph.clusterLabelCount", { n: id + 1, count: sizeOf[id] }))
+          .join(", "),
       }));
-  }, [clustering, t]);
+  }, [index, clustering, t]);
 
   // A new filter or search is a different list, so the reader should not land
   // on it already scrolled three pages down a list that no longer exists.

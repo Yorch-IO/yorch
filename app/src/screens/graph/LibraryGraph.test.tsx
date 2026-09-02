@@ -706,7 +706,11 @@ describe("the accessible list", () => {
     expect(listDot?.className).toContain(`type-${slot}`);
     expect(node("Concilio").getAttribute("class")).toMatch(/type-\d/);
 
+    // "Gracia" and "Concilio" are the only two concepts present at this
+    // threshold and share no book, so each is its own singleton cluster —
+    // the legend names both, each holding exactly one concept.
     const legend = within(document.querySelector(".graph-type-legend") as HTMLElement);
-    expect(legend.getByText(t("graph.clusterLabel", { n: 1 }))).toBeTruthy();
+    expect(legend.getByText(t("graph.clusterLabelCount", { n: 1, count: 1 }))).toBeTruthy();
+    expect(legend.getByText(t("graph.clusterLabelCount", { n: 2, count: 1 }))).toBeTruthy();
   });
 });

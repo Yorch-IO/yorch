@@ -225,11 +225,17 @@ describe("the controls", () => {
     fireEvent.change(screen.getByLabelText(t("graph.onlyBook")), {
       target: { value: "ver_2" },
     });
+    // Awaited, because the widest layout is now computed *last*: it costs an
+    // order of magnitude more than the others (~8.8 s against 364 ms on the
+    // real library), so everything else is ready first and "every book" fills
+    // in when it lands. Until then `chooseLayout` draws with the widest layout
+    // that exists and leaves the nodes it has no position for out — which is
+    // exactly what this waits through.
+    await waitFor(() => expect(nodeNames()).toContain("Bautismo"));
     const names = nodeNames();
     expect(names).toContain("Doctrina");
     expect(names).not.toContain("Historia");
     // ver_2 mentions con_shared and con_b, and not con_a.
-    expect(names).toContain("Bautismo");
     expect(names).not.toContain("Concilio");
   });
 
@@ -707,10 +713,32 @@ describe("the accessible list", () => {
     expect(node("Concilio").getAttribute("class")).toMatch(/type-\d/);
 
     // "Gracia" and "Concilio" are the only two concepts present at this
-    // threshold and share no book, so each is its own singleton cluster —
-    // the legend names both, each holding exactly one concept.
+    // threshold and share no book, so each is its own group — and a group is
+    // named after its own most-mentioned concepts rather than numbered, so
+    // the legend reads with the concepts themselves in it.
     const legend = within(document.querySelector(".graph-type-legend") as HTMLElement);
-    expect(legend.getByText(t("graph.clusterLabelCount", { n: 1, count: 1 }))).toBeTruthy();
-    expect(legend.getByText(t("graph.clusterLabelCount", { n: 2, count: 1 }))).toBeTruthy();
+    expect(legend.getByText(t("graph.clusterNamed", { name: "Gracia", count: 1 }))).toBeTruthy();
+    expect(legend.getByText(t("graph.clusterNamed", { name: "Concilio", count: 1 }))).toBeTruthy();
+  });
+
+  it("writes each group's name across the region the layout gave it", () => {
+    // The canvas half of the same naming. Under the nodes and inert to the
+    // pointer, because it names ground rather than a thing: a name lying over
+    // a concept must not take the click meant for it.
+    //
+    // jsdom lays out no SVG, so what is asserted is the contract the
+    // stylesheet selects on and the coordinates the component computed — not
+    // that the words land anywhere in particular, which only a window can say.
+    return mounted().then(() => {
+      const regions = document.querySelector(".graph-canvas .graph-regions");
+      expect(regions).not.toBeNull();
+      const canvasChildren = [...(regions?.parentElement?.children ?? [])];
+      expect(canvasChildren.indexOf(regions as Element)).toBe(0);
+      expect(regions?.getAttribute("aria-hidden")).toBe("true");
+      // The fixture's two groups hold one concept each, which is below
+      // `CLUSTER_MARK_MIN` — a name floating over a single dot labels nothing,
+      // so the layer is present and empty rather than absent.
+      expect(regions?.querySelectorAll("text")).toHaveLength(0);
+    });
   });
 });

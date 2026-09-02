@@ -12,7 +12,6 @@ import {
 import { ATLAS_VIEW } from "../../lib/graphAtlas";
 // The thresholds and the default live beside the derivation that reads them,
 // so the control and the filter cannot disagree about what the stops are.
-import { clusterConcepts } from "../../lib/graphClusters";
 import {
   DEFAULT_THRESHOLD,
   matchesQuery,
@@ -77,9 +76,12 @@ const LIST_STEP = 200;
  *  `--graph-type-N` custom properties defined in `styles.css`. */
 const TYPE_PALETTE_SIZE = 10;
 
-/** How many colour groups `clusterConcepts` aims for. Not a control yet — see
- *  the note where it is called for why a fixed number was chosen over one. */
-const CLUSTER_TARGET = 10;
+/** How many of a group's own concepts name it. */
+const CLUSTER_NAME_PARTS = 2;
+
+/** Below this many drawn nodes a group gets no name on the canvas: a name
+ *  floating over two dots labels nothing and crowds whatever is beside it. */
+const CLUSTER_MARK_MIN = 6;
 
 type Selection =
   | { kind: "doc"; id: string }
@@ -191,7 +193,8 @@ export function LibraryGraph({
   // threshold: 209 ms at the default and 3,859 ms at the widest, measured on
   // the real library. Now the threshold picks an array that already exists.
   const atlas = useAtlas(index, active);
-  const positions = chooseLayout(atlas.layouts, minDocuments);
+  const drawnLayout = chooseLayout(atlas.layouts, minDocuments);
+  const positions = drawnLayout?.xy ?? null;
 
   const needle = query.trim().toLocaleLowerCase();
   const matches = useMemo(() => {
@@ -308,15 +311,81 @@ export function LibraryGraph({
    *  than the ten a reader can actually tell apart. `graphClusters.ts` has the
    *  measurement and the algorithm.
    *
-   *  Recomputed with the subgraph, so raising the degree threshold reclusters
-   *  what is actually on screen — measured on the real library, 21 ms at the
-   *  default threshold and 27 ms at "every book", which is why this can sit in
-   *  a `useMemo` at all. `CLUSTER_TARGET` is a constant rather than a control
-   *  for now; adding the slider is one `useState` away from here. */
+   *  **Read off the layout rather than computed here**, because the simulation
+   *  is what pulls each group into its own region of the canvas and the
+   *  colours have to be *that* grouping — including in the seconds before a
+   *  threshold's own layout exists, when `chooseLayout` answers with a wider
+   *  one. Two computations of the same deterministic function would agree on
+   *  the steady state and disagree exactly during that window. */
   const clustering = useMemo(() => {
-    if (index === null || sub === null) return null;
-    return clusterConcepts(index, sub, CLUSTER_TARGET);
-  }, [index, sub]);
+    if (drawnLayout === null) return null;
+    let count = 0;
+    for (const c of drawnLayout.clusters) count = Math.max(count, c + 1);
+    return { cluster: drawnLayout.clusters, count };
+  }, [drawnLayout]);
+
+  /** What to call each group.
+   *
+   *  Nobody named these — they are a cut of the co-occurrence graph — so the
+   *  name is the group's own most-connected concepts, which is a description a
+   *  reader can check against the canvas rather than a topic asserted over it.
+   *  Two, because one ("Roma") reads as a single node's label and three stops
+   *  fitting a legend row. Degree is the right rank: it is the number of books
+   *  that mention the concept, so the name is what the group is *about across
+   *  the library*, not what one verbose book repeats. */
+  const clusterNames = useMemo(() => {
+    if (index === null || clustering === null) return [];
+    const best: { label: string; degree: number }[][] = Array.from(
+      { length: clustering.count },
+      () => [],
+    );
+    for (let i = index.docCount; i < index.ids.length; i += 1) {
+      const c = clustering.cluster[i] as number;
+      if (c < 0) continue;
+      const row = best[c];
+      if (row === undefined) continue;
+      row.push({ label: index.label[i] as string, degree: index.degree[i] as number });
+    }
+    return best.map((row) =>
+      row
+        .sort((a, b) => (b.degree !== a.degree ? b.degree - a.degree : a.label.localeCompare(b.label)))
+        .slice(0, CLUSTER_NAME_PARTS)
+        .map((c) => c.label)
+        .join(" · "),
+    );
+  }, [index, clustering]);
+
+  /** Where to write each group's name on the canvas: the middle of what is
+   *  *drawn* of it, so the name follows the filters rather than pointing at
+   *  concepts a checkbox removed. A group with only a couple of nodes left
+   *  gets none — a name floating over two dots labels nothing. */
+  const clusterMarks = useMemo(() => {
+    if (layout === null || clustering === null) return [];
+    const sums = new Map<number, { x: number; y: number; n: number }>();
+    for (const p of layout) {
+      const c = clustering.cluster[p.index] as number;
+      if (c === undefined || c < 0) continue;
+      const at = sums.get(c);
+      if (at === undefined) sums.set(c, { x: p.x, y: p.y, n: 1 });
+      else {
+        at.x += p.x;
+        at.y += p.y;
+        at.n += 1;
+      }
+    }
+    const marks: { cluster: number; x: number; y: number; label: string }[] = [];
+    for (const [c, at] of sums) {
+      if (at.n < CLUSTER_MARK_MIN) continue;
+      const label = clusterNames[c];
+      if (label === undefined || label === "") continue;
+      marks.push({ cluster: c, x: at.x / at.n, y: at.y / at.n, label });
+    }
+    // Largest last, so the biggest group's name is the one on top where two
+    // regions overlap.
+    return marks.sort(
+      (a, b) => (sums.get(a.cluster)?.n ?? 0) - (sums.get(b.cluster)?.n ?? 0),
+    );
+  }, [layout, clustering, clusterNames]);
 
   const clusterSlot = useCallback(
     (nodeIndex: number): number | null => {
@@ -353,10 +422,12 @@ export function LibraryGraph({
       .map(([slot, ids]) => ({
         slot,
         label: ids
-          .map((id) => t("graph.clusterLabelCount", { n: id + 1, count: sizeOf[id] }))
+          .map((id) =>
+            t("graph.clusterNamed", { name: clusterNames[id] ?? "", count: sizeOf[id] }),
+          )
           .join(", "),
       }));
-  }, [index, clustering, t]);
+  }, [index, clustering, clusterNames, t]);
 
   // A new filter or search is a different list, so the reader should not land
   // on it already scrolled three pages down a list that no longer exists.
@@ -808,6 +879,31 @@ export function LibraryGraph({
                     so nothing is lost by it — and at the widest threshold this
                     is 17,814 elements that no longer exist. Paint order is
                     still a contract; it is a stacking order now. */}
+
+                {/* Each group's name, written across the middle of the region
+                    the simulation pulled it into. **First, so it sits under
+                    every node** — this is a map's region label, not a node's
+                    own: it names ground rather than a thing, and a reader
+                    chasing a concept must never have a word of it hidden
+                    behind this. Inverse-scaled like the concepts, so zooming
+                    in does not turn it into a wall of letters, and inert to
+                    the pointer so it cannot swallow a click meant for a node
+                    underneath. */}
+                <g className="graph-regions" aria-hidden="true">
+                  {clusterMarks.map((mark) => (
+                    <text
+                      key={mark.cluster}
+                      className={`region-label type-${mark.cluster % TYPE_PALETTE_SIZE}`}
+                      x={0}
+                      y={0}
+                      transform={`translate(${mark.x} ${mark.y}) scale(${1 / zoom})`}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                    >
+                      {mark.label}
+                    </text>
+                  ))}
+                </g>
 
                 {layout.filter((p) => p.kind === "doc").map((p) => {
                   const dimmed = lit !== null && !lit.has(p.id);

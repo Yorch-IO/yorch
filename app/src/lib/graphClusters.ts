@@ -45,7 +45,28 @@
  * nothing out.
  */
 
-import type { GraphIndex, Subgraph } from "./graphModel";
+/** What clustering reads of the envelope. Narrower than `GraphIndex` on
+ *  purpose: `graphAtlas`'s `AtlasRequest` also satisfies it, so the worker can
+ *  cluster without reassembling an index it never receives — and the layout
+ *  and the legend then come from one computation rather than two that agree by
+ *  luck. `GraphIndex` satisfies it structurally; nothing has to adapt. */
+export interface ClusterGraph {
+  ids: readonly string[];
+  docCount: number;
+  edgeSrc: Int32Array;
+  edgeDst: Int32Array;
+}
+
+/** The node and edge indices one threshold draws. `Subgraph` satisfies it. */
+export interface ClusterScope {
+  nodes: Int32Array;
+  edges: Int32Array;
+}
+
+/** How many colour groups to aim for. Ten is what the reader asked for and
+ *  also what the palette in `styles.css` holds, so a legend never has to spend
+ *  one colour on two groups. */
+export const CLUSTER_TARGET = 10;
 
 /** Louvain's resolution. 1 finds *one* community in this corpus — a theology
  *  library really is one connected mass — and 3 starts cutting through
@@ -214,8 +235,8 @@ function louvain(nodes: number[], edges: readonly Edge[], resolution: number): M
  * discarding most of the answer.
  */
 export function clusterConcepts(
-  index: GraphIndex,
-  sub: Subgraph,
+  index: ClusterGraph,
+  sub: ClusterScope,
   targetClusters: number,
 ): Clustering {
   const total = index.ids.length;

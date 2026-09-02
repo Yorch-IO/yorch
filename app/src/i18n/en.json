@@ -435,8 +435,8 @@
     "conceptBooks": "in {{count}} books",
     "filterBooks": "Books",
     "filterConcepts": "Concepts",
-    "clusterLabelCount": "Group {{n}} ({{count}})",
-    "clusterNote": "Concepts are grouped and coloured by which books connect them — not by any category — so \"Group\" names a colour, not a topic.",
+    "clusterNamed": "{{name}} ({{count}})",
+    "clusterNote": "Groups are cut from the graph itself — concepts that share books — and each is named after its own most widely mentioned concepts. Nobody assigned these topics, so read a name as a description of what the group holds rather than as a title.",
     "overviewLegend": {
       "doc": "A book",
       "concept": "A concept",

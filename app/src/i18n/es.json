@@ -435,8 +435,8 @@
     "conceptBooks": "en {{count}} libros",
     "filterBooks": "Libros",
     "filterConcepts": "Conceptos",
-    "clusterLabelCount": "Grupo {{n}} ({{count}})",
-    "clusterNote": "Los conceptos se agrupan y colorean según qué libros los conectan — no por categoría — así que \"Grupo\" nombra un color, no un tema.",
+    "clusterNamed": "{{name}} ({{count}})",
+    "clusterNote": "Los grupos salen del propio grafo — conceptos que comparten libros — y cada uno se nombra con sus conceptos más mencionados. Nadie asignó esos temas, así que el nombre describe lo que el grupo contiene, no es un título.",
     "overviewLegend": {
       "doc": "Un libro",
       "concept": "Un concepto",

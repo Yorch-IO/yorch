@@ -1306,6 +1306,38 @@ button.link.active {
   stroke: var(--graph-concept-stroke);
 }
 
+/* A group's name, written across the region the layout pulled it into.
+   `pointer-events: none` on the layer rather than per label: it sits under
+   every node, and without this a name lying across a concept would swallow
+   the click meant for it. Larger and dimmer than a node's own label, the way
+   a map names a country — the reader should see it while scanning and look
+   past it while reading a node. */
+.graph-canvas .graph-regions {
+  pointer-events: none;
+}
+
+.graph-canvas .region-label {
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.5;
+  paint-order: stroke fill;
+  stroke: var(--graph-halo);
+  stroke-width: 6;
+  stroke-linejoin: round;
+}
+
+.graph-canvas .region-label.type-0 { fill: var(--graph-type-0); }
+.graph-canvas .region-label.type-1 { fill: var(--graph-type-1); }
+.graph-canvas .region-label.type-2 { fill: var(--graph-type-2); }
+.graph-canvas .region-label.type-3 { fill: var(--graph-type-3); }
+.graph-canvas .region-label.type-4 { fill: var(--graph-type-4); }
+.graph-canvas .region-label.type-5 { fill: var(--graph-type-5); }
+.graph-canvas .region-label.type-6 { fill: var(--graph-type-6); }
+.graph-canvas .region-label.type-7 { fill: var(--graph-type-7); }
+.graph-canvas .region-label.type-8 { fill: var(--graph-type-8); }
+.graph-canvas .region-label.type-9 { fill: var(--graph-type-9); }
+
 /* A typed concept's colour, generated for the eight `type-N` classes
    LibraryGraph.tsx assigns from `conceptTypeOrder`. Declared after the
    default above so a type overrides it, and before `.is-hovered` below so

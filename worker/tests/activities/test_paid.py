@@ -597,9 +597,92 @@ async def test_a_quote_is_located_in_the_document_spelling_not_the_models(
     claim = captured["claims"][0]
     assert claim["quote"] == "sobre el conocimiento", "the document's spelling wins"
     text = "Párrafo número 0 sobre el conocimiento de Dios."
-    assert claim["quote_char_start"] == text.index("sobre el conocimiento")
-    assert claim["quote_char_end"] == claim["quote_char_start"] + len(claim["quote"])
+    # **Bytes, not characters.** This assertion used to read
+    # `text.index("sobre el conocimiento")`, which is 17 — and the two accents
+    # in "Párrafo número" make the byte offset 19. It agreed with the code and
+    # both were wrong: measured over the nine runs in this workspace that carry
+    # quote spans, 295 of 13,966 stored spans (2.1%) resolved to their own
+    # quote, while the chunks' own `char_span`s verified 100% against the same
+    # stream. The span is what would take a reader to the sentence, so a
+    # character index here points into the middle of a different word.
+    start = len(text[: text.index("sobre el conocimiento")].encode("utf-8"))
+    assert start == 19, "two accents before the quote, so bytes and characters differ"
+    assert claim["quote_char_start"] == start
+    assert claim["quote_char_end"] == start + len(claim["quote"].encode("utf-8"))
     assert result.claims == 1 and result.claims_verified == 1
+
+
+async def test_two_claims_quoting_one_sentence_both_survive(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The pair the `status` field exists for.
+
+    A text expounding the doctrine it is about to rebut enunciates it in the
+    same words as one who holds it, so `afirma` and `niega` can honestly cite
+    the same sentence. The span dedup is there to stop a *gleaning* pass
+    restating ground an earlier pass covered; applied inside a single pass it
+    silently kept whichever claim came first — and with `max_gleaning` at 0
+    there is only ever one pass, so that was its only effect.
+    """
+    import json as _json
+
+    both = _json.dumps({
+        "conceptos": [{"nombre": "Providencia", "tipo": "doctrina", "confianza": 0.9}],
+        "afirmaciones": [
+            {"texto": "El documento sostiene que Dios se puede conocer.",
+             "concepto": "Providencia", "confianza": 0.8, "estado": "afirma",
+             "cita": "sobre el conocimiento de Dios"},
+            {"texto": "Otros niegan que Dios se pueda conocer.",
+             "concepto": "Providencia", "confianza": 0.8, "estado": "niega",
+             "cita": "sobre el conocimiento de Dios"},
+        ],
+    }, ensure_ascii=False)
+    monkeypatch.setattr(paid, "_provider", lambda: FakeProvider(semantics=both))
+    captured = _fake_graph(monkeypatch)
+
+    registered, _ = _ids()
+    result = await paid.extract_semantics(
+        "run_q3", registered, _chunked(workspace, "run_q3", 1)
+    )
+
+    assert result.claims == 2, [c["text"] for c in captured["claims"]]
+    assert {c["status"] for c in captured["claims"]} == {"afirma", "niega"}
+    starts = {c["quote_char_start"] for c in captured["claims"]}
+    assert len(starts) == 1, "they really do cite the same span"
+
+
+async def test_two_spellings_of_one_concept_are_one_row(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`project_concepts` derives the node id from `canonical_concept`, so
+    accumulating under the raw spelling sent two `UNWIND` rows for one node and
+    `SET k.type = row.type` let the last one win — including when the last one
+    is a claim's subject, which carries no type at all. Measured over the 40
+    semantics artifacts in this workspace: 1,169 groups of rows share a
+    canonical key, 1,199 rows more than there are nodes.
+    """
+    import json as _json
+
+    doubled = _json.dumps({
+        "conceptos": [
+            {"nombre": "Cuerpo", "tipo": "Estructura", "confianza": 0.9},
+            {"nombre": "cuerpo", "confianza": 0.8},
+        ],
+        "afirmaciones": [
+            {"texto": "El texto trata del cuerpo.", "concepto": "cuerpo",
+             "confianza": 0.7, "cita": "sobre el conocimiento"},
+        ],
+    }, ensure_ascii=False)
+    monkeypatch.setattr(paid, "_provider", lambda: FakeProvider(semantics=doubled))
+    captured = _fake_graph(monkeypatch)
+
+    registered, _ = _ids()
+    result = await paid.extract_semantics(
+        "run_q4", registered, _chunked(workspace, "run_q4", 1)
+    )
+
+    assert result.concepts == 1, [c["name"] for c in captured["concepts"]]
+    assert captured["concepts"][0]["type"] == "Estructura", "a known type is not wiped"
 
 
 async def test_a_quote_the_chunk_does_not_contain_costs_the_span_not_the_claim(

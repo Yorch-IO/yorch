@@ -57,3 +57,20 @@ def test_the_query_leg_mints_the_same_term_as_the_document_leg():
     from docagent.bm25 import term_id
 
     assert term_id("juan10v6") in query_sparse_vector("¿Qué dice Juan 10:6?").indices
+
+
+def test_the_longest_book_names_in_the_canon_are_reachable():
+    """At a 12-letter cap the two longest Spanish book names fell outside the
+    rule, so "1 Tesalonicenses 5:23" indexed as `tesalonicenses` alone — the
+    chapter and verse dropped by `MIN_TOKEN_LEN`, which is the failure this rule
+    exists to prevent. Measured over the 45 corrected texts in `libros/`: 17
+    references missed, and the wider cap mints 13 extra tokens, all real."""
+    assert "1tesalonicenses5v23" in tokenize("1 Tesalonicenses 5:23")
+    assert "lamentaciones3v26" in tokenize("Lamentaciones 3:26")
+    # And the plain book token is still emitted beside it, so a query naming
+    # only the book is unaffected.
+    assert "tesalonicenses" in tokenize("1 Tesalonicenses 5:23")
+
+
+def test_a_clock_time_still_mints_no_reference():
+    assert not [t for t in tokenize("nos vemos a las 10:30") if "v3" in t]

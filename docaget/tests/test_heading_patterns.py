@@ -323,3 +323,44 @@ def test_a_numbered_heading_keeps_its_level_when_it_carries_a_title():
     assert heading_level("1. Introducción", ChunkRules()) == 1
     assert heading_level("2.1.1 Foo", ChunkRules()) == 3
     assert heading_level("12. La puerta de las ovejas", ChunkRules()) == 1
+
+
+# --- the promotion must not discard the level that validated ---------------
+
+
+def test_a_promoted_heading_patterns_does_not_block_the_level_that_validated():
+    """Two heading levels report under one rule name, and on a document that
+    numbers nothing `validate` promotes that name to essential. Together they
+    blocked a proposal whose good half `adopt` was about to keep: the level-1
+    pattern that gives the document its outline had validated, an over-reaching
+    level-2 pattern had not, and `failed_rules()` cannot tell them apart. The
+    run then earned a refine round it could not improve on and, after three
+    attempts, fell back to the built-in defaults and no table of contents.
+
+    Observed shape on `01_RetoDeDios_INT-S.pdf`: level 1 OK, level 2 FAIL. It
+    became reachable on that book once its footnotes ("2. Ibídem.") stopped
+    counting as numbered headings, which is what had been making
+    `_numbers_its_headings` true and skipping the promotion by luck.
+    """
+    over_reached = rl.Validation(
+        findings=[rl.Finding("heading_patterns", False, "level 2 matched 32% of paragraphs")],
+        heading_levels_ok={1},
+    )
+    over_reached.essential = rl.ESSENTIAL_RULES | {"heading_patterns"}
+    assert over_reached.passed, "the level that validated supplies the outline"
+
+    nothing_validated = rl.Validation(
+        findings=[rl.Finding("heading_patterns", False, "matched prose")],
+        heading_levels_ok=set(),
+    )
+    nothing_validated.essential = rl.ESSENTIAL_RULES | {"heading_patterns"}
+    assert not nothing_validated.passed, "a refine round must still be earned"
+
+
+def test_an_essential_rule_other_than_the_heading_patterns_still_blocks():
+    """The relaxation is scoped to the one rule name that reports two levels."""
+    v = rl.Validation(
+        findings=[rl.Finding("header_patterns", False, "matched the body")],
+        heading_levels_ok={1},
+    )
+    assert not v.passed

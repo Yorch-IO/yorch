@@ -1558,6 +1558,154 @@ keys**: a blanket `gate.profile` → `report.profile` rename hit the string
 literals as well as the property accesses. The i18n dead-key test caught every
 one. That test is not bookkeeping.
 
+## What the 2026-09-03 audit of the indexing path fixed
+
+Fifteen defects of one class: each raised nothing, each left both suites green,
+and each cost only quality. Every fix is pinned by a test **verified by removing
+the fix and watching the test go red**, not by assumption. The measurements were
+taken over the 45 files matching `docaget/libros/**/*.corrected.txt` with each
+book's own learned profile applied, and over the 40 semantics artifacts and 9
+runs with quote spans in `~/.local/share/io.sek.companybrain/workspace/runs`.
+Nothing was re-indexed and no store was written.
+
+- **A claim's quote span added a character index to a byte offset**, so it
+  pointed at the wrong bytes for every chunk with an accent earlier in it — which
+  in Spanish is nearly all of them. `_locate_quote` returned `offset +
+  match.start()`, where `offset` is `char_from` in bytes and `match.start()` is
+  an index into a `str`. Measured over the nine runs that carry spans: **295 of
+  13,966 stored claim spans, 2.1%, resolved to the quote they were recorded
+  for**, while the chunks' own `char_span`s verified 600/600, 631/631 and so on
+  against the same stream. `claims_verified` counted every one as verified,
+  because the quote *was* found — so the recorded "98.7% and 99.2% of claims
+  carried a quote the code found" was true and the pointer stored beside it was
+  not. **The test had pinned the bug**: it asserted
+  `text.index("sobre el conocimiento")` over a string containing `á` and `ú`,
+  which is 17 where the byte offset is 19.
+- **A citation numbered like a heading became a chapter, and 428 of 4,239 chunks
+  carried one as their breadcrumb.** `heading_level` had four guards, each added
+  after a measured failure, and none for an endnote list. The rule now refuses
+  the vocabulary of a citation (`ibid`, `idem`, `op. cit`, `pp. N`) and a
+  ", <digit>" tail on a line that ends in a period, and it runs **before** the
+  learned patterns because `heading_level` falls through to the built-in numbered
+  detector when a profile's pattern does not match — which is why a profile never
+  repaired it. Worst affected: `06-SexoEnLaBiblia` 233 of 359 chunks (64.9%),
+  `CLASE 2` 53 of 76 (69.7%), `01_RetoDeDios` 126 of 600 (21.0%). Of the 34
+  lines across the corpus whose level changed, **every one is a citation or a
+  lowercase list item and no real heading moved**.
+- **Its sibling: the same citations were classified `preguntas`**, which resets
+  the section path while `nota` keeps it (invariant #11), so a bibliography wiped
+  the breadcrumb of everything after it. 107 chunks moved out of `preguntas` and
+  115 into `nota`. The fix recorded as tried-and-reverted required a ¿/?/an
+  imperative to corroborate the dot and left every footnote with no section;
+  keying on the citation vocabulary instead does not, and a numbered line that
+  *asks* something is deliberately left alone (9 such citations carry a question
+  in their title). **90 numbered paragraphs still read as `preguntas` while
+  asking nothing** — citations with no comma-then-digit tail, and enumerations
+  the author set in prose, which are not footnotes either.
+- **A table of contents with spaced dot leaders escaped `TOC_LINE_RE`.** A
+  typeset leader comes out of PyMuPDF as `". . . ."`, which `\.{5,}` never
+  matched: 24 index and prologue lines across 4 books, 17 of them numbered and
+  therefore tagged `preguntas`, each resetting the section path.
+- **A paragraph too short to stand alone was thrown away rather than joined to a
+  neighbour.** `_windowize` cut the pending run as soon as the next unit would
+  overshoot `target_chars`, and `emit` then discarded anything under
+  `min_chunk_chars` — which selects for exactly the document's short lines.
+  **158 paragraphs reached no chunk at all**, and the shape of the loss is what
+  settles it: 44 appear once in their document and are content ("Sobre el
+  autor", "El verbo divino", the wrapped tails of sentences), and the other 114
+  are running headers whose **49 of 55 distinct lines already appear inside a
+  chunk elsewhere in the same book** — so the rule was never a header filter. A
+  short run now travels forward into the chunk it opens, or merges backwards when
+  nothing follows, and never past `hard_cap_chars`. 31 remain, the ones a merge
+  would push past the cap. Chunk count over the corpus moved 4,239 to 4,246 and
+  every span stayed byte-exact.
+- **Two spellings of one concept were two `UNWIND` rows for one node**, so
+  `SET k.type = row.type` let the last one win — and a row reached only as a
+  claim's subject carries `type: None`. Measured over the 40 semantics
+  artifacts: **1,169 groups of rows share a canonical key, 1,199 rows more than
+  there are nodes**; `ingest-1788222510755-1ba85855` reports 2,612 concepts
+  where the graph holds 2,484. The accumulator is keyed on
+  `canonical_concept` now, which is what `project_concepts` derives the id from,
+  and a known type is never overwritten by the absence of one.
+- **The claim dedup dropped distinct claims that cite the same sentence.**
+  `seen_spans` was per chunk rather than per pass, so two claims quoting one
+  sentence in a single pass became one — and with `max_gleaning` at 0 there is
+  only ever one pass, so that was the rule's only effect. It is exactly the pair
+  `status` exists to keep apart: a text expounding the doctrine it is about to
+  rebut cites the same words for `afirma` and for `niega`. Spans found by a pass
+  are held back until it ends, which keeps the gleaning rule the comment
+  describes. The drop rate cannot be recovered from the artifacts — the dropped
+  claims are absent — but 128 pairs of distinct same-chunk claims share a quote
+  *start* and 736 overlap, out of 40,019 pairs.
+- **Rows sharing a baseline were ordered alphabetically.** `_page_rows` broke the
+  tie with the row's own text, so table cells were assembled in dictionary order:
+  9,302 of 109,444 lines share a baseline, 418 pages reorder, and **679
+  paragraphs across 41 of the 84 PDFs come out different**, while the level-1
+  heading count over the whole set moves only 148 to 147. The damage is shipped —
+  `libros/done/Hermeneutica Capitulo 4.pdf.corrected.txt` reads "cada siete años
+  se 15:2 perdona toda clase de deudas" — and correction cannot repair it,
+  because reformulating is the one thing that pass may not do.
+- **A correction could delete a sentence and the gate could not see it.** A
+  ratio cannot express "a sentence was deleted": ±25% is three characters on a
+  short paragraph and four hundred on a long one. Measured over the 2,684
+  corrections in this repository's own cache, recovered by re-extracting each PDF
+  and looking its paragraphs up by key: 2,145 gained or kept length, 525 lost 1-5
+  characters, 5 lost 6-11, and **9 lost 12 or more — of which 7 had deleted real
+  content**, including two section titles extraction had merged into their
+  paragraph ("Generosidad en vez de avaricia.", "Se negó a recibir culto.") and
+  two negations ("no se menciona, en este caso, la reproducción.", "Aunque los
+  médicos decían no, yo sabía que"). None lost a proper noun, a two-digit number
+  or a scripture reference. `MAX_LOST_CHARS = 20` refuses **7 of 2,684 (0.26%)
+  and all 7 are content deletions** — zero false positives on this corpus. What
+  it cannot see is a deletion offset by an addition; the measure is net.
+- **And a cache hit skipped the gate entirely**, so a correction accepted under
+  an older rule was reused for ever: those seven are in the cache this repository
+  ships, and every re-index and every rebuild of those books would delete the
+  same sentences again. `verify` is deterministic and free, so it now runs on the
+  way out of the cache as well as on the way in.
+- **Smaller, same class.** A numbered line whose title begins lowercase is a list
+  item, not a chapter (4 in `05-CodigoJesus`). `_word_spans` returned each span
+  starting *on* the space it had cut at, and `_split_oversized` strips the text
+  without moving the offset — so every chunk ending on such a unit lost its last
+  character, or half a multi-byte one; 0 of the corpus's 4,246 chunks reach that
+  path, which needs a single sentence over `hard_cap_chars`, so it is a shape
+  fixed on its own merits. `_SCRIPTURE_RE` capped a book name at 12 letters,
+  which is shorter than "Tesalonicenses" and "Lamentaciones": 17 references
+  indexed with their chapter and verse dropped, and widening the cap mints 13
+  extra tokens, **all of them real references and no junk**.
+- **The rule learner refused a proposal whose good half it was about to keep.**
+  Both heading levels report under one rule name, and on a document that numbers
+  nothing `validate` promotes that name to essential — so a level-1 pattern that
+  had validated was blocked by an over-reaching level-2 one, the run earned a
+  refine round it could not improve on, and after three attempts it fell back to
+  the defaults with no table of contents. `Validation.passed` now ignores a
+  failed `heading_patterns` when a level actually validated, which is what
+  `adopt` already does. This became reachable on `01_RetoDeDios` only once its
+  footnotes stopped counting as numbered headings — they were what made
+  `_numbers_its_headings` true and skipped the promotion by luck.
+
+**Two invariant tests stopped asserting anything on this corpus, and that is
+information rather than an inconvenience.** With the false chapters gone,
+`01_RetoDeDios_INT-S.pdf` — the document `tests/corpus.py` resolves to — produces
+no breadcrumb and no section path at all under the built-in rules, because
+`header_patterns` cannot strip a running header from a `.corrected.txt` and the
+level-2 pattern is therefore rejected (recorded below). So
+`test_inv04_breadcrumb_is_inside_the_embedded_content` was passing on a
+breadcrumb that read `2. Ibídem.`, and
+`test_inv11_footnotes_keep_their_section_path` had been **skipping** here for
+want of any footnote chunk at all. Both now say so, and both assert the property
+of the code on a document that has one: inv04 on a constructed chunk, inv11 on a
+synthetic document carrying a heading, a footnote and a review question. Across
+the corpus 4 books produce footnote chunks with a section, 13 chunks in total,
+unchanged by any of this.
+
+**And what could not be re-verified: `tests/test_port_fidelity.py` skips in this
+checkout**, all ten of its tests, because `../sociologia/output_corrected_peluquiado.txt`
+is absent. Its 328 chunks and 309/10/9 kinds are the cheapest strong test this
+project has and the chunker changed underneath them. The corpus-level check that
+stands in for it: chunk count 4,239 to 4,246 over 45 books, every span byte-exact,
+and no chunk over `hard_cap_chars`.
+
 ## Known defects, not yet fixed
 
 Distinct from the list above: this is shipped code that is wrong, not features
@@ -1849,6 +1997,151 @@ session's files.
   the screen needs is the terminal run's `error_kind` on the version row, which
   is a payload change in both planes; the import queue does it today because a
   run row carries the reason already.
+
+- **The BM25 length normalisation is computed per document, so the same chunk is
+  weighted differently depending on which book it was indexed with.**
+  `runner.index_chunks` builds `avgdl` from the batch it is handed
+  (`docagent/runner.py`, `docs = [tokenize(c.text) for c in chunks]`), and that
+  batch is one version — while `doc_sparse_vector` divides by it
+  (`bm25.py:522`, `norm = k1 * (1 - b + b * dl / avgdl)`). Measured 2026-09-03
+  over the 45 corrected texts: per-book `avgdl` runs from **54.6**
+  (`ESCUELAS MORALISTAS`) to **103.0** (`8.-Doctrina-de-la-Resurrección`) against
+  a corpus-wide 73.5, so a 70-token chunk carrying a term once is stored at
+  **0.8962 in the first book and 1.1508 in the second — 28.4% higher for
+  identical content**. Retrieval is scoped by tenant and library, not by
+  document, so the sparse leg ranks every book of a shelf against every other
+  through that skew. Nothing errors and no test can see it: within one document
+  the ranking is self-consistent, which is the only thing the suite measures.
+  **Not fixed, and the reason is the cost.** The fix is a constant the whole
+  collection shares, and the moment it changes, every point already written is
+  normalised against the old figure — so a half-migrated collection ranks worse
+  than either end. Getting there means re-writing the sparse vector of all
+  4,724 points, which is free of embedding cost but is a full re-index pass
+  through the stores, and choosing the constant is a decision about whether it
+  is frozen (and drifts as the corpus grows) or recomputed (and invalidates
+  everything each time).
+
+- **A concept's display name is pinned to the first spelling ever projected.**
+  `_MERGE_CONCEPTS` (`graph/projection.py:432`) sets `k.name` under
+  `ON CREATE SET` while updating `k.canonical` on every merge, so whichever
+  document reached a shared concept first owns its label for the whole corpus,
+  with no tie-break. Measured 2026-09-03 by replaying all 40 semantics
+  artifacts in timestamp order: **207 of 12,196 concepts (1.7%) carry a display
+  name that is not the majority spelling**, out of 1,404 with more than one.
+  `SEÑOR` beat 19 later mentions of `Señor`; `espíritu` beat 12 of `Espíritu`
+  against 9 lowercase; `cristianismo` beat 22 of `Cristianismo`; and
+  `Darío Silva Silva` beat 11 mentions of the book's own `Darío Silva-Silva`.
+  Both graph screens render those labels. Reported rather than fixed because
+  "the majority spelling" is a rule somebody has to choose — the alternative,
+  moving the write out of `ON CREATE`, only swaps the first arbitrary winner for
+  the last — and because repairing the 207 already in the graph is a write.
+
+- **`PAGE_NUMBER_RE` is applied to every row on the page, not to the band its
+  own comment names.** `_filter_header_footer` (`extract/pdf_text.py:201`) drops
+  any row whose whole text is one to four digits, wherever it sits, and the rule
+  is documented as being for "bare page numbers that sit above the footer cutoff
+  zone". Measured 2026-09-03 over the 84 PDFs in `libros/`: 2,948 of the 3,229
+  matches sit in the top or bottom 15% of the page and are folios; **281 sit
+  mid-page**, and ten of those are `03-ElFrutoEterno_INT-S.pdf`'s chapter
+  numerals — set in 25.0pt type at 38% of the page height, directly above their
+  titles, where the genuine folio on the same page is 10.0pt at 87%. So a
+  256-page ten-chapter book carries no trace of its chapter numbering, and
+  `HEADING_RE`, which needs a leading number, has nothing to match.
+  **Measured the fix rather than assuming it, and that is why it is not
+  applied**: restricting the rule to the top and bottom 15% recovers **3 of the
+  10 chapters** (the numerals whose line pitch merges them with their title —
+  "6 El tesoro de la amabilidad") and leaves the other 7 as bare-number
+  paragraphs that no heading rule matches. The three arrive as `[6, 9, 10]`
+  beside the document's existing `[1, 2, 3]`, which makes the level-1 sequence
+  **non-contiguous — so `heading_guards` flips from pass to fail**, and since
+  that rule is essential, `adopt` then discards the learned heading caps. Which
+  index is better cannot be read off the extraction; it needs a paid learning
+  run and a recall measurement.
+
+- **The repeated-line gate is `pages // 4`, which makes a per-chapter running
+  header arithmetically impossible to learn.** `Evidence.repeated_lines`
+  (`extract/pdf_text.py:137`) offers the learner only lines seen on at least a
+  quarter of the pages, and a chapter-title header appears on about
+  `pages / chapters` of them — so no book with more than four chapters can have
+  its chapter headers proposed as a `header_pattern`, and
+  `_check_header_patterns` then reports "none proposed; nothing to strip" as a
+  **pass**. Measured 2026-09-03: `03-ElFrutoEterno_INT-S.pdf` is 256 pages
+  (threshold 64) and `El poder de la paciencia` appears in the header band 14
+  times; header-band lines repeating three times or more that the threshold
+  hides come to **490 instances across 6 of the 84 PDFs**, and counted in the
+  *shipped* corrected texts as standalone paragraphs, **340** — 133 of
+  RetoDeDios's 1,439 paragraphs (9.2%) and 118 of ElFrutoEterno's 1,092 (10.8%).
+  This is the upstream half of the recorded `header_patterns` defect below,
+  which is about the same headers surviving in a `.corrected.txt`; this one bites
+  a fresh PDF import, where `header_res()` really is called. Not fixed because
+  lowering the threshold changes the evidence a **paid** learning call reasons
+  over, and whether the model then proposes a pattern that *validates* is not
+  answerable without spending.
+
+- **A page with a text layer can be discarded as having none.**
+  `MIN_TEXT_PER_PAGE = 40` (`extract/pdf_text.py:259`) skips a page whose rows
+  total fewer than 40 characters and appends it to `pages_without_text`, which
+  the evidence then reports as "run with --ocr to transcribe them". Measured
+  2026-09-03 across the 84 PDFs: **26 pages are discarded while holding real
+  text**, among them `Cartilla ADN 2022.pdf`'s `PRESENTACIÓN` (page 2), its six
+  `TALLER DE TRABAJO` pages and its three `NOTAS` pages. The threshold is a
+  judgement about when a page is worth OCR and the fix is to separate that
+  question from whether to keep the text already extracted; nobody has chosen a
+  number.
+
+- **Two ways an `.xlsx` loses rows, both measured on a named synthetic workbook
+  and neither on real data, because there is no spreadsheet anywhere in this
+  repository.** `_find_header` (`extract/excel.py:255`) extends a multi-row
+  header downwards through any row that is at least 60% text, so a table of
+  three text columns and one numeric one (`Concepto | Responsable | Nota |
+  Monto`, five data rows) yields **one chunk instead of five rows**, with column
+  names made of the swallowed data (`'Concepto / Concepto 1 / Concepto 2 / …'`)
+  which are then re-rendered as the header line of every chunk and embedded; the
+  evidence reports "1 data rows". And `_take_window` (`excel.py:75`) may end a
+  window early on `MAX_WINDOW_CHARS` while the loop that calls it always strides
+  `ROWS_PER_WINDOW`, so on a 40-row sheet whose rows render to ~420 characters
+  the window fills at 4 and **23 of 40 rows appear in no chunk** — with
+  `cell_ref` truthful about what is there, so nothing downstream can see the
+  gap. `tests/test_excel.py` escapes the first because its fixture's data rows
+  are half numeric. Left alone because the owner has deprioritised checking
+  these formats and no measurement against real data is possible here.
+
+- **`HYPHEN_BREAK_RE` glues two whole words when a dash closes a parenthetical.**
+  `extract/pdf_text.py:247` joins a hyphen followed by whitespace and a
+  lowercase letter, which is right for a soft hyphen at a line break and wrong
+  for the closing dash of Spanish dialogue: `-Queda el más pequeño- respondió
+  Isaí` becomes `pequeñorespondió` (`libros/01 Liderazgo.pdf`), and
+  `erotismo- bendición` becomes `erotismobendición` (`06-SexoEnLaBiblia`).
+  Measured 2026-09-03: **39 candidates corpus-wide** (the joined form absent
+  from a 37,988-word vocabulary and both halves occurring 20 times or more),
+  around 20 of the first 22 confirmed genuine by hand, against **5,291 correct
+  soft-hyphen repairs**. Recorded rather than fixed because the two cases are
+  indistinguishable at the point of the substitution — both are letter, hyphen,
+  space, lowercase — and telling them apart needs the opening dash earlier in
+  the line, which the paragraph assembly has already discarded.
+
+- **`project_claims` and `project_semantic_edges` return `len(rows)`, not what
+  the `MATCH` found.** `graph/projection.py:559,600` report the size of the list
+  they were handed, so a claim whose chunk is absent from the graph is dropped
+  by the `MATCH` and counted as projected anyway. No realised trigger, which is
+  why this is a note rather than an entry: the path that would produce one is an
+  **accepted** chunking tuning candidate, since `_tune_once` returns
+  `candidate_chunked` with no second `project_structure` and `extract_semantics`
+  then extracts against a cutting the graph does not hold. Every `target=`
+  candidate in this workspace's seven `tuning.json` files reads
+  `"accepted": null`, and no version's chunk count has ever shrunk.
+
+- **`_condense_descriptions` would die the first time it ran, after the money
+  was spent.** `paid.py:1175,1182` call `row.get("raw")` and
+  `row.get("description")` on the `list[Row]` that `Graph.write` returns, and
+  `Row` (`graph/client.py:66`) defines `data` and `__getitem__` and **no
+  `.get`** — so the call raises `AttributeError` inside `extract_semantics`,
+  after every per-chunk extraction in the document has already been paid for.
+  Its four tests pass because `tests/activities/test_paid.py` monkeypatches
+  `read_concept_descriptions` to return plain dicts. This is not a
+  silent-degradation defect — it raises, loudly — and it is dormant only because
+  `condense_descriptions` is off. Recorded here because the stage it aborts is
+  the most expensive one in the pipeline.
 
 - **The engine's ledger has no per-document attribution inside one invocation.**
   `costo.json` is a history of runs since 2026-09-03 rather than a single

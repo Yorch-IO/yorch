@@ -170,8 +170,21 @@ class Validation:
         back to defaults with no header pattern, so 175 running-header lines stayed
         in the text — 552 paragraphs instead of 377, 135 chunks carrying the header
         as noise, and a paid correction pass over 175 copies of the same line.
+
+        **A promoted `heading_patterns` does not block when a level validated.**
+        The two heading levels report under one rule name, so an over-reaching
+        level-2 pattern marks the rule failed even when the level-1 pattern that
+        gives the document its outline passed — and on a document that numbers
+        nothing, `validate` promotes that name to essential. The two together
+        blocked a proposal whose good half `adopt` was about to keep, sending
+        the run back for a refine round it could not improve on and, after three
+        attempts, to the built-in defaults and no table of contents at all.
+        Observed shape on `01_RetoDeDios_INT-S.pdf`: level 1 OK, level 2 FAIL.
         """
-        return not (self.failed_rules() & self.essential)
+        failed = self.failed_rules()
+        if "heading_patterns" in failed and self.heading_levels_ok:
+            failed = failed - {"heading_patterns"}
+        return not (failed & self.essential)
 
     @property
     def fully_passed(self) -> bool:

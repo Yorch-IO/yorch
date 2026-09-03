@@ -68,6 +68,10 @@ class _Row:
     y0: float
     y1: float
     text: str
+    #: Where the row starts across the page. Carried only to order rows that
+    #: share a baseline — see `_page_rows`. Last, with a default, so nothing
+    #: that builds a row positionally has to change.
+    x0: float = 0.0
 
 
 def extract(path: str, rules: DocRules) -> Extracted:
@@ -177,8 +181,23 @@ def _page_rows(page: "fitz.Page") -> list[_Row]:
             if not text:
                 continue
             x0, y0, x1, y1 = line["bbox"]
-            rows.append(_Row(y0=y0, y1=y1, text=text))
-    rows.sort(key=lambda r: (r.y0, r.text))
+            rows.append(_Row(y0=y0, y1=y1, text=text, x0=x0))
+    # Left to right within a baseline, which is the order a person reads them.
+    # The tiebreak used to be the row's own *text*, so every line sharing a
+    # baseline with another came out in dictionary order: two-column tables,
+    # bullets in their own text run, and any line PyMuPDF splits per span.
+    # Measured 2026-09-03 over the 84 PDFs in `libros/`: 9,302 of 109,444 lines
+    # share a baseline with another, 418 pages reorder, and **679 paragraphs
+    # across 41 documents come out different** — while the level-1 heading count
+    # over the whole set moves only 148 -> 147, so nothing downstream is
+    # destabilised by it. The damage is shipped, not hypothetical:
+    # `libros/done/Hermeneutica Capitulo 4.pdf.corrected.txt` reads "en el
+    # pueblo judío, cada siete años se 15:2 perdona toda clase de deudas", with
+    # the verse number twenty characters into its own sentence and sixty from
+    # the "Deuteronomio" it belongs to — far enough that `bm25.scripture_tokens`
+    # cannot mint `deuteronomio15v2` for it either. Correction cannot repair it,
+    # because reformulating is the one thing that pass is forbidden to do.
+    rows.sort(key=lambda r: (r.y0, r.x0))
     return rows
 
 

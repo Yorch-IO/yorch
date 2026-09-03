@@ -93,7 +93,16 @@ def tokenize(text: str) -> list[str]:
 # "gen. 2:15" for "Gén. 2:15". The optional leading digit carries the numbered
 # books ("1 sam. 10:24"); the book token must not be a stopword, which is what
 # keeps a clock time ("a las 10:30") from minting a reference.
-_SCRIPTURE_RE = re.compile(r"\b(?:([123])\s*)?([a-zñ]{2,12})\.?\s*(\d{1,3}):(\d{1,3})")
+#
+# The book may be up to **16** letters, not 12: "Tesalonicenses" is 14 and
+# "Lamentaciones" 13, so at 12 the longest book names in the canon were the ones
+# this rule could not reach — "1 Tesalonicenses 5:23" indexed as `tesalonicenses`
+# with the chapter and verse dropped for being under `MIN_TOKEN_LEN`, which is
+# the exact failure the rule exists to prevent. Measured 2026-09-03 over the 45
+# corrected texts: 17 references missed, and widening the cap mints **13 extra
+# tokens, every one of them a real reference** (ten in 1 Tesalonicenses, three
+# in Lamentaciones) and no junk at all.
+_SCRIPTURE_RE = re.compile(r"\b(?:([123])\s*)?([a-zñ]{2,16})\.?\s*(\d{1,3}):(\d{1,3})")
 
 
 def scripture_tokens(folded: str) -> list[str]:

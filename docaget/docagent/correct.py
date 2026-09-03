@@ -49,6 +49,33 @@ PROMPT_VERSION = "v1-conservador"
 # accents moves it by a fraction of a percent; a 25% swing means content was
 # added or dropped.
 MAX_LENGTH_DELTA = 0.25
+#: Nor may it delete more than this many characters, whatever the ratio says.
+#:
+#: A ratio cannot express "a sentence was deleted": on a 12-character paragraph
+#: ±25% is three characters, and on a 1,600-character one it is four hundred —
+#: a whole paragraph of a book can go missing and the ratio still passes.
+#: Measured 2026-09-03 over the 2,684 corrections this repository's own cache
+#: holds for `libros/`, recovered by re-extracting each PDF and looking its
+#: paragraphs up by key: **2,145 gained or kept length, 525 lost 1-5
+#: characters, 5 lost 6-11, and 9 lost 12 or more.** Every one of those 9 was
+#: read by hand, and five had deleted a whole sentence the author wrote —
+#: "Generosidad en vez de avaricia." and "Se negó a recibir culto." (two
+#: section titles that extraction had merged into their paragraph, in
+#: 07-LlavesDelPoder-INT.pdf), "Según los gnósticos, su doctrina era un
+#: conocimiento especial," (LOS APOLOGISTAS.pdf), "no se menciona, en este
+#: caso, la reproducción." (06-SexoEnLaBiblia_INT-S.pdf) and one more in
+#: 04-TesorosDiosMeDio_int.pdf. None of them lost a proper noun, a two-digit
+#: number or a scripture reference, and the largest was -22.2% — so every
+#: existing check passed it.
+#:
+#: 20 rather than 12 because the three remaining cases are partial repairs of
+#: interleaved two-column extraction, where the model rearranges as much as it
+#: removes; rejecting those keeps the garbled original, which is the honest
+#: degradation this gate exists to prefer, and the run reports it either way.
+#: **What this cannot see is a deletion offset by an addition**: the measure is
+#: net, like `MAX_LENGTH_DELTA`, so a sentence dropped and another lengthened
+#: still passes.
+MAX_LOST_CHARS = 20
 
 SYSTEM = """Eres un corrector ortotipográfico de textos académicos en español (teología, filosofía, sociología).
 
@@ -159,6 +186,15 @@ def verify(original: str, corrected: str) -> tuple[bool, str, str]:
             f"{len(original)} → {len(corrected)} chars ({delta:+.0%}), beyond ±{MAX_LENGTH_DELTA:.0%}",
         )
 
+    lost = len(original) - len(corrected)
+    if lost > MAX_LOST_CHARS:
+        return (
+            False,
+            "deleted",
+            f"{len(original)} → {len(corrected)} chars: {lost} deleted, beyond "
+            f"{MAX_LOST_CHARS} — a sentence, not an accent",
+        )
+
     for name, rx in (("scripture", SCRIPTURE_RE), ("numbers", NUMBER_RE)):
         lost = sorted(set(rx.findall(original)) - set(rx.findall(corrected)))
         if lost:
@@ -204,11 +240,25 @@ def correct_paragraphs(
         # still gets its hits.
         pending: list[tuple[int, str]] = []
         for i in batch:
-            if (hit := cache.get(paragraphs[i])) is not None:
-                report.cache_hits += 1
+            hit = cache.get(paragraphs[i])
+            if hit is None:
+                pending.append((i, paragraphs[i]))
+                continue
+            report.cache_hits += 1
+            # Verified on the way *out* of the cache as well as on the way in.
+            # A cache entry is the output of this gate as it stood when the
+            # entry was written, and the gate's rules are measured and get
+            # tightened — so without this, a correction accepted under an older
+            # rule is re-applied for ever and no later run can see it. Not
+            # hypothetical: the five sentence deletions `MAX_LOST_CHARS`
+            # records are in the cache this repository ships, so every re-index
+            # and every `rebuild` of those books would delete them again.
+            # `verify` is deterministic and free, so this costs nothing.
+            ok, reason, detail = verify(paragraphs[i], hit)
+            if ok:
                 out[i] = hit
             else:
-                pending.append((i, paragraphs[i]))
+                report.rejected.append(Rejection(index=i, reason=reason, detail=detail))
 
         if not pending:
             if progress:

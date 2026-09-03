@@ -29,6 +29,7 @@ from ..catalog import Catalog
 from ..graph import Graph
 from ..graph import projection as proj
 from ..graph.schema import chunk_id as make_chunk_id
+from ..graph.schema import canonical_concept
 from ..graph.schema import concept_id as make_concept_id
 from ..pipeline import (
     ChunkKindCount,
@@ -1305,6 +1306,18 @@ def _locate_quote(quote: str, text: str, offset: int) -> tuple[str, int, int] | 
     pipeline stores (see `char_span` in `index_chunks`), not the original file.
     Correction changes the text's length, so a byte-exact pointer into the PDF is
     not something this function can produce.
+
+    **`offset` is a byte offset and `re.Match.start()` is a character index**, so
+    the match has to be converted before the two are added. Adding them directly
+    shifted the span by one byte for every non-ASCII character earlier in the
+    chunk — which in Spanish prose is nearly all of them. Measured 2026-09-03
+    over the nine runs in this workspace that carry quote spans: **295 of 13,966
+    stored spans, 2.1%, resolved to the quote they were recorded for**, while
+    the chunks' own `char_span`s verified 600/600, 631/631 and so on against the
+    same stream. Nothing failed, and `claims_verified` counted every one of them
+    as verified — the quote *was* found, and the pointer stored for it was not.
+    `docagent.chunk._sentence_spans` makes the same conversion for the same
+    reason and says so.
     """
     tokens = quote.split()
     if not tokens:
@@ -1313,7 +1326,9 @@ def _locate_quote(quote: str, text: str, offset: int) -> tuple[str, int, int] | 
     match = re.search(pattern, text)
     if match is None:
         return None
-    return match.group(0), offset + match.start(), offset + match.end()
+    verbatim = match.group(0)
+    start = offset + len(text[: match.start()].encode("utf-8"))
+    return verbatim, start, start + len(verbatim.encode("utf-8"))
 
 
 @activity.defn(name="extract_semantics")
@@ -1412,14 +1427,43 @@ async def extract_semantics(
         seen_spans: set[tuple[int, int]] = set()
 
         for parsed in passes:
+            # Spans found by *this* pass are held back until it ends. The rule
+            # above is about a gleaning pass restating ground an earlier one
+            # covered; inside a single pass two different claims quoting one
+            # sentence are the ordinary case, and dropping the second one is
+            # exactly the pair `status` exists to keep apart — a text
+            # enunciating the doctrine it is about to rebut cites the same words
+            # for `afirma` and for `niega`. With `max_gleaning` at 0 there is
+            # only ever one pass, so before this the dedup could do nothing but
+            # that. Measured over the 40 semantics artifacts in this workspace:
+            # 128 pairs of distinct claims in one chunk share a quote *start*
+            # and 736 overlap, out of 40,019 same-chunk pairs — the pairs that
+            # shared an exact span are the ones that were never written, so
+            # their number cannot be read back out of the artifacts.
+            pass_spans: set[tuple[int, int]] = set()
             for item in parsed.get("conceptos", []) or []:
                 name = (item.get("nombre") or "").strip()
                 if not name:
                     continue
                 confidence = float(item.get("confianza", 0.0))
+                # Keyed on the canonical form, which is what `project_concepts`
+                # derives the node id from. Keyed on the raw spelling, "Cuerpo"
+                # and "cuerpo" became two rows of one `UNWIND` for one node —
+                # so `SET k.type = row.type` let the last row win, and a row
+                # reached only as a claim's subject carries `type: None`.
+                # Measured over the 40 semantics artifacts here: **1,169 groups
+                # of rows share a canonical key, 1,199 rows more than there are
+                # nodes**, and 4 of those groups end on an untyped row that
+                # wipes a type the model was paid for. The count goes out too:
+                # `ingest-1788222510755-1ba85855` reports 2,612 concepts where
+                # the graph holds 2,484.
+                key = canonical_concept(name)
                 entry = concepts.setdefault(
-                    name, {"name": name, "type": item.get("tipo"), "descriptions": []}
+                    key, {"name": name, "type": item.get("tipo"), "descriptions": []}
                 )
+                if entry["type"] is None and item.get("tipo"):
+                    # A type learned from any chunk beats the absence of one.
+                    entry["type"] = item.get("tipo")
                 # Deduplicated as it accumulates. Two chunks often describe a
                 # concept in the same words, and the condensation step is charged
                 # by length.
@@ -1444,7 +1488,8 @@ async def extract_semantics(
                     continue
                 confidence = float(item.get("confianza", 0.0))
                 concepts.setdefault(
-                    about, {"name": about, "type": None, "descriptions": []}
+                    canonical_concept(about),
+                    {"name": about, "type": None, "descriptions": []},
                 )
                 claim = {
                     "text": text,
@@ -1479,7 +1524,7 @@ async def extract_semantics(
                     continue
                 seen_ids.add(cid)
                 if span is not None:
-                    seen_spans.add(span)
+                    pass_spans.add(span)
 
                 # Counted *after* the dedup, so the number refers to the claims
                 # actually stored. Counting it above let a duplicate with an
@@ -1510,7 +1555,8 @@ async def extract_semantics(
                 related = (item.get("relaciona") or "").strip()
                 if related and make_concept_id(related, tenant) != make_concept_id(about, tenant):
                     concepts.setdefault(
-                        related, {"name": related, "type": None, "descriptions": []}
+                        canonical_concept(related),
+                        {"name": related, "type": None, "descriptions": []},
                     )
                     edges.append(
                         proj.SemanticEdge(
@@ -1522,6 +1568,8 @@ async def extract_semantics(
                             source_chunk_id=chunk,
                         )
                     )
+
+            seen_spans |= pass_spans
 
     condense_spend: Spend | None = None
     with Graph(settings.memgraph_url) as graph:

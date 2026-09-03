@@ -1,0 +1,378 @@
+{
+  "fingerprint": "ad7a5bda239c2cb1",
+  "slug": "07-llavesdelpoder-int-ad7a5bda",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [
+      "^\\d+/\\d+/\\d+\\s+\\d+:\\d+\\s+[AP]M$",
+      "^Las\\s+llaves\\s+del\\s+[Pp]oder$"
+    ],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "question_min_marks": 2,
+    "heading_l1_max": 30,
+    "heading_l2_max": 60,
+    "heading_l1_pattern": "^LLAVE\\s+\\d+$",
+    "heading_l2_pattern": "^[A-ZÁÉÍÓÚÑ][^.?¿!]{2,50}$"
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.5,
+    "recall_at_5": 0.85,
+    "mrr_at_10": 0.6567,
+    "recall_at_5_dense_only": 0.875,
+    "noise_floor": 0.6193,
+    "chunks": 502,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Cómo se estructura el avance del conocimiento desde la etapa infantil temprana hasta los grados académicos más elevados?",
+      "chunk_index": 54,
+      "char_mid": 54398,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 2 > La productividad"
+    },
+    {
+      "question": "¿Por qué motivo la cultura occidental prefiere conceder pausas estivales regulares en vez de otorgar un periodo ininterrumpido de descanso de doce meses?",
+      "chunk_index": 243,
+      "char_mid": 226926,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 7 > El reposo"
+    },
+    {
+      "question": "¿A qué territorio geográfico debió trasladarse Jacob para salvar su vida tras arrebatarle el derecho de nacimiento a su hermano?",
+      "chunk_index": 394,
+      "char_mid": 363702,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 11 > LOS ESTRAGOS DEL DESACUERDO"
+    },
+    {
+      "question": "¿Qué grupo dentro de la humanidad, constituido históricamente por una nación antigua y en el presente por la comunidad de creyentes, posee el deber principal de rendir culto al Creador?",
+      "chunk_index": 207,
+      "char_mid": 189530,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 6 > La alabanza"
+    },
+    {
+      "question": "¿De qué manera desmintió el ser astuto la advertencia divina sobre la consecuencia mortal de probar del fruto del árbol central?",
+      "chunk_index": 361,
+      "char_mid": 332750,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 10"
+    },
+    {
+      "question": "¿De qué manera la tradición rabínica contemporánea resuelve las agresiones físicas entre personas para mantener la equidad sin recurrir al daño corporal recíproco?",
+      "chunk_index": 124,
+      "char_mid": 116034,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 3"
+    },
+    {
+      "question": "¿De qué manera la visión cristiana sobre el esfuerzo laboral ilustra que oficios comunes como el asesoramiento jurídico, el arreglo del calzado o el lavado de vestimenta representan un servicio directo a la divinidad?",
+      "chunk_index": 354,
+      "char_mid": 326742,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 10"
+    },
+    {
+      "question": "¿Qué línea sucesoria de trascendencia monárquica se derivó del matrimonio entre la joven de Moab y el próspero agricultor de Judea?",
+      "chunk_index": 398,
+      "char_mid": 367593,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 11 > LOS ESTRAGOS DEL DESACUERDO"
+    },
+    {
+      "question": "¿Qué regla cultural alegó el suegro de Jacob para justificar el cambio de novias y qué condición debió aceptar para recibir a la hermana menor?",
+      "chunk_index": 102,
+      "char_mid": 96350,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 3 > La causalidad"
+    },
+    {
+      "question": "¿A qué factor atribuye el autor la existencia de privaciones económicas y conflictividad en la región latinoamericana?",
+      "chunk_index": 384,
+      "char_mid": 353328,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 10"
+    },
+    {
+      "question": "¿De qué manera afecta al estado de ánimo de una persona la comunicación malintencionada según los proverbios analizados?",
+      "chunk_index": 151,
+      "char_mid": 138268,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 4"
+    },
+    {
+      "question": "¿Qué argumento utilizó David para no atentar contra el monarca anterior al considerar las consecuencias futuras sobre su propio mandato?",
+      "chunk_index": 34,
+      "char_mid": 34892,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 1 > El despojo"
+    },
+    {
+      "question": "¿A qué porcentaje de beneficio equivale la recompensa multiplicada por cien que promete la enseñanza bíblica a quienes lo entregan todo?",
+      "chunk_index": 269,
+      "char_mid": 250781,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 8 > La restitución"
+    },
+    {
+      "question": "¿A qué disciplina artística se dedicaba el ser que lideró la primera sublevación espiritual antes de cometer su falta?",
+      "chunk_index": 204,
+      "char_mid": 186310,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 6 > La alabanza"
+    },
+    {
+      "question": "¿Qué le advirtió Jesús a quien deseaba acompañarlo sin considerar la carencia de un lugar digno para pernoctar?",
+      "chunk_index": 48,
+      "char_mid": 49046,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 1"
+    },
+    {
+      "question": "¿Con qué nueva denominación fue rebautizado el antiguo prisionero al asumir el alto cargo en la nación egipcia?",
+      "chunk_index": 283,
+      "char_mid": 263916,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 8 > La restitución"
+    },
+    {
+      "question": "¿Qué distintivos simbólicos de poder y honores le concedió el monarca egipcio a José al ponerlo al mando de toda la nación?",
+      "chunk_index": 71,
+      "char_mid": 70334,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 2"
+    },
+    {
+      "question": "¿Qué pasaje de los textos sagrados se cita para ilustrar la invalidez del esfuerzo laboral excesivo y la falta de descanso?",
+      "chunk_index": 229,
+      "char_mid": 212304,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 7 > El reposo"
+    },
+    {
+      "question": "¿Qué sentido espiritual se le da al hecho de que el Nazareno guardara reserva frente a las máximas jerarquías civiles y religiosas durante sus juzgamientos?",
+      "chunk_index": 319,
+      "char_mid": 295535,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 9"
+    },
+    {
+      "question": "¿Qué petición extrema debió acatar el patriarca para demostrar su sumisión total y permitir que el favor divino se transmitiera a la posteridad?",
+      "chunk_index": 29,
+      "char_mid": 31181,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 1 > El despojo"
+    },
+    {
+      "question": "¿De qué manera y con qué actitud está permitido que un creyente manifieste su desacuerdo frente a las medidas de los dirigentes políticos?",
+      "chunk_index": 356,
+      "char_mid": 328603,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 10"
+    },
+    {
+      "question": "¿De qué manera la constancia del joven cuidador de ovejas en el ejercicio de su talento permitió que su destreza musical fuera conocida en la residencia del monarca?",
+      "chunk_index": 74,
+      "char_mid": 72664,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 2"
+    },
+    {
+      "question": "¿De qué manera justificó el hacendado su negativa a compartir alimentos con los emisarios y qué acción tomaron estos tras ser rechazados?",
+      "chunk_index": 105,
+      "char_mid": 99017,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 3"
+    },
+    {
+      "question": "¿Qué número sugirió el apóstol Pedro como límite para disculpar a quien falta contra uno, asumiendo que dicha cantidad ya era desmedida por su carácter perfecto?",
+      "chunk_index": 125,
+      "char_mid": 116741,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 3"
+    },
+    {
+      "question": "¿Qué virtud le permitió al patriarca de las Escrituras administrar y sacar el máximo provecho de sus bienes a diferencia de quienes actúan con miedo?",
+      "chunk_index": 66,
+      "char_mid": 65977,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 2"
+    },
+    {
+      "question": "¿Qué pertenencias personales específicas cedió Judá a Tamar como depósito de garantía antes de que ella quedase encinta?",
+      "chunk_index": 116,
+      "char_mid": 108469,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 3"
+    },
+    {
+      "question": "!Qu! comparaci!n sobre la respuesta de los padres imperfectos ante las peticiones de sus hijos se utiliza para ilustrar la generosidad del Creador celestial?",
+      "chunk_index": 457,
+      "char_mid": 423112,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 13"
+    },
+    {
+      "question": "¿Con qué tipo de funcionarios fiscales y colectivos ajenos a la comunidad se equipara la conducta de ser cortés únicamente con los allegados?",
+      "chunk_index": 131,
+      "char_mid": 121131,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 3"
+    },
+    {
+      "question": "¿Qué personaje bíblico es descrito como el modelo primitivo del gestor o directivo contemporáneo debido a sus notables destrezas organizativas y de liderazgo?",
+      "chunk_index": 81,
+      "char_mid": 78147,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 2"
+    },
+    {
+      "question": "¿Mediante qué ejemplo sobre un animal atrapado explicó Jesús que es legítimo auxiliar a alguien en el día consagrado?",
+      "chunk_index": 258,
+      "char_mid": 241798,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 7"
+    },
+    {
+      "question": "¿Qué prodigios particulares realizó el discípulo al asumir la herencia espiritual de su mentor, entre los que destaca hacer flotar una herramienta sumergida y purificar fuentes hídricas dañadas?",
+      "chunk_index": 401,
+      "char_mid": 370087,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 11"
+    },
+    {
+      "question": "¿De qué manera se define la entrega espiritual auténtica frente al problema de exaltar desmedidamente a los ministros religiosos en América Latina?",
+      "chunk_index": 499,
+      "char_mid": 461315,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 13"
+    },
+    {
+      "question": "¿Qué motivo categórico señala la divinidad como causa de la desvalorización del dinero y la escasez generalizada en el país?",
+      "chunk_index": 434,
+      "char_mid": 401112,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 12"
+    },
+    {
+      "question": "¿Qué función ejerce Jesucristo a la diestra del Creador en favor de aquellos a quienes se ha declarado justos?",
+      "chunk_index": 180,
+      "char_mid": 165557,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 5"
+    },
+    {
+      "question": "%Que partes de la anatom%C3%A1a humana se usan como met%C3%A1fora para explicar que no se puede avanzar con intenciones contradictorias?",
+      "chunk_index": 414,
+      "char_mid": 382317,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 11"
+    },
+    {
+      "question": "¿Cómo se define el precepto divino para reaccionar ante la equivocación ajena a través de la empatía y la tolerancia mutua?",
+      "chunk_index": 133,
+      "char_mid": 122326,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 3"
+    },
+    {
+      "question": "¿Qué estatus jurídico alegó el apóstol tras ser castigado físicamente a la vista de todos y sin previo juicio para exigir que las autoridades los acompañasen a la salida?",
+      "chunk_index": 299,
+      "char_mid": 277121,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 8"
+    },
+    {
+      "question": "¿Con qué pasaje bíblico justificó el Maestro las muestras de admiración que los menores le dirigían en el recinto sagrado ante la molestia de las autoridades?",
+      "chunk_index": 474,
+      "char_mid": 439716,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 13"
+    },
+    {
+      "question": "¿Cómo se distingue la función del instrumento asociado al estado de los difuntos creyentes de la del que se utiliza en el sitio de castigo eterno?",
+      "chunk_index": 20,
+      "char_mid": 20630,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué actitud y acción de fe se aconseja adoptar frente a los conciudadanos insurgentes o hacia un hijo desobediente en lugar de agredirlos o rechazarlos?",
+      "chunk_index": 166,
+      "char_mid": 151463,
+      "cell_ref": "",
+      "breadcrumb": "LLAVE 4"
+    }
+  ],
+  "learned_from": "libros/07-LlavesDelPoder-INT.pdf",
+  "learned_at": 1788130254.1804752,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^\\\\d+/\\\\d+/\\\\d+\\\\s+\\\\d+:\\\\d+\\\\s+[AP]M$' matches '1/3/13   9:36 AM' on 272 pages, no body hits",
+    "OK  header_patterns: '^Las\\\\s+llaves\\\\s+del\\\\s+[Pp]oder$' matches 'Las llaves del poder' on 131 pages, no body hits",
+    "OK  heading_patterns: nivel 1: '^LLAVE\\\\s+\\\\d+$' -> 13 encabezados sin numerar (1.0% de los párrafos)",
+    "OK  heading_patterns: nivel 2: '^[A-ZÁÉÍÓÚÑ][^.?¿!]{2,50}$' -> 45 encabezados sin numerar (3.3% de los párrafos)",
+    "OK  heading_guards: no numbered headings in this document; the guards are unexercised and structure comes from the learned pattern",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": [
+    {
+      "round": 1,
+      "candidate": "per_section=1",
+      "mrr_at_10": 0.6077,
+      "recall_at_5": 0.675,
+      "accepted": false,
+      "why": "MRR@10 -0.036 (recall@5 -0.150) is within the 0.059 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "per_section=3",
+      "mrr_at_10": 0.6486,
+      "recall_at_5": 0.85,
+      "accepted": false,
+      "why": "MRR@10 +0.005 (recall@5 +0.025) is within the 0.059 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "min_score=0.55",
+      "mrr_at_10": 0.6399,
+      "recall_at_5": 0.825,
+      "accepted": false,
+      "why": "MRR@10 -0.004 (recall@5 +0.000) is within the 0.059 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "min_score=0.65",
+      "mrr_at_10": 0.6488,
+      "recall_at_5": 0.825,
+      "accepted": false,
+      "why": "MRR@10 +0.005 (recall@5 +0.000) is within the 0.059 noise margin (bootstrap), so it is not a real gain"
+    },
+    {
+      "round": 1,
+      "candidate": "target=900",
+      "mrr_at_10": 0.6142,
+      "recall_at_5": 0.825,
+      "accepted": false,
+      "why": "MRR@10 -0.030 is within the 0.059 noise margin"
+    }
+  ]
+}

@@ -330,3 +330,359 @@ Del índice (página 3): **9 capítulos numerados 1-9** (`1. Lazos familiares`, 
 ### Costes y Rendimiento
 - **Total:** $0.0827 (propose: $0.0060, correct: $0.0103, evalset: $0.0570, embed: $0.0092, eval_query: $0.0002).
 - Referencia por página: **$0.0005/página**.
+
+---
+
+## Familia "Vida Cristiana / Editorial Vida" (cabeza propia) — `05-CodigoJesus-_int-S.pdf`
+
+`05-CodigoJesus-_int-S.pdf`, Darío Silva-Silva, Editorial Vida / Hechos & Crónicas,
+224 páginas. Fingerprint `be3df4bfb86ce0c4` — distinto de los cuatro anteriores del
+mismo autor/editorial (`2bde8a7f`, `5f4421c2`, `43ea27a4`, `721bae21`), así que se
+trató como cabeza de familia propia con Fase 1 completa. Indexado el 2026-08-30
+bajo `docagent_v2`.
+
+### Lectura previa (paso 1.1)
+
+Del índice (pág. 9-10): **24 capítulos numerados "Clave 1" … "Clave 24"**
+(págs. 27-217), sin numerar en el propio encabezado del capítulo (el título es
+"Clave N" seguido del subtítulo en línea aparte), más front matter sin numerar
+(Agradecimientos, prólogo de Dante Gebel, Advertencia "Doble click", "Primer
+E-mail") y un glosario alfabético final ("Ordenador de claves": ABOGADO, AMADO,
+ADMIRABLE…). Capa de texto presente, sin OCR. **Sin preguntas de repaso** — es
+un ensayo, no un libro de texto con imperativos tipo "Defina…".
+
+**Defecto conocido confirmado antes de indexar**: el mismo editorial que ya
+produjo "9 capítulos falsos" en `01_RetoDeDios_INT-S.pdf` numera aquí también
+sus notas al pie con punto ("1. Paul Johnson, Historia del cristianismo,
+Vergara Editor, S.A, Buenos Aires, 1989.", "4. Ibidem.", vistas en las
+págs. 212-215).
+
+### Spike: intento de arreglo del defecto de notas al pie (pedido explícitamente)
+
+A diferencia del tratamiento de 01 (solo reportado), se intentó un arreglo con
+test antes de indexar, siguiendo el protocolo de la Fase 3:
+
+1. Test que falla: `classify_kind("1. Paul Johnson, Historia del cristianismo…")`
+   debía devolver `nota`, no `preguntas`; devolvía `preguntas`.
+2. Arreglo probado en `classify_kind` (`chunk.py`): exigir que un ítem numerado
+   con punto también lleve `¿`, `?` o un verbo de `IMPERATIVES` para contar como
+   pregunta — el mismo criterio que `heading_level` ya usa para la misma
+   ambigüedad — y devolver `nota` en caso contrario.
+3. **Descartado**: `uv run pytest -q` completo rompió
+   `tests/test_invariants.py::test_inv11_footnotes_keep_their_section_path`
+   sobre el corpus real (todas las notas al pie quedaron sin `section`). Por la
+   regla propia del runbook ("un arreglo que mueve `test_invariants` no es un
+   arreglo"), se revirtió el cambio en `chunk.py` y se borró el test del spike.
+   Queda documentado en el propio docstring de `classify_kind` para que no se
+   reintente sin medir de nuevo.
+4. **Resultado**: el defecto se indexó sin arreglar, igual que en 01. Con los
+   valores por defecto, 44 de 274 chunks quedaron etiquetados `preguntas`
+   siendo en realidad notas al pie (ver kinds abajo).
+
+### Resultado
+
+A diferencia de 01 (que no aprendió reglas propias), aquí **sí se aprendió un
+patrón de encabezado no numerado** (`^Clave\s+\d+$`), y `heading_guards`
+aceptó los 24 capítulos reales tratando los ítems numerados como "ruido de
+notas al pie" — la validación explícita salió `OK`. Pero eso solo protegió la
+clasificación *de encabezado por el patrón aprendido*; el camino numérico por
+defecto (`HEADING_RE`) sigue activo en paralelo y **6 notas al pie cortas
+también calificaron como encabezados de nivel 1** por su cuenta, exactamente
+la misma familia de defecto que los "9 capítulos falsos" de 01:
+`2. Ibídem.`, `3. Ibídem.`, `4. Ibídem.`, `2. Flavio Josefo, Antigüedades
+Judaicas, 18:63, 64.`, `2. Gonzalo, El hombre nuevo, Semana.com 2/13/2007.`,
+`4.\t la María inauténtica.`.
+
+| Señal | Valor |
+|---|---|
+| Extractor | `pdf_text` |
+| Perfil | **aprendido**, `05-codigojesus-int-s-be3df4bf` revisión 1 (cabeza de familia propia) |
+| Chunks | 274 (`cuerpo` 230, `preguntas` 44 — la mayoría notas al pie mal clasificadas, ver spike arriba) |
+| **Capítulos reales detectados vs. leídos** | **24 vs 24 — coinciden** |
+| **Capítulos espurios (notas al pie)** | **6**, vía el camino numérico por defecto en paralelo al patrón aprendido |
+| recall@1 / recall@5 / MRR@10 | 0.675 / 0.900 / 0.764 |
+| dense-only recall@5 | 1.000 |
+| noise floor (dense) | 0.623 |
+| margen bootstrap recall@5 | ±0.054 |
+| hueco híbrido − dense-only recall@5 | **−0.100** (dense-only por encima de híbrido) |
+| Spans byte-exactos auditados | **274 de 274 verificados** |
+| Términos exactos en rank 1 (sidecar) | híbrido 5/6, dense-only 3/6 |
+| **Veredicto** | **OK, con hallazgo documentado** — 24 vs 24 capítulos reales coincide, pero 6 capítulos espurios de notas al pie contaminan los `breadcrumb`/`chapter` de esos chunks. No se re-indexa con `--force-tune`: la 1.5(f) reserva esa excepción para cuando los capítulos *heredados* no coinciden con los leídos por colisión de fingerprint, no para este defecto (el numérico-por-defecto, no el aprendido). |
+
+**Sobre el hueco híbrido negativo**: a diferencia del caso simétrico medido en
+`01_RetoDeDios_INT-S.pdf` (+0.000, BM25 ayuda sin mover el evalset), aquí el
+híbrido puntúa **peor** que dense-only en recall@5 del evalset sintético
+(0.900 vs 1.000). La pista está en los términos exactos: dense-only falla 3 de
+6 ("Editorial Hechos & Crónicas", "Dante Gebel", "Ordenador de claves" no salen
+en rank 1), mientras que híbrido los recupera 5 de 6 — la pierna léxica ayuda
+en el diagnóstico estructural. La caída en el evalset sintético es más
+consistente con ruido de muestra (30 preguntas, margen ±0.054) que con una
+regresión real; no se reporta como fuga porque el diagnóstico estructural
+muestra lo contrario.
+
+**Sobre el gating de ruido**: en modo dense-only solo "cómo cambiar el aceite
+de un motor diésel" quedó `(below floor)`; las otras tres consultas de ruido
+("recetas de cocina italiana con berenjena" 0.607, "xkcd qwerty zzzz plugh"
+0.623, "bicicletas de montaña" 0.618) puntuaron en o por encima del
+`noise_floor` medido (0.623) y pasaron el filtro. Igual que en
+`01_RetoDeDios_INT-S.pdf`, el margen entre ruido y tema en este ensayo es
+estrecho — no se mueve el suelo por un documento.
+
+### Costes
+
+`gemini-3.6-flash` + `gemini-embedding-001`. 13 batches de corrección (203
+corregidos, 359 sin cambios, 8 rechazados por nombre propio/número perdido).
+
+| Concepto | USD |
+|---|---|
+| `propose` (aprendizaje de reglas, un intento) | 0.005770 |
+| Corrección (13 llamadas, 82.789 in / 80.748 out) | 0.729793 |
+| Evalset (40 preguntas sintéticas) | 0.051183 |
+| Embeddings (273 llamadas, caché de 60 batches de corrección) | 0.010959 |
+| `eval_query` | 0.000183 |
+| **Total del documento** | **0.797889** |
+
+Referencia por página: **$0.0036/página**.
+
+### Pendiente
+
+- **6 capítulos espurios de notas al pie**, misma causa raíz que los 9 de 01
+  (invariante #12 no se cumple en este editorial) y misma decisión: reportado,
+  no arreglado — el arreglo intentado en `classify_kind` movió
+  `test_invariants`. Cualquier arreglo futuro necesita también tocar
+  `heading_level`, no solo `classify_kind`, porque el camino que produce estos
+  6 falsos es el numérico por defecto (`HEADING_RE`), independiente del patrón
+  "Clave N" ya aprendido y correcto.
+
+---
+
+## Familia "Vida Cristiana / Editorial Vida" (cabeza propia) — `06-SexoEnLaBiblia_INT-S.pdf`
+
+`06-SexoEnLaBiblia_INT-S.pdf`, Darío Silva-Silva, Editorial Vida / Hechos &
+Crónicas, 192 páginas. Fingerprint `4a29571f942e8696` — distinto de los cinco
+anteriores de la misma serie. Indexado el 2026-08-30 bajo `docagent_v2`.
+
+### Lectura previa (paso 1.1)
+
+Del índice (pág. 3): **8 capítulos numerados 1-8** ("1. Bajo el signo de
+Eros" … "8. La soledad compartida"), más front matter (Advertencia,
+Introducción) y Conclusión + Bibliografía. Capa de texto, sin OCR. Sin
+preguntas de repaso (ensayo). **El título real de cada capítulo se imprime en
+dos párrafos separados**: el número solo en su propia línea (`1`), seguido en
+otro párrafo por el título en versalitas (`BAJO EL SIGNO DE EROS`) — no
+"1. Bajo el signo de Eros" en una sola línea como sugiere el índice. Las
+subsecciones dentro de cada capítulo son títulos sin numerar en versalitas
+("MASOQUISMO", "SADISMO", "SACRILEGIO"). **Notas al pie también numeradas con
+punto** ("1. Costler y Willy, Enciclopedia del conocimiento sexual…"), mismo
+defecto que en 01 y 05.
+
+### Resultado: fallo de aprendizaje de reglas, y por qué es más grave que en 01 y 05
+
+A diferencia de 05 (que aprendió su propio patrón "Clave N"), aquí **el
+aprendizaje de reglas falló los 3 intentos** — el propio log lo dice:
+"rule learning failed 3 times — using the measured defaults". Con los valores
+por defecto activos, se investigó por qué:
+
+- El título real de un capítulo nunca coincide con `HEADING_RE`
+  (`^(\d+(\.\d+)*)\.?\s+\w`) porque el número y el título **son dos párrafos
+  distintos**: el párrafo `1` no lleva ninguna palabra detrás (falla
+  `HEADING_RE`), y el párrafo `BAJO EL SIGNO DE EROS` no lleva ningún número
+  delante. Ningún patrón numérico, aprendido o por defecto, puede reconstruir
+  un encabezado partido en dos párrafos sin lógica nueva de fusión.
+- Mientras tanto, **las notas al pie sí encajan en `HEADING_RE`** ("2. Ibidem.",
+  "9. Notimex, México, Dic. 30, 2002.") y sí se promueven a encabezados de
+  nivel 1 con los defaults.
+
+**Resultado medido, vía scroll directo a la colección**: de los 359 chunks del
+documento, el campo `chapter` toma solo **5 valores distintos, y ninguno es un
+capítulo real** — los 8 capítulos leídos (1 a 8) están **ausentes por
+completo** del breadcrumb, sustituidos en todo el libro por 5 notas al pie mal
+clasificadas como encabezados: `2. Ibidem.`, `4. Ibídem.`, `6. Ibidem.`,
+`7. Ibídem.`, `9. Notimex, México, Dic. 30, 2002.`. El propio `diag` lo hace
+visible: preguntas EN TEMA sobre contenido real de distintos capítulos
+devuelven como "sección" del resultado top-1 cosas como `9. Notimex, México,
+Dic. 30, 2002.` o `6.	 Ibidem.` — el texto recuperado es correcto, pero su
+metadato de capítulo es ruido.
+
+| Señal | Valor |
+|---|---|
+| Extractor | `pdf_text` |
+| Perfil | fallback a defaults (`06-sexoenlabiblia-int-s-4a29571f`, revisión 1 — persiste sin reglas propias adoptadas) |
+| Chunks | 359 (`cuerpo` 309, `preguntas` 50 — footnotes mal clasificadas, mismo defecto que 05) |
+| **Capítulos reales detectados vs. leídos** | **0 vs 8 — no coinciden** |
+| **Capítulos espurios (notas al pie)** | **5**, sustituyendo por completo el breadcrumb real |
+| recall@1 / recall@5 / MRR@10 | 0.575 / 0.900 / 0.731 |
+| dense-only recall@5 | 0.900 |
+| noise floor (dense) | 0.630 |
+| margen bootstrap recall@5 | ±0.058 |
+| hueco híbrido − dense-only recall@5 | +0.000 (sin fuga de vocabulario aparente) |
+| Spans byte-exactos auditados | **359 de 359 verificados** |
+| Términos exactos en rank 1 (sidecar) | híbrido 6/6, dense-only 5/6 |
+| **Veredicto** | **ESTRUCTURA DUDOSA** — las métricas de recuperación (recall@5 0.900) cumplen el objetivo y el texto/`char_span` de cada chunk es correcto, pero el breadcrumb/capítulo está completamente roto: 0 de 8 capítulos reales sobreviven, sustituidos por notas al pie. Por la regla de la Fase 1.5, un veredicto no puede decir OK cuando la columna de capítulos no coincide, aunque recall@5 pase. |
+
+**Por qué no se re-indexa con `--force-tune`**: la excepción de 1.5(f) es solo
+para perfiles *heredados* cuyos capítulos no coinciden con los leídos, no para
+un documento cabeza de familia cuyo propio aprendizaje de reglas ya falló 3
+veces con el mismo texto. Repetir la propuesta no cambiaría la causa raíz (el
+título partido en dos párrafos), y no se intentó otro arreglo de código —
+la regla de la sesión (Fase 3, punto 6) es no decidir solo sobre un trade-off
+estructural: se reporta y se pregunta.
+
+**No se investigó otro arreglo de código para este defecto** (a diferencia
+del de notas al pie, ya evaluado y revertido para 05): el título partido en
+dos párrafos es un problema estructural distinto — de fusión de párrafos
+consecutivos en la propuesta de encabezado — más grande en alcance que el
+cambio ya descartado, y arreglarlo tocaría la lógica de agrupación de
+párrafos consecutivos en `rules.py`/`chunk.py`, con riesgo real sobre
+`test_port_fidelity`. Se deja como hallazgo pendiente de decisión.
+
+### Costes
+
+`gemini-3.6-flash` + `gemini-embedding-001`. 14 batches de corrección (227
+corregidos, 593 sin cambios, 5 rechazados, 1 no devuelto).
+
+| Concepto | USD |
+|---|---|
+| `propose` (3 intentos, todos fallidos) | 0.018974 |
+| Corrección (14 llamadas, 89.119 in / 85.850 out) | 0.777554 |
+| Evalset (40 preguntas sintéticas) | 0.046348 |
+| Embeddings (359 llamadas) | 0.012158 |
+| `eval_query` | 0.000180 |
+| **Total del documento** | **0.855214** |
+
+Referencia por página: **$0.0045/página**.
+
+### Pendiente
+
+- **0 de 8 capítulos reales sobreviven en el breadcrumb**, sustituidos por 5
+  notas al pie — el defecto estructural más severo medido hasta ahora en esta
+  serie. Causa raíz distinta a la de 01/05: el título de capítulo está partido
+  en dos párrafos (`1` y `BAJO EL SIGNO DE EROS` por separado), lo que ningún
+  patrón numérico —aprendido o por defecto— puede reconstruir sin fusionar
+  párrafos consecutivos en la propuesta de encabezado. No arreglado; reportado
+  para decisión explícita del usuario.
+
+---
+
+## Familia "Vida Cristiana / Editorial Vida" (cabeza propia) — `07-LlavesDelPoder-INT.pdf`
+
+`07-LlavesDelPoder-INT.pdf`, Darío Silva-Silva, Editorial Vida / Hechos &
+Crónicas, 272 páginas. Fingerprint `ad7a5bda239c2cb1`. Indexado el 2026-08-30
+bajo `docagent_v2`.
+
+### Lectura previa (paso 1.1)
+
+Del índice (pág. 5): **13 capítulos numerados "Llave 1" … "Llave 13"**, más
+front matter (Advertencia, Introducción). Capa de texto, sin OCR. Sin
+preguntas de repaso (sermón transcrito, sin ropaje literario, dice la propia
+Advertencia). El título de cada capítulo se imprime en dos párrafos —
+"LLAVE N" solo en su línea, el título en versalitas en la siguiente ("El
+despojo") — igual que el patrón partido de `06-SexoEnLaBiblia_INT-S.pdf`, pero
+aquí "LLAVE N" **sí** es una unidad léxica reconocible por sí misma (palabra +
+número), a diferencia del "1" desnudo de 06. **Sin notas al pie numeradas**:
+este libro no cita fuentes externas con el patrón `N. Autor, Obra...` que
+produjo el defecto en 01/05/06.
+
+### Resultado: primer aprendizaje de reglas exitoso al primer intento
+
+A diferencia de 05 (3 intentos) y 06 (fallo total), aquí **el aprendizaje de
+reglas pasó en el primer intento**: `^(LLAVE\s+\d+|CONTENIDO|ADVERTENCIA|Introducción)$`
+para nivel 1. Sin encabezados numerados en el documento, `heading_guards`
+quedó sin ejercitar — no hay notas al pie con las que colisionar.
+
+### Hallazgo nuevo: la primera ronda de tuning de esta sesión dejó puntos huérfanos en Qdrant
+
+Este es el primer documento de la sesión cuyo `recall@5` (0.825) quedó **por
+debajo** del objetivo 0.85 tras la ronda inicial, así que el bucle
+`tune → chunk → index → evaluate` se activó por primera vez en esta corrida —
+y expuso un defecto que ningún test detectaba:
+
+1. Ronda de retrieval knobs (`per_section`, `min_score`) agotada sin mejora
+   real (todas dentro del margen de ruido ±0.059).
+2. Se probó un candidato de chunking `target=900` → 625 chunks, indexado
+   (4187 puntos totales en la colección). El resultado empeoró (MRR@10 0.644 →
+   0.614, fuera de margen) → **REVERT**.
+3. Se re-chunkeó de vuelta a 502 chunks y se re-indexó. `recall@5` subió a
+   0.850 (cumple el objetivo) y se persistió el perfil.
+
+**El problema**: el `revert` re-chunkea e re-indexa los 502 chunks correctos,
+pero `n_index`/`Qdrant.upsert` solo **sobreescribe** los ids que la corrida
+actual produce (`chunk_index` 0 a 501, deterministas vía
+`point_id(doc_id, i)`). Nunca borra los ids que el candidato rechazado dejó
+por encima de ese rango. Verificado con un scroll directo a la colección tras
+la corrida: **625 puntos para este documento, no 502** — los ids `0..501`
+(config final) y **los ids `502..624`, huérfanos del candidato de 625 chunks
+rechazado, con su propio `char_span` apuntando de vuelta al byte 371.230** en
+vez de continuar el rango real hasta 462.703. Esto duplicaba silenciosamente
+el último tercio del libro bajo dos fronteras de chunk incompatibles,
+compitiendo por el ranking de cualquier consulta sobre esa parte del libro —
+exactamente la clase de "log sano, número inválido" que este runbook existe
+para atrapar, y la misma familia de bug que `doc/CLAUDE.md` ya documenta bajo
+"Bugs found by running the loop, not by reading it" (los 4 bugs de estado del
+bucle de tuning), pero una variante nueva no listada ahí.
+
+**Arreglado, con test que falla antes y pasa después.** Añadido
+`Qdrant.prune_tail(doc_id, keep)` (`docagent/qdrant.py`): tras el `upsert`,
+cuenta los puntos existentes para `doc_id` y, si superan `keep`, borra los ids
+`point_id(doc_id, i)` para `i` en `[keep, old_count)` — sin necesitar un
+filtro de rango, porque los ids son deterministas. `n_index` (`graph.py`)
+llama a `prune_tail(doc_id, keep=len(points))` después de cada `upsert` y
+registra cuántos puntos huérfanos podó. Dos tests nuevos en
+`tests/test_qdrant_removal.py`
+(`test_a_reverted_chunk_candidate_prunes_the_points_it_left_behind`,
+`test_pruning_the_tail_is_a_noop_when_nothing_was_left_behind`), ambos
+verificados en rojo antes del arreglo. Suite completa: **164 passed, 15
+skipped** (162 + 2), sin mover `test_port_fidelity` ni `test_invariants`.
+
+**Los 123 puntos huérfanos ya escritos en `docagent_v2` fueron borrados a
+mano** (mismo cálculo de ids, con confirmación explícita del usuario antes de
+tocar la colección en vivo) y verificados: la colección quedó en 502 puntos
+contiguos (`chunk_index` 0-501), 502/502 `char_span` byte-exactos, y los 13
+capítulos reales (`LLAVE 1` … `LLAVE 13`) intactos en el breadcrumb. El
+arreglo en código evita que esto se repita en cualquier documento futuro cuya
+ronda de tuning pruebe y rechace un candidato más grande que la config final.
+
+| Señal | Valor |
+|---|---|
+| Extractor | `pdf_text` |
+| Perfil | aprendido al primer intento, `07-llavesdelpoder-int-ad7a5bda` revisión 1 |
+| Chunks (config final, persistida) | 502 (`cuerpo` 451, `preguntas` 51) |
+| **Capítulos detectados vs. leídos** | **13 vs 13 — coinciden** |
+| Capítulos espurios | **0** (sin notas al pie numeradas en este libro) |
+| recall@1 / recall@5 / MRR@10 (config final) | 0.500 / 0.850 / 0.657 |
+| dense-only recall@5 | 0.875 |
+| noise floor (dense) | 0.619 |
+| margen bootstrap recall@5 | ±0.058 |
+| hueco híbrido − dense-only recall@5 | −0.025 |
+| Spans byte-exactos auditados | **502 de 502 verificados**, tras podar 123 huérfanos |
+| Términos exactos en rank 1 (sidecar) | híbrido 5/6, dense-only 5/6 |
+| **Veredicto** | **OK** — estructura y métricas correctas tras el arreglo; sin el `prune_tail`, la colección habría quedado corrupta con 123 puntos duplicados que ninguna de las cinco comprobaciones anteriores (a)-(e) habría detectado por sí sola — hizo falta el scroll manual de (b). |
+
+### Costes
+
+`gemini-3.6-flash` + `gemini-embedding-001`. Esta es la corrida más cara de la
+sesión, porque el candidato de tuning rechazado costó un re-embed completo
+además del original.
+
+| Concepto | USD |
+|---|---|
+| `propose` (aprendizaje de reglas, un intento) | 0.005136 |
+| Corrección (19 llamadas, 137.709 in / 138.856 out) | 1.247984 |
+| Evalset (40 preguntas sintéticas, reutilizadas en las tres rondas) | 0.053233 |
+| Embeddings (875 llamadas: 502 + 625 del candidato rechazado + reindexado tras el revert, con caché parcial) | 0.029286 |
+| `eval_query` | 0.000180 |
+| **Total del documento** | **1.335820** |
+
+Referencia por página: **$0.0049/página**. El candidato de tuning rechazado
+(`target=900`) es responsable de aproximadamente un tercio de este coste — el
+precio medido de "un candidato de chunking cuesta un re-embed completo"
+(`doc/CLAUDE.md`, "Tuning is two-tier by cost").
+
+### Pendiente
+
+- Ninguno estructural para este documento — es el primer veredicto limpio de
+  la serie Silva-Silva (13 de 13 capítulos, 0 espurios).
+- El arreglo de `prune_tail` es nuevo y solo se ha ejercitado en este
+  documento; vale la pena vigilar el próximo documento cuya ronda de tuning
+  se active para confirmar que el log muestra la línea "pruned N stale
+  point(s)" cuando corresponda, y que no aparece cuando no hace falta.

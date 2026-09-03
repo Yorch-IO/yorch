@@ -1,5 +1,5 @@
 {
-  "total_usd": 1.025185,
+  "total_usd": 1.33582,
   "measured": true,
   "unpriced_stages": [],
   "prices_per_million": {
@@ -33,20 +33,20 @@
       "retries": 0,
       "failures": 0,
       "cache_hits": 0,
-      "input_tokens": 2207,
-      "output_tokens": 263,
-      "cost_usd": 0.005283
+      "input_tokens": 2074,
+      "output_tokens": 270,
+      "cost_usd": 0.005136
     },
     {
       "stage": "correct",
       "model": "gemini-3.6-flash",
-      "calls": 16,
-      "retries": 5,
+      "calls": 19,
+      "retries": 0,
       "failures": 0,
       "cache_hits": 0,
-      "input_tokens": 109832,
-      "output_tokens": 105765,
-      "cost_usd": 0.957986
+      "input_tokens": 137709,
+      "output_tokens": 138856,
+      "cost_usd": 1.247984
     },
     {
       "stage": "evalset",
@@ -55,31 +55,31 @@
       "retries": 0,
       "failures": 0,
       "cache_hits": 0,
-      "input_tokens": 24573,
-      "output_tokens": 2030,
-      "cost_usd": 0.052085
+      "input_tokens": 25299,
+      "output_tokens": 2038,
+      "cost_usd": 0.053233
     },
     {
       "stage": "embed",
       "model": "gemini-embedding-001",
-      "calls": 269,
-      "retries": 188,
+      "calls": 875,
+      "retries": 500,
       "failures": 0,
-      "cache_hits": 141,
-      "input_tokens": 65207,
+      "cache_hits": 754,
+      "input_tokens": 195242,
       "output_tokens": 0,
-      "cost_usd": 0.009781
+      "cost_usd": 0.029286
     },
     {
       "stage": "eval_query",
       "model": "gemini-embedding-001",
-      "calls": 11,
-      "retries": 15,
+      "calls": 40,
+      "retries": 25,
       "failures": 0,
-      "cache_hits": 29,
-      "input_tokens": 342,
+      "cache_hits": 120,
+      "input_tokens": 1202,
       "output_tokens": 0,
-      "cost_usd": 5.1e-05
+      "cost_usd": 0.00018
     },
     {
       "stage": "eval_noise",
@@ -87,7 +87,7 @@
       "calls": 0,
       "retries": 0,
       "failures": 0,
-      "cache_hits": 4,
+      "cache_hits": 12,
       "input_tokens": 0,
       "output_tokens": 0,
       "cost_usd": 0.0

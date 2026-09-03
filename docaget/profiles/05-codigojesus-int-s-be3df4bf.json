@@ -1,0 +1,336 @@
+{
+  "fingerprint": "be3df4bfb86ce0c4",
+  "slug": "05-codigojesus-int-s-be3df4bf",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [
+      "^12/22/12\\s+12:13\\s+PM$",
+      "^El\\s+Código\\s+Jesús$"
+    ],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "question_min_marks": 2,
+    "heading_l1_max": 60,
+    "heading_l2_max": 40,
+    "heading_l1_pattern": "^Clave\\s+\\d+$",
+    "heading_l2_pattern": null
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.675,
+    "recall_at_5": 0.9,
+    "mrr_at_10": 0.7642,
+    "recall_at_5_dense_only": 1.0,
+    "noise_floor": 0.6232,
+    "chunks": 274,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿De qué manera se describe al autor de la Eneida como una figura puente entre la antigüedad de los pueblos y la fe cristiana, comparándolo simbólicamente con un anunciador bíblico?",
+      "chunk_index": 26,
+      "char_mid": 29126,
+      "cell_ref": "",
+      "breadcrumb": "2. Ibídem."
+    },
+    {
+      "question": "Según la obra narrativa mencionada, ¿cuál es el razonamiento de carácter legal por el cual se exoneró definitivamente de la pena máxima al personaje tras volver a ser juzgado?",
+      "chunk_index": 137,
+      "char_mid": 136021,
+      "cell_ref": "",
+      "breadcrumb": "Clave 11"
+    },
+    {
+      "question": "﻿¿Qué falla conceptual comete el individuo de la época actual al asumir que la certidumbre total puede estructurarse a partir de porciones divididas de conocimiento?",
+      "chunk_index": 214,
+      "char_mid": 228115,
+      "cell_ref": "",
+      "breadcrumb": "Clave 19"
+    },
+    {
+      "question": "¿Qué comportamiento contradictorio criticó Jesús en la sociedad de su época respecto a las costumbres de consumo de Juan y las suyas propias?",
+      "chunk_index": 114,
+      "char_mid": 113056,
+      "cell_ref": "",
+      "breadcrumb": "Clave 9"
+    },
+    {
+      "question": "¿Qué razón expone el experto en cosmología Trinh Thuan para sostener que la formación del cosmos responde a una intención divina y no a la pura casualidad?",
+      "chunk_index": 196,
+      "char_mid": 207818,
+      "cell_ref": "",
+      "breadcrumb": "Clave 17"
+    },
+    {
+      "question": "¿Qué hechos específicos señala el intelectual peruano para cuestionar los vaticinios desastrosos referentes al cambio climático?",
+      "chunk_index": 68,
+      "char_mid": 68970,
+      "cell_ref": "",
+      "breadcrumb": "Clave 5"
+    },
+    {
+      "question": "¿De qué manera respondió el Maestro a la encrucijada legalista sobre el castigo a una mujer infiel y qué jerarquía de valores dejó al descubierto?",
+      "chunk_index": 193,
+      "char_mid": 202893,
+      "cell_ref": "",
+      "breadcrumb": "Clave 17"
+    },
+    {
+      "question": "¿Qué colectivo histórico, caracterizado por su obstinación, atravesó hace milenios una situación equivalente al extravío espiritual de la humanidad?",
+      "chunk_index": 216,
+      "char_mid": 229741,
+      "cell_ref": "",
+      "breadcrumb": "Clave 19"
+    },
+    {
+      "question": "¿Por qué se afirma que la aversión hacia la divinidad manifestada por el ideólogo del comunismo no estuvo motivada por privaciones materiales en sus primeros años?",
+      "chunk_index": 54,
+      "char_mid": 55351,
+      "cell_ref": "",
+      "breadcrumb": "Clave 4"
+    },
+    {
+      "question": "¿Qué expresión popular utilizaron los fieles de la Iglesia romana para opinar sobre las reflexiones de cariz espiritual escritas por el pensador comunista?",
+      "chunk_index": 209,
+      "char_mid": 221791,
+      "cell_ref": "",
+      "breadcrumb": "Clave 18"
+    },
+    {
+      "question": "¿Qué pensador sudamericano transformó el pasaje bíblico de la mujer en el banquete en una narración donde modifica la conocida oración de clemencia pronunciada por Cristo?",
+      "chunk_index": 83,
+      "char_mid": 85156,
+      "cell_ref": "",
+      "breadcrumb": "Clave 7"
+    },
+    {
+      "question": "¿Cómo se describe en la reflexión la degradación de las composiciones sonoras actuales hacia expresiones caóticas y rudimentarias?",
+      "chunk_index": 16,
+      "char_mid": 17685,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué docente guió la formación teológica de Saulo en Jerusalén para que lograra una comprensión exhaustiva de los textos sagrados?",
+      "chunk_index": 149,
+      "char_mid": 151706,
+      "cell_ref": "",
+      "breadcrumb": "Clave 13"
+    },
+    {
+      "question": "¿De qué forma cuestiona el autor las interpretaciones que reducen los prodigios bíblicos a simples alegorías simbólicas?",
+      "chunk_index": 112,
+      "char_mid": 111678,
+      "cell_ref": "",
+      "breadcrumb": "Clave 9"
+    },
+    {
+      "question": "¿De qué manera se contraponen los hábitos cotidianos, las vestiduras y la forma de ejecución del profeta del desierto con los del Redentor?",
+      "chunk_index": 22,
+      "char_mid": 24040,
+      "cell_ref": "",
+      "breadcrumb": "Clave 1"
+    },
+    {
+      "question": "¿De qué forma se consiguió pacificar y restablecer la armonía entre el Creador y todo lo existente en el universo según la cita de Colosenses?",
+      "chunk_index": 158,
+      "char_mid": 162431,
+      "cell_ref": "",
+      "breadcrumb": "Clave 13"
+    },
+    {
+      "question": "¿Qué figura política de la Unión Soviética mostró interés por los textos de grupos religiosos antiguos y admitió a un clérigo haber equivocado sus métodos antes de fallecer?",
+      "chunk_index": 35,
+      "char_mid": 40134,
+      "cell_ref": "",
+      "breadcrumb": "Clave 2"
+    },
+    {
+      "question": "¿Qué declaración acerca de la identidad del Salvador se anhela que el lector pronuncie ante la interrogante sobre su fe, siguiendo el ejemplo de una figura evangélica?",
+      "chunk_index": 128,
+      "char_mid": 126061,
+      "cell_ref": "",
+      "breadcrumb": "Clave 10"
+    },
+    {
+      "question": "¿Qué criterio de verificación ofrece el apóstol Juan en su primera epístola para distinguir a un auténtico portavoz de Dios frente a los falsos divulgadores?",
+      "chunk_index": 176,
+      "char_mid": 183146,
+      "cell_ref": "",
+      "breadcrumb": "Clave 15"
+    },
+    {
+      "question": "¿Bajo qué temática se presenta la correspondencia electrónica inicial dirigida a la población global en la época actual?",
+      "chunk_index": 13,
+      "char_mid": 14830,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿En qué célebre publicación gala y edición de mayo de 1989 se destacó como tema de portada el retorno del fenómeno religioso?",
+      "chunk_index": 197,
+      "char_mid": 208640,
+      "cell_ref": "",
+      "breadcrumb": "Clave 17"
+    },
+    {
+      "question": "¿Qué libro escrito por Paul Johnson sobre el desarrollo de la fe cristiana fue publicado por la casa editorial Vergara en la capital argentina en 1989?",
+      "chunk_index": 42,
+      "char_mid": 44708,
+      "cell_ref": "",
+      "breadcrumb": "Clave 3"
+    },
+    {
+      "question": "¿Qué obra editada en España en 1975 aborda la vida y producción del creador del socialismo desde una perspectiva cristiana?",
+      "chunk_index": 57,
+      "char_mid": 57458,
+      "cell_ref": "",
+      "breadcrumb": "Clave 4"
+    },
+    {
+      "question": "¿Cuáles son las referencias bibliográficas que corresponden a una obra madrileña de 1961 de un religioso oriental y al texto de Rick M. Nañez de 2006?",
+      "chunk_index": 64,
+      "char_mid": 63069,
+      "cell_ref": "",
+      "breadcrumb": "Clave 5"
+    },
+    {
+      "question": "¿Qué figuras proféticas creía la gente que era Jesús según la conversación mantenida en los alrededores de Cesarea de Filipo?",
+      "chunk_index": 39,
+      "char_mid": 42669,
+      "cell_ref": "",
+      "breadcrumb": "Clave 3"
+    },
+    {
+      "question": "¿Qué reclamo le hicieron los acompañantes a su maestro tras despertarlo de su descanso en la parte posterior de la embarcación durante el temporal?",
+      "chunk_index": 60,
+      "char_mid": 59635,
+      "cell_ref": "",
+      "breadcrumb": "Clave 5"
+    },
+    {
+      "question": "¿En qué número de página de la publicación de 1978 de Grolier Internacional se sitúa la cita de la recopilación de verso lírico de Castilla?",
+      "chunk_index": 233,
+      "char_mid": 247508,
+      "cell_ref": "",
+      "breadcrumb": "Clave 20"
+    },
+    {
+      "question": "¿En qué medio de comunicación de Miami y en qué día exacto de febrero de 2007 se difundió el escrito de Álvaro Vargas-Llosa acerca del remordimiento del mundo occidental?",
+      "chunk_index": 69,
+      "char_mid": 69824,
+      "cell_ref": "",
+      "breadcrumb": "Clave 5"
+    },
+    {
+      "question": "¿Cómo describe el texto la relación de autoría entre el pensador nihilista alemán y su conocida obra de ataque al cristianismo?",
+      "chunk_index": 45,
+      "char_mid": 47237,
+      "cell_ref": "",
+      "breadcrumb": "Clave 3"
+    },
+    {
+      "question": "¿Qué obra de Antonio Cruz fue lanzada por la casa editora Vida en el año 2004?",
+      "chunk_index": 126,
+      "char_mid": 124893,
+      "cell_ref": "",
+      "breadcrumb": "Clave 10"
+    },
+    {
+      "question": "¿En qué localidad estadounidense y en qué año fue editada la tercera referencia correspondiente al compendio de recursos gráficos?",
+      "chunk_index": 265,
+      "char_mid": 285693,
+      "cell_ref": "",
+      "breadcrumb": "2. Flavio Josefo, Antigüedades Judaicas, 18:63, 64."
+    },
+    {
+      "question": "¿Qué cuestionamiento realiza el poeta sobre los motivos de Cristo para esperar a la intemperie durante las gélidas noches buscando su compañía?",
+      "chunk_index": 231,
+      "char_mid": 246225,
+      "cell_ref": "",
+      "breadcrumb": "Clave 20"
+    },
+    {
+      "question": "¿En qué periódico de la capital colombiana se difundió el texto titulado «Un alto en el camino» redactado por Alfonso Llano Escobar un 13 de agosto?",
+      "chunk_index": 99,
+      "char_mid": 98906,
+      "cell_ref": "",
+      "breadcrumb": "4.\t la María inauténtica."
+    },
+    {
+      "question": "¿En qué obra y capítulo de Charles Darwin se abordan las objeciones que enfrenta su planteamiento evolutivo?",
+      "chunk_index": 122,
+      "char_mid": 121498,
+      "cell_ref": "",
+      "breadcrumb": "Clave 10"
+    },
+    {
+      "question": "¿Qué texto bibliográfico sobre las pruebas de la presencia terrenal de Jesús escribieron conjuntamente Josh McDowell y Hill Wilson?",
+      "chunk_index": 113,
+      "char_mid": 112561,
+      "cell_ref": "",
+      "breadcrumb": "Clave 9"
+    },
+    {
+      "question": "¿Qué obra lexicográfica sobre pensamiento moral editada en su primer volumen por el Fondo de Cultura Económica aparece señalada como la segunda referencia?",
+      "chunk_index": 44,
+      "char_mid": 46348,
+      "cell_ref": "",
+      "breadcrumb": "Clave 3"
+    },
+    {
+      "question": "¿En qué publicación periódica del año 1925 se recopila la historia del pensamiento socialista y las luchas de los trabajadores?",
+      "chunk_index": 207,
+      "char_mid": 220849,
+      "cell_ref": "",
+      "breadcrumb": "Clave 18"
+    },
+    {
+      "question": "¿Cuál es la obra de Philip Yancey publicada en 1996 por la casa editora de Miami que se referencia en la página 79?",
+      "chunk_index": 75,
+      "char_mid": 76307,
+      "cell_ref": "",
+      "breadcrumb": "Clave 6"
+    },
+    {
+      "question": "¿Quién figura como responsable de la recopilación del segundo tomo dedicado a las obras destacadas de Andrew Murray?",
+      "chunk_index": 27,
+      "char_mid": 29993,
+      "cell_ref": "",
+      "breadcrumb": "2. Ibídem."
+    },
+    {
+      "question": "¿Qué casa editora de Argentina y qué año corresponden a la referencia bibliográfica de la página 100 de la obra de Sigmund Freud sobre la fe en un solo Dios?",
+      "chunk_index": 24,
+      "char_mid": 26613,
+      "cell_ref": "",
+      "breadcrumb": "Clave 1"
+    }
+  ],
+  "learned_from": "libros/05-CodigoJesus-_int-S.pdf",
+  "learned_at": 1788096396.2974129,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^12/22/12\\\\s+12:13\\\\s+PM$' matches '12/22/12   12:13 PM' on 224 pages, no body hits",
+    "OK  header_patterns: '^El\\\\s+Código\\\\s+Jesús$' matches 'El Código Jesús' on 96 pages, no body hits",
+    "OK  heading_patterns: nivel 1: '^Clave\\\\s+\\\\d+$' -> 24 encabezados sin numerar (3.7% de los párrafos)",
+    "OK  heading_guards: the learned pattern explains 24 level-1 headings against 13 numbered lines, so the numbered path is footnote noise here and its sequence is not the signal",
+    "OK  question_pattern: none proposed; defaults apply",
+    "FAIL footnote_pattern: only 61% of 51 matches look like a footnote by an independent signal; e.g. ['4. Magdalena Troncoso, Lo mejor de Andrew Murray, Tomo 2, Grandes autores', '1. Paul Johnson, Historia del cristianismo, Vergara Editor, S.A, Buenos Aires, 1989.', '2. Diccionario de Etica y Filosofía Moral, Tomo 1, Fondo de Cultura Económica,']"
+  ],
+  "tuning_history": []
+}

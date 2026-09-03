@@ -77,8 +77,22 @@ class SearchOpts:
     limit: int = 5
     min_score: float = 0.60  # cosine floor, dense leg only
     dense_only: bool = False
+    #: Sparse-only retrieval, the mirror of `dense_only`. It exists because
+    #: "did BM25 carry this chunk?" is not answerable from a hybrid result: RRF
+    #: returns fused ranks, so a chunk absent from the output could have been
+    #: absent from either leg or from both, and those have different fixes.
+    #: No floor is applied here — `min_score` is a cosine, and invariant #8
+    #: keeps it on the dense prefetch.
+    sparse_only: bool = False
     query_text: str = ""  # needed to build the sparse vector
     filters: dict[str, str] = field(default_factory=dict)  # payload key -> value
+    #: How deep each leg looks before RRF fuses them. A parameter rather than
+    #: the module constant it used to be, because it is the one retrieval knob
+    #: that changes *which* chunks can be ranked at all rather than how the
+    #: ranked ones are ordered — and it could not be measured while it was
+    #: unreachable from `SearchOpts`. Costs nothing to change: no re-embedding,
+    #: no re-indexing, one wider read.
+    prefetch_limit: int = PREFETCH_LIMIT
 
 
 @dataclass
@@ -385,11 +399,13 @@ class Qdrant:
         }
 
     def search(self, vector: list[float], opts: SearchOpts) -> list[Hit]:
-        """Dense-only or hybrid retrieval, with RRF fusion on the server.
+        """Dense-only, sparse-only, or hybrid retrieval with RRF fusion.
 
         The cosine threshold goes on the dense prefetch, never on the fused
-        output (invariant #8).
+        output and never on the sparse leg (invariant #8).
         """
+        from .bm25 import query_sparse_vector  # local: avoids a cycle at import
+
         if opts.dense_only:
             body: dict[str, Any] = {
                 "query": vector,
@@ -398,20 +414,28 @@ class Qdrant:
             }
             if opts.min_score > 0:
                 body["score_threshold"] = opts.min_score
+        elif opts.sparse_only:
+            # No `score_threshold`: `min_score` is a cosine and means nothing
+            # against a BM25 score. Applying it here would silently empty this
+            # leg, which is the failure the invariant exists to prevent.
+            body = {
+                "query": query_sparse_vector(opts.query_text).as_payload(),
+                "using": SPARSE_VEC,
+                "limit": opts.limit,
+            }
         else:
             dense: dict[str, Any] = {
                 "query": vector,
                 "using": DENSE_VEC,
-                "limit": PREFETCH_LIMIT,
+                "limit": opts.prefetch_limit,
             }
             if opts.min_score > 0:
                 dense["score_threshold"] = opts.min_score
-            from .bm25 import query_sparse_vector  # local: avoids a cycle at import
 
             sparse = {
                 "query": query_sparse_vector(opts.query_text).as_payload(),
                 "using": SPARSE_VEC,
-                "limit": PREFETCH_LIMIT,
+                "limit": opts.prefetch_limit,
             }
             body = {
                 "prefetch": [dense, sparse],

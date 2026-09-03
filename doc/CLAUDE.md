@@ -127,6 +127,24 @@ image data for OCR — all three verified.
 - **OCR costs $0.00068/page, measured** — ~8× the cost of embedding the whole book —
   so it is gated behind an estimate and `--ocr-confirm` above $0.05, with a
   page-hash cache.
+- **`costo.json` is a history of runs, because it used to be one run.**
+  `Ledger.dump` was `json.dump` over the whole file, so every invocation erased
+  the last one's accounting. That is the mechanism behind
+  `INFORME_INDEXACION.md`'s "per-document cost accounting does not exist and is
+  not reconstructible": 28 documents had been indexed and the file could account
+  for the most recent one. Read on 2026-09-03 it held **$1.335820, the total of
+  book 07 alone**, while the corpus behind it had cost several times that.
+  It appends now — `run_id`, timestamp, the paths given, and the run's stages —
+  and each run stores the price table that produced its own figures, because
+  the multipliers changed on 2026-08-20 and a figure that cannot be re-checked
+  against the prices of its own day is not a measurement. Three properties are
+  what the tests stand on: an old-shaped file *is* a run record and becomes the
+  first entry rather than being dropped; a file this cannot parse is **moved
+  aside**, never overwritten, because it is somebody's record of money already
+  spent; and `run_id`/`at`/`documents` stay `null` for the migrated one, since
+  "nobody recorded which documents" is not "this run touched none". The write
+  goes through `os.replace`, which was not worth it while the file held one run
+  and is worth it now that losing it loses everything.
 
 ## Bugs found by running the loop, not by reading it
 
@@ -305,7 +323,13 @@ decide.
   comparing a path against a stored `doc_id`, so the filter matched nothing.
 - **`--dry-run` ends without persisting.** It measures nothing; routing it to
   `persist` wrote empty scores over a profile that had paid for its numbers.
-- **`costo.json`, `*.corrected.txt` and `logs/` are no longer tracked.** They are
-  rewritten on every run. `profiles/` and `cache/` stay tracked, deliberately — see
-  `.gitignore`.
+- **`logs/` is not tracked; `costo.json` and `*.corrected.txt` are.** This entry
+  used to name all three as untracked "because they are rewritten on every run",
+  and that was wrong about two of them: `.gitignore` ignores `logs` and
+  `docaget/cache/embed/`, and nothing else here. 170 files under `libros/` and
+  the ledger are in git, which is what lets a corrected text be diffed against
+  the run that produced it. `costo.json` is also no longer rewritten — see the
+  ledger entry above. `profiles/` and `cache/correct/` stay tracked
+  deliberately: a correction costs generation tokens and its cache is what
+  survives an interrupted run.
 

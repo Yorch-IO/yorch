@@ -148,7 +148,10 @@ def cmd_index(args) -> int:
 
         print(f"\n{ledger.summary()}")
         if not args.dry_run:
-            ledger.dump("costo.json")
+            # `run_id` and the paths travel with the numbers, because a history
+            # of runs that cannot say *which document* a run was for is only
+            # marginally better than the single run it replaced.
+            ledger.dump("costo.json", run_id=run_id, documents=list(args.paths))
             print("wrote costo.json")
         return 1 if failures else 0
     finally:

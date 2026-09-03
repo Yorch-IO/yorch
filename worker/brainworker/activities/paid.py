@@ -89,6 +89,15 @@ DEFAULT_COLLECTION = "brain"
 #: this only bounds how many are in flight.
 EMBED_WORKERS = 6
 
+#: How often `embed_and_index` reports progress while the embedding thread runs.
+#:
+#: The stage's `heartbeat_timeout` is unset, so nothing fails for want of one —
+#: what this buys is the progress `/runs/{workflow_id}` reads back off
+#: `describe().pending_activities`, which is what turns "this is running" into
+#: "500 chunks, 96 done". Five seconds is the interval `PAID_HEARTBEAT_TIMEOUT`
+#: was calibrated against for the one stage that does set it.
+HEARTBEAT_INTERVAL = 5.0
+
 
 def _provider() -> Provider:
     return Provider(_settings().gemini)
@@ -177,7 +186,19 @@ async def learn_profile(
     proposal = None
 
     for attempt in range(1, PROFILE_MAX_ATTEMPTS + 1):
-        proposal = engine_rules.propose(adapter, evidence, feedback or None)
+        # In a thread, like every other paid stage here and for the reason
+        # `extract_semantics` states: `propose` is a synchronous network call,
+        # and an `async def` activity that makes one inline holds the worker's
+        # *only* event loop for its whole duration — no heartbeat flushed, no
+        # workflow task processed, no query answered, for any workflow on this
+        # worker. Observed live on 2026-09-03: an import's `embed_and_index`
+        # held the loop, a question asked 48 seconds later logged a
+        # `WORKFLOW_TASK_TIMED_OUT` and could not be queried at all, and the app
+        # rendered "the control API did not answer" over an API that was
+        # replying in under a millisecond.
+        proposal = await asyncio.to_thread(
+            engine_rules.propose, adapter, evidence, feedback or None
+        )
         validation = engine_rules.validate(proposal, text, evidence)
         _record(
             run_id,
@@ -296,8 +317,11 @@ async def correct_text(run_id: str, extraction: Extraction) -> Correction:
     paragraphs = [p.text for p in split_paragraphs(data)]
 
     adapter = VertexAdapter(_provider())
-    corrected, report = engine_correct.correct_paragraphs(
-        adapter, paragraphs, stage="correct"
+    # In a thread — see `learn_profile`. This is the longest stage in the
+    # pipeline: 19 sequential batches, tens of minutes, and every one of those
+    # minutes was a minute the worker could answer nothing else.
+    corrected, report = await asyncio.to_thread(
+        engine_correct.correct_paragraphs, adapter, paragraphs, stage="correct"
     )
 
     # Re-joined exactly the way `split_paragraphs` expects to find them, because
@@ -454,17 +478,34 @@ async def embed_and_index(
         workers=EMBED_WORKERS,
     )
 
-    def heartbeat(done: int, total: int) -> None:
-        # A 600-chunk book is ~100 minutes of wall clock against the per-minute
-        # embedding quota, so silence here is indistinguishable from a hung
-        # socket — three runs were given up for dead when the only thing wrong
-        # was that the observer left first.
-        #
-        # Guarded for the reason `extract_semantics` gives: every test in
-        # `tests/activities/` calls these as plain functions rather than through
-        # a worker, and `heartbeat` raises outside an activity context.
-        if activity.in_activity():
-            activity.heartbeat(done, total)
+    # A 600-chunk book is ~100 minutes of wall clock against the per-minute
+    # embedding quota, so silence here is indistinguishable from a hung socket —
+    # three runs were given up for dead when the only thing wrong was that the
+    # observer left first.
+    #
+    # **The counting and the sending are split, and that is not tidiness.**
+    # `index_chunks` runs in a thread now (see `learn_profile`), and for an
+    # `async def` activity `activity.heartbeat` is bound to the event loop:
+    # temporalio installs its thread-safe wrapper only for *sync* activities run
+    # in an executor, because "heartbeat calls internally use a data converter
+    # which is async so they need to be called on the event loop". So the
+    # embedding thread only records, and the loop sends. Before this the
+    # heartbeat was called inline and *recorded* faithfully — and never flushed,
+    # because the same call that recorded it was holding the loop. Observed
+    # live: `embed_and_index` in flight with `last_heartbeat` unset.
+    progress = {"done": 0, "total": len(chunks)}
+
+    def note(done: int, total: int) -> None:
+        progress["done"], progress["total"] = done, total
+
+    async def beat() -> None:
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            # Guarded for the reason `extract_semantics` gives: every test in
+            # `tests/activities/` calls these as plain functions rather than
+            # through a worker, and `heartbeat` raises outside an activity.
+            if activity.in_activity():
+                activity.heartbeat(progress["done"], progress["total"])
 
     collection = settings.qdrant_collection
     with Qdrant(settings.qdrant_url, collection) as q:
@@ -480,9 +521,14 @@ async def embed_and_index(
             model=settings.gemini.embedding_model,
             dimensions=settings.gemini.embedding_dimensions,
         )
-        outcome = index_chunks(
-            chunks, embedder=embedder, writer=writer, on_done=heartbeat
-        )
+        beating = asyncio.ensure_future(beat())
+        try:
+            outcome = await asyncio.to_thread(
+                index_chunks,
+                chunks, embedder=embedder, writer=writer, on_done=note,
+            )
+        finally:
+            beating.cancel()
         info = q.info()
 
     spend = _charge(
@@ -604,7 +650,12 @@ async def build_evalset(
 
     adapter = VertexAdapter(_provider())
     chunks = [StoredChunk.from_row(r) for r in rows]
-    items = ev.build_evalset(adapter, chunks, sample=sample, seed=EVAL_SEED)
+    # In a thread — see `learn_profile`. One generation call per sampled chunk,
+    # and this is the stage that was holding the loop when a question went
+    # unanswerable on 2026-09-03.
+    items = await asyncio.to_thread(
+        ev.build_evalset, adapter, chunks, sample=sample, seed=EVAL_SEED
+    )
 
     spend = _charge(
         run_id,
@@ -671,8 +722,11 @@ async def evaluate_index(
     scope = version_scope(registered.tenant_id, registered.version_id)
 
     with Qdrant(settings.qdrant_url, settings.qdrant_collection) as q:
-        outcome = run_evaluate(
-            embedder, q, items, scope=scope, params=params, chunks=chunked.count
+        # In a thread — see `learn_profile`. It embeds every question twice
+        # over, plus the noise floor.
+        outcome = await asyncio.to_thread(
+            run_evaluate,
+            embedder, q, items, scope=scope, params=params, chunks=chunked.count,
         )
 
     engine_scores = outcome.scores
@@ -798,8 +852,11 @@ async def propose_tuning(
         )
 
     with Qdrant(settings.qdrant_url, settings.qdrant_collection) as q:
-        outcome = tune_once(
-            embedder, q, items, scope=scope, profile=profile, baseline=baseline
+        # In a thread — see `learn_profile`. Every retrieval candidate is a
+        # full measurement pass over the eval set.
+        outcome = await asyncio.to_thread(
+            tune_once,
+            embedder, q, items, scope=scope, profile=profile, baseline=baseline,
         )
 
     for note in outcome.notes:

@@ -516,9 +516,18 @@ class IngestWorkflow:
                 paid.extract_semantics,
                 args=[run_id, registered, chunked, approved],
                 start_to_close_timeout=PAID_TIMEOUT,
-                # The only activity that heartbeats, so the only one this can be
-                # set on: a heartbeat timeout on an activity that never sends one
-                # would fail it immediately.
+                # Set here and nowhere else. It used to say this was "the only
+                # activity that heartbeats", and that was never true of the
+                # code: `embed_and_index` is given a heartbeat callback too, and
+                # documents at length why it needs one. It read as true because
+                # those heartbeats never *arrived* — the stage ran its embedding
+                # inline on the worker's event loop, so the same call that
+                # recorded a heartbeat was holding the loop that had to flush
+                # it. Both stages hand their work to a thread now and both
+                # really do heartbeat, so this could be set on `embed_and_index`
+                # as well. It deliberately is not: arming a timeout on a stage
+                # that spends is a decision to make on purpose and measure, not
+                # a side effect of fixing the loop.
                 heartbeat_timeout=PAID_HEARTBEAT_TIMEOUT,
                 retry_policy=_PAID_RETRY,
             )

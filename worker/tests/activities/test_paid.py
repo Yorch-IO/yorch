@@ -1407,3 +1407,135 @@ async def test_a_kept_candidate_is_promoted_over_the_baseline(
     assert promoted.report.kind == "scores"
     store = ArtifactStore(workspace, "promo")
     assert store.read_json(promoted.report)["scores"]["chunks"] == 7
+
+
+# -- every paid stage must leave the event loop free ------------------------
+#
+# `test_extraction_leaves_the_event_loop_free_to_heartbeat` above states the
+# mechanism and what it cost: $9.45 billed twice into an attempt Temporal had
+# already closed. That fix reached exactly one activity, and on 2026-09-03 the
+# same shape surfaced live in two more. An import's `embed_and_index` held the
+# loop; a question asked 48 seconds later logged a `WORKFLOW_TASK_TIMED_OUT`,
+# could not be queried at all, and the app rendered "the control API did not
+# answer" over an API replying in under a millisecond. The paid plane collects
+# an answer with a Temporal *query*, which the blocked worker could not serve.
+#
+# So the property is asserted per stage rather than once: each of these fails if
+# its own `await asyncio.to_thread` is removed.
+
+#: Long enough that a blocked loop cannot hide behind scheduling noise, short
+#: enough to keep these fast. Same figures as the extraction test above.
+_CALL = 0.02
+_TICK = 0.002
+
+
+async def _ticks_during(coro) -> tuple[object, int]:
+    """Run `coro`, counting the turns the event loop got while it ran.
+
+    A blocked loop gives the ticker none. The ticker is cancelled with no await
+    in between, so every tick counted happened *during* the call.
+    """
+    import asyncio
+
+    ticks = 0
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(_TICK)
+            ticks += 1
+
+    beating = asyncio.create_task(ticker())
+    try:
+        result = await coro
+    finally:
+        beating.cancel()
+    return result, ticks
+
+
+class _SlowGenerating(FakeProvider):
+    """Synchronous and slow, like the real provider. The engine's `propose`,
+    `correct_paragraphs` and `build_evalset` are all plain functions, and that
+    is the property under test."""
+
+    def generate(self, prompt, **kw):
+        import time
+
+        time.sleep(_CALL)
+        return super().generate(prompt, **kw)
+
+
+async def test_correction_leaves_the_event_loop_free(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The longest stage in the pipeline: 19 sequential batches on a real book,
+    tens of minutes, every one of them a minute the worker owed everything else."""
+    fake = _SlowGenerating()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    extraction = _raw(workspace, "run_beat_c", TEXTO)
+    result, ticks = await _ticks_during(paid.correct_text("run_beat_c", extraction))
+
+    assert result.paragraphs == 2
+    assert fake.generate_calls, "the stage really did call the model"
+    assert ticks >= 2, (
+        f"the event loop got {ticks} turn(s) while correcting: the call is "
+        "holding it, so no other workflow on this worker can make progress"
+    )
+
+
+async def test_embedding_leaves_the_event_loop_free(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch, qdrant: str
+):
+    """The stage that was holding the loop when a real question went
+    unanswerable. `index_chunks` is a plain function and embeds every chunk."""
+    import time
+
+    class SlowEmbedding(FakeProvider):
+        def embed(self, texts, *, task, workers=6):
+            time.sleep(_CALL)
+            return super().embed(texts, task=task, workers=workers)
+
+    fake = SlowEmbedding()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    registered, staged = _ids()
+    result, ticks = await _ticks_during(
+        paid.embed_and_index(
+            "run_beat_e", "lib_t", registered, staged,
+            _chunked(workspace, "run_beat_e", 4),
+        )
+    )
+
+    assert result.points == 4
+    assert ticks >= 2, (
+        f"the event loop got {ticks} turn(s) while embedding: this is the shape "
+        "that made a question asked 48 seconds later unanswerable"
+    )
+
+
+async def test_building_the_eval_set_leaves_the_event_loop_free(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """One generation call per sampled chunk, and the stage that was still
+    holding the loop after the embedding finished."""
+    import json
+
+    fake = _SlowGenerating(semantics=json.dumps(
+        {"question": "¿Qué dice el fragmento?", "answerable_only_by_main": True},
+        ensure_ascii=False,
+    ))
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    chunked = _chunked(workspace, "run_beat_v", 4)
+    result, ticks = await _ticks_during(
+        paid.build_evalset(
+            "run_beat_v", _extraction("libros/mio.pdf"), chunked,
+            ProfileDecision(fingerprint="fp_beat"), sample=4,
+        )
+    )
+
+    assert result.questions == 4, "one question per sampled chunk"
+    assert ticks >= 2, (
+        f"the event loop got {ticks} turn(s) while generating questions"
+    )

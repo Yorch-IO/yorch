@@ -2264,6 +2264,35 @@ Kept because each fix carries a rule worth not relearning.
   no other test in the suite can see blocking: they all call activities as plain
   functions. **Verified by reverting the fix: the ticker gets 0 turns.**
   The constant was never the bug and is unchanged.
+  **That fix reached one activity, and on 2026-09-03 the same shape surfaced
+  live in the other five.** A question asked 48 seconds after an import was
+  started came back as "the control API did not answer", over an API that was
+  replying in 0.0009s. What had actually happened: the import's
+  `embed_and_index` was holding the worker's event loop, the question's
+  workflow logged a `WORKFLOW_TASK_TIMED_OUT`, and it could not even be
+  *queried* — the paid plane collects an answer with a Temporal query, which a
+  blocked worker cannot serve. The signature to recognise is
+  `last_heartbeat` unset on a pending activity that is demonstrably working.
+  `learn_profile`, `correct_text`, `embed_and_index`, `build_evalset`,
+  `evaluate_index` and `propose_tuning` were all `async def` around a
+  synchronous, network-bound engine call; all six now `await asyncio.to_thread`,
+  and three carry a test that measures the loop directly.
+  **`embed_and_index` needed more than a `to_thread`, and the reason is worth
+  keeping.** Its heartbeat callback could not simply move into the thread:
+  temporalio installs its thread-safe heartbeat wrapper only for *sync*
+  activities run in an executor, because "heartbeat calls internally use a data
+  converter which is async so they need to be called on the event loop". For an
+  `async def` activity `activity.heartbeat` is loop-bound. So the counting and
+  the sending are split — the embedding thread records progress, a loop-side
+  task sends it every `HEARTBEAT_INTERVAL`. Before this the stage recorded its
+  heartbeats faithfully and never flushed one, because the call that recorded
+  them was holding the loop that had to send them; the comment in
+  `workflows/ingest.py` had adopted that as a fact, calling `extract_semantics`
+  "the only activity that heartbeats". It is now true that both do, so a
+  `heartbeat_timeout` could be set on `embed_and_index` — deliberately not done
+  here, because arming a timeout on a stage that spends is a decision to make
+  on purpose and measure.
+
   **Remaining exposure, deliberately not widened into this fix:** the projection
   block and `_condense_descriptions` still run inline on the loop. Projection is
   seconds; condensation is one generation call per concept and would re-create
@@ -2312,6 +2341,29 @@ working, because they are the cheapest regression test available.
 
 Two conventions worth matching: every claim carries its measurement, and "no
 measured baseline" is stated rather than hidden.
+
+### A verification trap: CPython can serve you the code you just reverted
+
+Found on 2026-09-03 while checking that each fix in this session was
+load-bearing, by the standard method — revert the fix, run its test, expect red,
+restore. One case came back green, and the reason was not the test.
+
+A `.pyc` is invalidated by the source's **integer-second mtime and its size**.
+The revert under test changed `{2,16}` to `{2,12}` — *the same number of bytes* —
+and the revert and the restore happened inside the same second. So the restored
+file matched the cached bytecode's (mtime, size) exactly, and every later run
+imported the **reverted** module while `git diff` showed a clean tree and `grep`
+showed the fixed source. The suite then failed a test whose fix was demonstrably
+present in the file.
+
+Two consequences worth carrying:
+
+- A revert-and-run verification loop must run with `PYTHONDONTWRITEBYTECODE=1`
+  (or clear `__pycache__` between cases), or a same-length edit can report a
+  false result in either direction.
+- When a test contradicts the source in front of you, check what Python actually
+  loaded — `module.__file__` is not enough, because it names the right file
+  while serving stale bytecode from beside it.
 
 ### The test corpus
 

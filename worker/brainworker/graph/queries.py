@@ -662,13 +662,38 @@ TEMPLATES: tuple[Template, ...] = (
             _TENANT,
             _FLOOR,
             # 1 is "every concept", and it is reachable — the control offers it.
-            # The default is 2 because that is the subgraph that has edges
-            # between books at all.
-            Param("min_documents", "int", required=False, default=2),
-            # 20000 covers the whole library at `min_documents = 1` (15,367
-            # measured) with room for the corpus to grow. The cap is not the
-            # expected size; it is the point past which something has gone wrong.
-            Param("mention_limit", "int", required=False, default=20000, cap=20000),
+            # 2 is the subgraph that has edges between books at all, and was the
+            # default until 2026-09-01. **3 now, because 2 was still a canvas
+            # nobody could read.** Re-measured on the corpus that day: 12,823
+            # concepts, 2,034 at degree ≥ 2 (the same 16% that survived the
+            # 2026-08-24 measurement, so the ratio is stable here), and 858 at
+            # ≥ 3. Two thousand nodes is not a picture. The step after this one
+            # is ≥ 5 at 322, which starts reading as a map of general topics
+            # rather than of the bridges between these particular books.
+            Param("min_documents", "int", required=False, default=3),
+            # **Load-bearing, not defensive, since the desktop client started
+            # fetching this envelope whole.** The client holds the
+            # `min_documents = 1` response in memory and derives every threshold
+            # from it, which is exact only while the envelope is not cut — see
+            # the `ORDER BY` note above: `documents DESC` is both the first sort
+            # key and the filter key, so a threshold's rows are a *prefix* of
+            # this ordering and the equivalence survives truncation, but the
+            # rows that fell off the end do not.
+            #
+            # 20000 was set against 15,367 rows measured 2026-08-24. Re-measured
+            # 2026-09-01 on the same library, now 73 books: **17,814 rows at
+            # `min_documents = 1`, floor 0.5 — 89% of that cap.** One more
+            # mid-sized book took it over, and the symptom would not have been a
+            # refusal but a silently smaller graph at *every* threshold.
+            #
+            # 60000 is ~240 books at today's 247 rows per book. It is also above
+            # the hard ceiling on rows at any floor: rows are distinct
+            # (version, concept) pairs and the whole graph holds 27,991
+            # `MENTIONS`, so lowering the floor can no longer cut this library.
+            # `default` moves with `cap` because no caller has ever passed this
+            # parameter — the default is the operative number, and
+            # `truncated.edges` is compared against it.
+            Param("mention_limit", "int", required=False, default=60000, cap=60000),
         ),
         uses_semantic_edges=True,
         planner_visible=False,

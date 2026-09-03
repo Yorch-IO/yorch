@@ -29,11 +29,19 @@ const TABS = [
 ] as const;
 export type Tab = (typeof TABS)[number];
 
-/** Every screen may take a `go`, and only Home does anything with it — a screen
- *  declaring no parameters is assignable to this, so the other six are
- *  unchanged. Home needs it because the stack being down is a state it reports
- *  with a way out of it, and the way out is the Services tab. */
-const SCREENS: Record<Tab, (props: { go: (tab: Tab) => void }) => JSX.Element> = {
+/** Every screen may take a `go` and an `active`, and each is read by one screen
+ *  — a screen declaring no parameters is assignable to this, so the rest are
+ *  unchanged. Home needs `go` because the stack being down is a state it reports
+ *  with a way out of it, and the way out is the Services tab. Graph needs
+ *  `active` because all seven of these are mounted at startup: without it the
+ *  library graph downloads its envelope and lays it out on a tab nobody has
+ *  opened, which on the real corpus is 183 ms of query and up to 3.9 s of
+ *  simulation. It latches there — arriving is the trigger, and leaving must
+ *  never throw work away. */
+const SCREENS: Record<
+  Tab,
+  (props: { go: (tab: Tab) => void; active: boolean }) => JSX.Element
+> = {
   home: HomeScreen,
   stack: StackScreen,
   library: LibraryScreen,
@@ -177,7 +185,7 @@ function Shell() {
               const key = name === "stack" ? name : `${identity}:${name}`;
               return (
                 <div key={key} hidden={name !== tab}>
-                  <Screen go={setTab} />
+                  <Screen go={setTab} active={name === tab} />
                 </div>
               );
             })}

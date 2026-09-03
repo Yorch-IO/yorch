@@ -1209,8 +1209,9 @@ export const api = {
    *
    *  `minDocuments` is what controls the volume — see `LibraryGraph`. 1 returns
    *  every concept the library mentions; 2 returns the subgraph that has edges
-   *  between books at all. */
-  libraryGraph: (libraryId: string, confidenceFloor = 0.6, minDocuments = 2) =>
+   *  between books at all, which measured 2,034 concepts and was still an
+   *  unreadable canvas; 3 is the default and measured 858. */
+  libraryGraph: (libraryId: string, confidenceFloor = 0.6, minDocuments = 3) =>
     invoke<LibraryGraph>("library_graph", {
       libraryId,
       confidenceFloor,

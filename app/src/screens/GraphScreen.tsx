@@ -25,7 +25,7 @@ import { LibraryGraph } from "./graph/LibraryGraph";
  */
 type Mode = "overview" | "document";
 
-export function GraphScreen() {
+export function GraphScreen({ active = true }: { active?: boolean } = {}) {
   const { t } = useTranslation();
   const [mode, setMode] = useState<Mode>("overview");
   const [focus, setFocus] = useState<{ versionId: string; title: string } | null>(
@@ -64,7 +64,11 @@ export function GraphScreen() {
       </div>
 
       <div hidden={mode !== "overview"}>
-        <LibraryGraph onOpenDocument={open} />
+        {/* Only the view that is showing, on the tab that is showing. Both
+            views stay mounted for the reason above, which is exactly why the
+            expensive one has to be told when nobody is looking. `GraphScreen`
+            defaults to active so a test that renders it alone still mounts. */}
+        <LibraryGraph onOpenDocument={open} active={active && mode === "overview"} />
       </div>
       <div hidden={mode !== "document"}>
         <DocumentGraph focus={focus} />

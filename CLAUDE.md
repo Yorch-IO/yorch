@@ -559,6 +559,16 @@ driver, so there is one owner of the schema and one set of models.
   matter, so book B scored against book A's questions returns a recall of 0 that
   means nothing about either. The engine drops it in `n_load_profile`;
   `paid.build_evalset` has to apply the same rule or the fix does not travel.
+  **The consequence, which looks like a bug in the file and is not:
+  `persist_profile_scores` moves `learned_from` along with the eval set**, so a
+  family profile ends up naming the *last* document that measured it. Read on
+  2026-09-02, `01-retodedios-int-s-pdf-corrected-72d480dc.json` carried
+  `learned_from: 03-ElFrutoEterno…`, El Fruto Eterno's 80 questions and its
+  scores, over a `heading_l2_pattern` and a `validation_notes` list that were
+  hand-revised for *RetoDeDios* — including an exclusion list of that book's own
+  28 repeated lines. The drop rule is what keeps this safe to read, and the file
+  is a chimera to look at: the rules belong to one book and the measurement to
+  another, and nothing in it says so.
 
 - **A structural collision withholds activation, and nothing else does.** When
   the inherited heading rules and the built-in ones disagree about how many
@@ -570,7 +580,15 @@ driver, so there is one owner of the schema and one set of models.
   blocking there would refuse to publish documents whose only fault is being
   ordinary. The two ways out are `POST /libraries/{id}/versions/{id}/activate`,
   which costs nothing because the index is already paid for, and re-importing
-  with `ignore_profile`, which pays for a full run. **`run.state = 'blocked'`
+  with `ignore_profile`, which pays for a full run. **The first one has a button
+  since 2026-09-03**, in the import queue's own withheld row (`ImportQueue.tsx`),
+  because until then the escape hatch existed at every layer and was reachable
+  from no screen: measured on the run that prompted it, $4.1219 spent, 444 points
+  in Qdrant, 2,466 claims projected, and nothing to press. It is offered for
+  `structural_mismatch` **and for nothing else** — `pending` alone does not mean
+  "complete index", since four versions in this catalog are `pending` because
+  their run was *cancelled*, and keying on the version's state rather than on the
+  run's reason would publish one of those. **`run.state = 'blocked'`
   is a real value**, added in `20260831140000_run_blocked` because none of the
   other five was honest: the run did every stage and paid for them, so it did
   not fail; it withheld the last step, so it was not a plain success; and nobody
@@ -1684,6 +1702,18 @@ session's files.
   fingerprint, so it travels to any document that shares one. The fix is either a
   plain extractor that can strip without moving offsets, or a validator that
   discounts repeated lines before judging a pattern.
+  **Measured again 2026-09-02 on `03-ElFrutoEterno_INT-S.pdf.corrected.txt`, and
+  this time the damage shipped.** Its ten chapter titles appear 9-15 times each
+  as running headers — `El poder de la paciencia` 15, `El misterio del amor` 14,
+  plus `H h` 13 — so they matched the inherited level-2 pattern: **0 chapters and
+  56 "sections" that alternate between the running header and the real
+  sub-headings**, chunk 24 `EL GRANO DE TRIGO` and chunk 25 back to `El fruto
+  espiritual`. The inherited exclusion list names *RetoDeDios's* 28 repeated
+  lines, which do nothing here. That index was published anyway — measured
+  recall@1 0.3125, recall@5 0.775, MRR@10 0.534, dense-only 0.85, noise floor
+  0.5291 over 80 questions — so what the defect costs is not retrieval but every
+  breadcrumb: a live citation on that book reads `El fruto espiritual` for a
+  section name that is a page header.
 
 - **`_topical_overlap` reports 0.0 for every plain-text document, and 0.0 is the
   value that means "most dangerous".** It compares the current document's
@@ -1703,7 +1733,11 @@ session's files.
   which throws the profile away and pays for a full run. The check is the one
   `build_evalset` and `n_load_profile` already make: `learned_from == source_key`.
   A "cannot tell" needs to be distinguishable from a measured zero, as
-  `/project-summary` already does with `available`.
+  `/project-summary` already does with `available`. Seen again 2026-09-02 at a
+  real gate: `03-ElFrutoEterno` inherited `01-retodedios`'s profile and the
+  warning read "Solapamiento temático: 0%" for two books by the same author in
+  the same series — a figure nobody could act on, printed at the moment somebody
+  decides whether to spend $4.12.
 
 - **A re-index leaves the previous run's semantics in the graph, and they now
   name chunks whose text has moved.** The vector side prunes — `QdrantWriter.
@@ -1767,6 +1801,63 @@ session's files.
   reliably pick the value that cannot tell a hit from a miss — and it will look
   like an improvement, because the eval questions all have a right answer to
   find and none of them is off-corpus.
+
+- **The audit trail's timestamp for the transition after a long activity comes
+  from before it, so the trail hangs the expensive stage's duration on the next
+  one.** `_finish` and `_enter` pass `workflow.now()`, which is right in every
+  argument for it — deterministic, replay-safe, unchanged under a retry — and on
+  two real runs it did not advance across `extract_semantics`. Read straight out
+  of the Temporal history rather than inferred: `record_run_outcome` was
+  **scheduled at 15:26:57 carrying `at = 2026-09-02T14:41:48.067363`**, which is
+  to the microsecond the `WorkflowTaskStarted` of the task that *scheduled*
+  semantics (event 183), while the activity itself ran events 185-187, 14:41:48
+  → 15:26:57. So the panel reads `semantics` as **40 ms** and gives its 45
+  minutes to `blocked`. The same shape in the 2026-09-01 run that succeeded:
+  semantics 36 ms, `activating` 22 minutes. `run.finished_at` is right in both,
+  because `finish_run` takes it from SQL.
+  **Not reproduced, and the probes are worth not repeating**: a 20 s activity, a
+  25 s one that heartbeats with a `heartbeat_timeout`, and a worker with
+  `max_cached_workflows=0` to force replay all advance `now()` correctly, on both
+  the container's temporalio 1.32.0 and the host's 1.31.0. The 12.3-minute
+  `evaluate_index` in the *same run* also advanced correctly, which rules out
+  duration alone. So the trigger is unidentified and the trail is wrong in a
+  specific, reproducible place: the row after the run's most expensive activity.
+  Until it is found, read a stage's duration from `cost_entry.created_at` or from
+  the raw history panel, which is exactly the second source that panel exists to
+  be.
+
+- **`tuning.json` is written before the paid candidate runs and never updated, so
+  it permanently reports a verdict of "pending".** `propose_tuning` writes the
+  artifact and `_tune_once` then chunks, embeds, evaluates and either promotes or
+  reverts — and writes nothing back. Measured on `ver_f1d193c2f8995e09f65b3765`:
+  the artifact says `{"candidate": "target=900", "accepted": null, "mrr_at_10":
+  null, "why": "pending reindex"}` for a candidate that **did** run, produced 525
+  chunks, scored MRR@10 0.5197 against the 0.534 baseline, was rejected and was
+  correctly reverted — the collection holds the baseline's 444 points, verified.
+  The numbers survive only in `scores.candidate.json`, and nothing joins the two,
+  so the one artifact named after the decision is the one that does not record
+  it. `promote_candidate_scores` already exists as the write on the accepting
+  side; the revert has no counterpart.
+
+- **The Library screen cannot offer the withheld-activation escape, because it
+  has the version's state and not the run's reason.** Its promote button renders
+  on `!v.active && v.state === "indexed"` (`LibraryScreen.tsx`), and a version
+  whose activation was withheld is `pending` — so the one case the button's own
+  docstring names first is the one case it does not appear for. Loosening it to
+  `pending` would be wrong rather than lax: four versions in this catalog are
+  `pending` because their run was cancelled and their indexes are partial. What
+  the screen needs is the terminal run's `error_kind` on the version row, which
+  is a payload change in both planes; the import queue does it today because a
+  run row carries the reason already.
+
+- **The engine's ledger has no per-document attribution inside one invocation.**
+  `costo.json` is a history of runs since 2026-09-03 rather than a single
+  overwritten run, and each record names the paths it was given — but `Ledger`
+  accumulates by stage, so `docagent index a.pdf b.pdf` leaves one record with
+  two documents and one breakdown. Nothing needs threading through the call
+  sites to fix it: `cmd_index` loops over paths with the same ledger, so a
+  snapshot between documents gives the delta. Not done, because the ask was that
+  the file stop overwriting itself and this is the next question, not that one.
 
 ## Eight defects that were recorded here and are now fixed
 

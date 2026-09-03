@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { VersionAudit } from "../RunAudit";
 
 import {
   api,
@@ -90,6 +91,9 @@ export function LibraryScreen() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  /** Which version's audit is open, if any. One at a time: two ledgers side by
+   *  side in a table cell is unreadable, and the question is about one version. */
+  const [auditing, setAuditing] = useState<string | null>(null);
   const [removed, setRemoved] = useState<Removal | null>(null);
   const [started, setStarted] = useState<{ kind: string; id: string } | null>(
     null,
@@ -438,7 +442,22 @@ export function LibraryScreen() {
                                 >
                                   {t("library.detail.removeVersion")}
                                 </button>
+                                {/* The index status a person opens to ask what
+                                    actually happened: every stage, its duration,
+                                    its charges, and underneath them the raw
+                                    workflow history. */}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setAuditing(auditing === v.id ? null : v.id)
+                                  }
+                                >
+                                  {auditing === v.id
+                                    ? t("library.detail.hideAudit")
+                                    : t("library.detail.showAudit")}
+                                </button>
                                 {v.scores && <Scores scores={v.scores} />}
+                                {auditing === v.id && <VersionAudit versionId={v.id} />}
                               </li>
                             ))}
                           </ul>

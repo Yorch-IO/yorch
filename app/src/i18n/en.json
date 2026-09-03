@@ -233,7 +233,11 @@
     "showDetail": "what it did",
     "hideDetail": "hide",
     "gateComing": "Reading the document — the estimate appears here when it is ready.",
-    "ended": "Ended {{state}} · {{kind}}"
+    "ended": "Ended {{state}} · {{kind}}",
+    "activate": "Publish this index",
+    "activateBusy": "Publishing…",
+    "activateDone": "Published. {{count}} document(s) now answer from this version.",
+    "activateWhy": "Everything was indexed and paid for; only the promotion was withheld, because the inherited heading rules and the built-in ones disagreed about this document's structure. Publishing it costs nothing and can be undone by promoting another version."
   },
   "gate": {
     "title": "Approve before spending",

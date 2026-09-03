@@ -48,6 +48,19 @@ const EXPLORE_TIMEOUT: Duration = Duration::from_secs(15);
 /// must not be reported as unreachable while it is still working.
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Listing the queue is one indexed, keyset-paged read of the catalog.
+const RUNS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The audit ledger is four catalog reads for one run — events, charges,
+/// artifacts, warnings — and touches Temporal not at all, which is the whole
+/// point of it: it answers for a run whose history has aged out.
+const AUDIT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// The raw history is fetched from Temporal, page by page, and a run with many
+/// retries has a long one. Longer than the ledger because this is the call that
+/// can actually be slow, and it is made once, when a person expands the panel.
+const EVENTS_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Uploading a source file. Generous because this is the one request whose
 /// duration is set by the user's upstream bandwidth rather than by the server:
 /// the cap is 200 MB, and a slow home connection can spend minutes on a book
@@ -234,6 +247,210 @@ pub struct RunState {
     /// would send somebody to fix one that is fine.
     #[serde(default)]
     pub scores: Option<RunScores>,
+}
+
+/// One run as the queue lists it.
+///
+/// Everything here comes from the catalog, which is what makes the queue
+/// survive a stopped Temporal and a closed window: what a run is *doing* belongs
+/// to `RunState`, and what it *was* belongs here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunListItem {
+    pub id: String,
+    pub workflow_id: String,
+    pub kind: String,
+    pub state: String,
+    #[serde(default)]
+    pub stage: Option<String>,
+    pub started_at: String,
+    #[serde(default)]
+    pub finished_at: Option<String>,
+    #[serde(default)]
+    pub error_kind: Option<String>,
+    #[serde(default)]
+    pub error_detail: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub library_id: Option<String>,
+    #[serde(default)]
+    pub document_id: Option<String>,
+    #[serde(default)]
+    pub version_id: Option<String>,
+    /// `None`, never zero, when no stage has recorded a price. A run still in
+    /// its free stages legitimately has none, and zero would claim it spent.
+    #[serde(default)]
+    pub usd_so_far: Option<f64>,
+}
+
+/// A page of the queue, and where the next one starts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunListPage {
+    pub runs: Vec<RunListItem>,
+    /// The cursor for the following page, or `None` at the end. Opaque: it is
+    /// `{started_at}|{id}` because the sort is on both, but no caller parses it.
+    #[serde(default)]
+    pub next_before: Option<String>,
+}
+
+/// What one charge cost, as the ledger reports it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditCostEntry {
+    pub stage: String,
+    pub provider: String,
+    pub model: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// `None` is "no price known for this model", rendered "sin precio". Never
+    /// zero — that would be a claim that it was free.
+    #[serde(default)]
+    pub usd: Option<f64>,
+}
+
+/// What a stage cost, with the unpriced part reported rather than folded in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditCost {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub usd: Option<f64>,
+    #[serde(default)]
+    pub unpriced_entries: u64,
+    #[serde(default)]
+    pub entries: Vec<AuditCostEntry>,
+}
+
+/// One artifact, as `run_artifact` recorded it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditArtifact {
+    pub name: String,
+    pub rel_path: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+}
+
+/// One row of the ledger: a stage, how long it took, and what it produced.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditStage {
+    /// `None` on the trailing row that collects whatever no stage claimed —
+    /// the charges a question makes, which belong to no pipeline stage.
+    #[serde(default)]
+    pub seq: Option<i64>,
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub at: Option<String>,
+    /// `None` means one of two things `outcome` tells apart: the run is still in
+    /// this stage, or this row *is* the outcome and is an instant.
+    #[serde(default)]
+    pub ended_at: Option<String>,
+    #[serde(default)]
+    pub seconds: Option<f64>,
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub detail: Option<String>,
+    /// `None` for a stage that does not spend — deliberately not a zeroed
+    /// block, because "does not spend" and "the charge was not recorded" are
+    /// different claims and a zero renders as the first.
+    #[serde(default)]
+    pub cost: Option<AuditCost>,
+    #[serde(default)]
+    pub artifacts: Vec<AuditArtifact>,
+}
+
+/// The run the ledger describes, read from the catalog rather than Temporal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditRun {
+    pub id: String,
+    pub workflow_id: String,
+    pub kind: String,
+    pub state: String,
+    #[serde(default)]
+    pub stage: Option<String>,
+    pub started_at: String,
+    #[serde(default)]
+    pub finished_at: Option<String>,
+    #[serde(default)]
+    pub error_kind: Option<String>,
+    #[serde(default)]
+    pub error_detail: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub library_id: Option<String>,
+    #[serde(default)]
+    pub document_id: Option<String>,
+    #[serde(default)]
+    pub version_id: Option<String>,
+}
+
+/// A profile warning raised against the version this run produced.
+///
+/// The row carries no `kind`, so a reader cannot tell a plain collision from the
+/// heading disagreement that withholds activation — that distinction exists only
+/// on the Temporal payload today, and the pane must not imply otherwise.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditWarning {
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    #[serde(default)]
+    pub collides_with: Option<String>,
+    #[serde(default)]
+    pub similarity: Option<f64>,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+/// Everything a run did, from the catalog alone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunAudit {
+    pub run: AuditRun,
+    pub stages: Vec<AuditStage>,
+    pub totals: AuditCost,
+    #[serde(default)]
+    pub warnings: Vec<AuditWarning>,
+}
+
+/// One line of the raw workflow history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunEvent {
+    pub id: i64,
+    pub at: String,
+    #[serde(rename(deserialize = "type"))]
+    pub kind: String,
+    #[serde(default)]
+    pub activity: Option<String>,
+    /// Present from the second attempt onward, which is the whole reason this
+    /// panel exists: a retry is invisible everywhere else.
+    #[serde(default)]
+    pub attempt: Option<u32>,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+/// The raw history, or an honest statement that there is none to be had.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunEventPage {
+    /// `false` means Temporal has forgotten this run, which is ordinary past the
+    /// retention period. It is deliberately not the same as an empty `events`:
+    /// "the history aged out" and "this run did nothing" must not render alike.
+    pub available: bool,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub events: Vec<RunEvent>,
 }
 
 /// Measured retrieval quality for one run's index.
@@ -1234,6 +1451,32 @@ impl Control {
             .await
     }
 
+    /// The persistent queue: every run this organisation has, newest first.
+    ///
+    /// Catalog only, so it answers with the stack's Temporal down — which is
+    /// what lets the Import screen show a queue rather than an error panel while
+    /// the worker is restarting.
+    pub async fn runs(&self, query: &str) -> Result<RunListPage> {
+        let path = if query.is_empty() {
+            "/runs".to_string()
+        } else {
+            format!("/runs?{query}")
+        };
+        self.get(&path, RUNS_TIMEOUT).await
+    }
+
+    /// What the run did, stage by stage, and what each stage cost.
+    pub async fn run_audit(&self, workflow_id: &str) -> Result<RunAudit> {
+        self.get(&format!("/runs/{workflow_id}/audit"), AUDIT_TIMEOUT)
+            .await
+    }
+
+    /// The raw workflow history — retries and timeouts no application code saw.
+    pub async fn run_events(&self, workflow_id: &str) -> Result<RunEventPage> {
+        self.get(&format!("/runs/{workflow_id}/events"), EVENTS_TIMEOUT)
+            .await
+    }
+
     pub async fn approve(&self, workflow_id: &str, approval: &Approval) -> Result<()> {
         let _: serde_json::Value = self
             .post_json(
@@ -2207,5 +2450,107 @@ mod estimate_range {
         let parsed: LibraryGraph = serde_json::from_str(GRAPH).unwrap();
         assert_eq!(parsed.concepts[0].documents, 51);
         assert_eq!(parsed.edges.len(), 1);
+    }
+
+    // -- the audit trail ----------------------------------------------------
+
+    /// A real body from `GET /runs/{id}/audit`, snake_case as both planes emit it.
+    const AUDIT: &str = r#"{
+      "run": {"id": "ingest-1", "workflow_id": "ingest-1", "kind": "index",
+              "state": "failed", "stage": "semantics",
+              "started_at": "2026-09-01T14:00:00+00:00",
+              "finished_at": "2026-09-01T14:10:00+00:00",
+              "error_kind": "activity_failed", "error_detail": "503",
+              "title": "Institución", "library_id": "lib_teologia",
+              "document_id": "doc_1", "version_id": "ver_1"},
+      "stages": [
+        {"seq": 1, "stage": "correcting", "at": "2026-09-01T14:00:00+00:00",
+         "ended_at": "2026-09-01T14:04:00+00:00", "seconds": 240.0,
+         "outcome": null, "detail": null,
+         "cost": {"input_tokens": 1000, "output_tokens": 500, "usd": 0.0334,
+                  "unpriced_entries": 0,
+                  "entries": [{"stage": "correction", "provider": "vertex",
+                               "model": "gemini-3.6-flash", "input_tokens": 1000,
+                               "output_tokens": 500, "usd": 0.0334}]},
+         "artifacts": [{"name": "corrected_text", "rel_path": "runs/x/corrected.txt",
+                        "sha256": "aa", "size_bytes": 10}]},
+        {"seq": 2, "stage": "chunking", "at": "2026-09-01T14:04:00+00:00",
+         "ended_at": null, "seconds": null, "outcome": null, "detail": null,
+         "cost": null, "artifacts": []}
+      ],
+      "totals": {"input_tokens": 1000, "output_tokens": 500, "usd": 0.0334,
+                 "unpriced_entries": 0},
+      "warnings": [{"profile_id": "p1", "collides_with": "otro.pdf",
+                    "similarity": 0.0, "detail": "colisión"}]
+    }"#;
+
+    #[test]
+    fn the_ledger_reaches_the_webview_camel_cased() {
+        // Renamed on the serialize side only, so the Python field names still
+        // deserialize and the webview still gets idiomatic JavaScript.
+        let parsed: RunAudit = serde_json::from_str(AUDIT).unwrap();
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert!(out["run"].get("workflow_id").is_none());
+        assert_eq!(out["run"]["workflowId"], "ingest-1");
+        assert_eq!(out["stages"][0]["endedAt"], "2026-09-01T14:04:00+00:00");
+        assert_eq!(out["totals"]["unpricedEntries"], 0);
+    }
+
+    #[test]
+    fn a_free_stage_stays_null_rather_than_becoming_a_zero() {
+        // The distinction the whole payload is built around: "this stage does
+        // not spend" and "this stage's charge was not recorded" are different
+        // claims, and a defaulted zero would render as the first.
+        let parsed: RunAudit = serde_json::from_str(AUDIT).unwrap();
+        assert!(parsed.stages[1].cost.is_none());
+        assert_eq!(parsed.stages[0].cost.as_ref().unwrap().usd, Some(0.0334));
+    }
+
+    #[test]
+    fn a_history_that_aged_out_is_unavailable_rather_than_empty() {
+        let gone: RunEventPage =
+            serde_json::from_str(r#"{"available": false, "truncated": false, "events": []}"#)
+                .unwrap();
+        assert!(!gone.available && gone.events.is_empty());
+
+        let live: RunEventPage = serde_json::from_str(
+            r#"{"available": true, "truncated": true, "events": [
+                 {"id": 12, "at": "2026-09-01T14:07:25+00:00",
+                  "type": "ActivityTaskStarted", "activity": "extract_semantics",
+                  "attempt": 2, "detail": null}]}"#,
+        )
+        .unwrap();
+        // `type` is a Rust keyword, so the field is `kind` and renamed on the
+        // deserialize side only — the webview gets `kind`, which is what the
+        // other tagged payloads in this file already use.
+        assert_eq!(live.events[0].kind, "ActivityTaskStarted");
+        assert_eq!(live.events[0].attempt, Some(2));
+        assert!(live.truncated);
+    }
+
+    #[test]
+    fn a_control_plane_that_predates_the_ledger_loses_a_field_not_the_call() {
+        // Every optional is `#[serde(default)]` for the reason the cost range's
+        // new fields were: an older plane must cost the caller one field, never
+        // the whole response.
+        let thin: RunListPage =
+            serde_json::from_str(r#"{"runs": [{"id": "r1", "workflow_id": "r1",
+                "kind": "index", "state": "running",
+                "started_at": "2026-09-01T14:00:00+00:00"}]}"#)
+                .unwrap();
+        assert_eq!(thin.runs[0].id, "r1");
+        assert!(thin.runs[0].usd_so_far.is_none());
+        assert!(thin.next_before.is_none());
+    }
+
+    #[test]
+    fn a_cursor_survives_the_query_string_it_travels_in() {
+        // `+00:00` unencoded is decoded by the server as a space, so the cursor
+        // parses as an invalid date, the route falls back to the first page, and
+        // the queue pages forever over the same rows.
+        let encoded = crate::percent_encode("2026-09-01T14:00:00+00:00|ingest-1");
+        assert!(!encoded.contains('+'), "{encoded}");
+        assert!(!encoded.contains('|'), "{encoded}");
+        assert!(encoded.contains("%2B"), "{encoded}");
     }
 }

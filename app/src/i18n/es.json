@@ -233,7 +233,11 @@
     "showDetail": "qué hizo",
     "hideDetail": "ocultar",
     "gateComing": "Leyendo el documento — la estimación aparece aquí cuando esté lista.",
-    "ended": "Terminó {{state}} · {{kind}}"
+    "ended": "Terminó {{state}} · {{kind}}",
+    "activate": "Publicar este índice",
+    "activateBusy": "Publicando…",
+    "activateDone": "Publicado. {{count}} documento(s) responden ya desde esta versión.",
+    "activateWhy": "Todo se indexó y ya está pagado; solo se retuvo la promoción, porque las reglas de encabezado heredadas y las de fábrica no coincidían sobre la estructura de este documento. Publicarlo no cuesta nada y se deshace promoviendo otra versión."
   },
   "gate": {
     "title": "Aprobar antes de gastar",

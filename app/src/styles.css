@@ -2233,6 +2233,18 @@ button.link.active {
   align-items: baseline;
 }
 
+/* The withheld-activation panel. A column rather than a row: the sentence
+   explaining what the press does is the part that has to be read first, and it
+   is longer than any label beside it would allow. No grid, so no media query —
+   see the note above `.queue-row`. */
+.queue-activate {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
 .queue-item progress {
   vertical-align: middle;
   width: 8rem;

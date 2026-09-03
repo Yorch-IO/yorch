@@ -344,6 +344,157 @@ export interface StartedRun {
   state: string;
 }
 
+/** One run as the queue lists it.
+ *
+ *  Every field comes from the catalog, which is what makes the queue survive a
+ *  stopped Temporal and a closed window: what a run is *doing* is `RunState`,
+ *  what it *was* is this. `usdSoFar` is null and never zero when no stage has
+ *  recorded a price — a run still in its free stages legitimately has none. */
+export interface RunListItem {
+  id: string;
+  workflowId: string;
+  kind: string;
+  state: string;
+  stage: string | null;
+  startedAt: string;
+  /** Null while it is still going. The queue filters on *this*, not on `state`,
+   *  because a run that died without recording an outcome keeps a stale state. */
+  finishedAt: string | null;
+  errorKind: string | null;
+  errorDetail: string | null;
+  title: string | null;
+  libraryId: string | null;
+  documentId: string | null;
+  versionId: string | null;
+  usdSoFar: number | null;
+}
+
+export interface RunListPage {
+  runs: RunListItem[];
+  /** Opaque cursor for the next page, or null at the end. Never parse it. */
+  nextBefore: string | null;
+}
+
+export interface AuditCostEntry {
+  stage: string;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  /** Null is "no price known for this model", rendered "sin precio". */
+  usd: number | null;
+}
+
+export interface AuditCost {
+  inputTokens: number;
+  outputTokens: number;
+  usd: number | null;
+  unpricedEntries: number;
+  entries: AuditCostEntry[];
+}
+
+export interface AuditArtifact {
+  name: string;
+  relPath: string;
+  sha256: string;
+  sizeBytes: number;
+}
+
+/** One row of the ledger.
+ *
+ *  `stage` is null on the trailing row that collects whatever no stage claimed —
+ *  the charges a question makes belong to no pipeline stage, and dropping them
+ *  would make the ledger a bill that does not add up.
+ *
+ *  `endedAt` null means one of two things `outcome` tells apart: the run is
+ *  still in this stage, or this row *is* the outcome and is an instant.
+ *
+ *  `cost` null means the stage does not spend. Deliberately not a zeroed block:
+ *  "does not spend" and "the charge was not recorded" are different claims. */
+export interface AuditStage {
+  seq: number | null;
+  stage: string | null;
+  at: string | null;
+  endedAt: string | null;
+  seconds: number | null;
+  outcome: string | null;
+  detail: string | null;
+  cost: AuditCost | null;
+  artifacts: AuditArtifact[];
+}
+
+export interface AuditRun {
+  id: string;
+  workflowId: string;
+  kind: string;
+  state: string;
+  stage: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  errorKind: string | null;
+  errorDetail: string | null;
+  title: string | null;
+  libraryId: string | null;
+  documentId: string | null;
+  versionId: string | null;
+}
+
+/** A profile warning raised against the version this run produced.
+ *
+ *  The row carries no kind, so a reader cannot tell a plain collision from the
+ *  heading disagreement that withholds activation — that distinction lives only
+ *  on the Temporal payload today, and the pane must not imply otherwise. */
+export interface AuditWarning {
+  profileId: string | null;
+  collidesWith: string | null;
+  similarity: number | null;
+  detail: string | null;
+}
+
+export interface RunAudit {
+  run: AuditRun;
+  stages: AuditStage[];
+  totals: Omit<AuditCost, "entries">;
+  warnings: AuditWarning[];
+}
+
+/** One line of the raw workflow history.
+ *
+ *  `attempt` appears from the second try onward, which is the whole reason this
+ *  panel exists: a retry is invisible in every other view. */
+export interface RunEvent {
+  id: number;
+  at: string;
+  kind: string;
+  activity: string | null;
+  attempt: number | null;
+  detail: string | null;
+}
+
+/** The raw history, or an honest statement that there is none to be had.
+ *
+ *  `available: false` means Temporal has forgotten this run, which is ordinary
+ *  past the retention period. Deliberately not the same as an empty `events`:
+ *  "the history aged out" and "this run did nothing" must not render alike. */
+export interface RunEventPage {
+  available: boolean;
+  truncated: boolean;
+  events: RunEvent[];
+}
+
+/** Which filters the queue accepts. Every one optional; all are strings on the
+ *  wire because the Rust side assembles the query, so the webview cannot invent
+ *  a parameter the control plane will silently ignore. */
+export interface RunsQuery extends Record<string, unknown> {
+  limit?: number;
+  before?: string;
+  kinds?: string;
+  states?: string;
+  libraryId?: string;
+  documentId?: string;
+  versionId?: string;
+}
+
 export interface ChunkKindCount {
   kind: string;
   count: number;
@@ -967,6 +1118,17 @@ export const api = {
   /** Stop a run that is already spending. The counterpart of `ingestApprove`:
    *  a spend gate that can only be opened is half a gate. */
   cancelRun: (workflowId: string) => invoke<void>("cancel_run", { workflowId }),
+  /** The persistent queue. Catalog only, so it answers with Temporal down —
+   *  which is what lets the Import screen show a queue rather than an error
+   *  panel while the worker restarts. */
+  runsList: (query: RunsQuery = {}) => invoke<RunListPage>("runs_list", query),
+  /** What a run did, stage by stage. Answers for a run Temporal has forgotten,
+   *  which is every run past the retention period — and which is exactly when
+   *  somebody goes looking. */
+  runAudit: (workflowId: string) => invoke<RunAudit>("run_audit", { workflowId }),
+  /** The raw workflow history. Fetched only when somebody expands the panel:
+   *  it is the one call here that can genuinely be slow. */
+  runEvents: (workflowId: string) => invoke<RunEventPage>("run_events", { workflowId }),
   /** Which libraries exist. Free, and what every screen needs before it can
    *  ask anything: a library id is not something a person can be expected to
    *  type from memory. */

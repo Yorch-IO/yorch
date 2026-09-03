@@ -61,15 +61,26 @@ beforeEach(async () => {
   ingestStart.mockResolvedValue({ workflowId: "ingest-1", state: "running" });
 });
 
-const t = (key: string): string => i18n.t(key);
+const t = (key: string, options?: Record<string, unknown>): string =>
+  i18n.t(key, options ?? {});
 const buttons = (c: HTMLElement) => Array.from(c.querySelectorAll("button"));
-const chooser = (c: HTMLElement) => buttons(c)[0] as HTMLButtonElement;
-/** By its text, not by position: an error panel renders its own Dismiss button
- *  below this one, so "the last button" stops being Preview exactly in the test
- *  that needs it most. */
+/** Every button here is found by its text, never by position.
+ *
+ *  Position stopped working when the screen became a queue: each chosen file
+ *  carries its own "remove" link inside the drop zone, and an error panel
+ *  renders a Dismiss below the one being looked for — so "the first button" and
+ *  "the last button" both drift exactly in the tests that need them most. */
+const byText = (c: HTMLElement, ...texts: string[]) =>
+  buttons(c).find((b) => texts.includes(b.textContent ?? "")) as HTMLButtonElement;
+const chooser = (c: HTMLElement) =>
+  byText(c, t("import.choose"), t("import.chooseMore"), t("import.picking"));
 const preview = (c: HTMLElement) =>
   buttons(c).find(
-    (b) => b.textContent === t("import.start") || b.textContent === t("import.working"),
+    (b) =>
+      b.textContent === t("import.working") ||
+      b.textContent?.startsWith(
+        t("import.startBatch", { count: 0 }).split("0")[0] ?? "",
+      ),
   ) as HTMLButtonElement;
 
 describe("choosing a file to import", () => {
@@ -146,6 +157,65 @@ describe("choosing a file to import", () => {
     await waitFor(() => expect(container.querySelector(".error")).not.toBeNull());
     expect(preview(container).disabled).toBe(true);
     expect(stageSource).not.toHaveBeenCalled();
+  });
+
+  it("keeps every file chosen, rather than the first and a count of the rest", async () => {
+    // It used to keep `[first]` and report the others as ignored, because one
+    // screen held one run. Enqueuing is starting a *free* workflow that parks at
+    // its own gate, so five books are five imports approved one at a time.
+    pickSource.mockResolvedValueOnce("/home/a/libros/uno.pdf");
+    const { container } = render(<ImportScreen />);
+    fireEvent.click(chooser(container));
+    await waitFor(() => expect(container.textContent).toContain("uno.pdf"));
+
+    pickSource.mockResolvedValueOnce("/home/a/libros/dos.pdf");
+    fireEvent.click(chooser(container));
+    await waitFor(() => expect(container.textContent).toContain("dos.pdf"));
+    expect(container.textContent).toContain("uno.pdf");
+  });
+
+  it("does not queue the same file twice", async () => {
+    // Two runs over one file would both be billed, and choosing it twice is a
+    // slip rather than a request.
+    pickSource.mockResolvedValue("/home/a/libros/uno.pdf");
+    const { container } = render(<ImportScreen />);
+    fireEvent.click(chooser(container));
+    await waitFor(() => expect(container.textContent).toContain("uno.pdf"));
+    fireEvent.click(chooser(container));
+    await waitFor(() => expect(pickSource).toHaveBeenCalledTimes(2));
+
+    const shown = container.querySelectorAll(".chosen-files li");
+    expect(shown.length).toBe(1);
+  });
+
+  it("starts one run per file, and keeps going past one that is refused", async () => {
+    // A batch is not all-or-nothing: refusing four good books because the fifth
+    // is a `.pptx` throws away work that was fine.
+    pickSource.mockResolvedValueOnce("/home/a/libros/uno.pdf");
+    stageSource.mockResolvedValue({
+      sourcePath: "/workspace/inbox/x.pdf",
+      sourceKey: "x.pdf",
+      byteSize: 1,
+    });
+    const { container } = render(<ImportScreen />);
+    fireEvent.click(chooser(container));
+    await waitFor(() => expect(container.textContent).toContain("uno.pdf"));
+    pickSource.mockResolvedValueOnce("/home/a/libros/dos.pptx");
+    fireEvent.click(chooser(container));
+    await waitFor(() => expect(container.textContent).toContain("dos.pptx"));
+
+    ingestStart
+      .mockResolvedValueOnce({ workflowId: "ingest-1", state: "running" })
+      .mockRejectedValueOnce({ kind: "unsupported_format", message: "pptx no" });
+
+    fireEvent.click(preview(container));
+    await waitFor(() => expect(ingestStart).toHaveBeenCalledTimes(2));
+
+    // The one that worked leaves the chooser; the one that did not stays put,
+    // beside the reason, so it can be removed or retried without re-picking.
+    await waitFor(() => expect(container.textContent).not.toContain("uno.pdf"));
+    expect(container.textContent).toContain("dos.pptx");
+    expect(container.textContent).toContain("pptx no");
   });
 
   it("renders without drag and drop rather than failing without a webview", () => {

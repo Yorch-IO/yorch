@@ -25,7 +25,8 @@ use control::{
     Activation, Approval, Auth, AskProgress, AskStarted, ChunkContext, ConceptClaims, Control,
     DocumentDetail,
     GateReport, Health, IngestRequest, Libraries, Library, LibraryGraph, Outline, PingResult,
-    ProjectSummary, Question, RebuildReport, RelatedDocuments, Removal, SectionChunks,
+    ProjectSummary, Question, RebuildReport, RelatedDocuments, Removal, RunAudit,
+    RunEventPage, RunListPage, SectionChunks,
     RunState, StageOptions, StagedSource, StartedRun, VersionConcepts,
 };
 use error::{AppError, Result};
@@ -626,6 +627,78 @@ async fn run_status(state: State<'_, AppState>, workflow_id: String) -> Result<R
     control.run_status(&workflow_id).await
 }
 
+/// The persistent queue.
+///
+/// Every filter is optional and assembled here rather than in the webview, so
+/// the query string has one owner and a screen cannot invent a parameter the
+/// control plane will silently ignore.
+#[tauri::command]
+async fn runs_list(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+    before: Option<String>,
+    kinds: Option<String>,
+    states: Option<String>,
+    library_id: Option<String>,
+    document_id: Option<String>,
+    version_id: Option<String>,
+) -> Result<RunListPage> {
+    let mut query: Vec<String> = Vec::new();
+    if let Some(n) = limit {
+        query.push(format!("limit={n}"));
+    }
+    for (key, value) in [
+        ("before", before),
+        ("kinds", kinds),
+        ("states", states),
+        ("library_id", library_id),
+        ("document_id", document_id),
+        ("version_id", version_id),
+    ] {
+        if let Some(v) = value.filter(|v| !v.is_empty()) {
+            query.push(format!("{key}={}", percent_encode(&v)));
+        }
+    }
+    let control = state.control().await?;
+    control.runs(&query.join("&")).await
+}
+
+/// Percent-encode a query value, hand-written rather than pulled in.
+///
+/// Twenty characters of logic with no way to be subtly wrong, which is the same
+/// test `sha2` failed and base64url passed elsewhere in this crate. It matters
+/// for exactly one value and would be easy to skip: the queue's cursor is
+/// `{ISO timestamp}|{run id}`, and an unencoded `+` in `…+00:00` is decoded by
+/// the server as a **space** — so the cursor parses as an invalid date, the
+/// route falls back to the first page, and the queue silently pages forever
+/// over the same rows.
+fn percent_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// What a run did, stage by stage. Answers for a run Temporal has forgotten.
+#[tauri::command]
+async fn run_audit(state: State<'_, AppState>, workflow_id: String) -> Result<RunAudit> {
+    let control = state.control().await?;
+    control.run_audit(&workflow_id).await
+}
+
+/// The raw workflow history, fetched only when somebody expands the panel.
+#[tauri::command]
+async fn run_events(state: State<'_, AppState>, workflow_id: String) -> Result<RunEventPage> {
+    let control = state.control().await?;
+    control.run_events(&workflow_id).await
+}
+
 #[tauri::command]
 async fn ingest_approve(
     state: State<'_, AppState>,
@@ -944,6 +1017,9 @@ pub fn run() {
             document_reindex,
             document_rebuild,
             rebuild_gate,
+            runs_list,
+            run_audit,
+            run_events,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Company Brain");

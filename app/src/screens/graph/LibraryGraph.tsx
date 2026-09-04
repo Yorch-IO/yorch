@@ -21,6 +21,13 @@ import {
   THRESHOLDS,
 } from "../../lib/graphModel";
 import { useLibraryGraph } from "../../lib/libraryGraphStore";
+import {
+  placeRegionLabels,
+  REGION,
+  type LabelNode,
+  type RegionLabel,
+} from "../../lib/regionLabels";
+import { measureText } from "../../lib/textMetrics";
 import { chooseLayout, useAtlas } from "../../lib/useAtlas";
 import { useEdgeCanvas } from "../../lib/useEdgeCanvas";
 import { useLayoutTween } from "../../lib/useLayoutTween";
@@ -82,6 +89,37 @@ const CLUSTER_NAME_PARTS = 2;
 /** Below this many drawn nodes a group gets no name on the canvas: a name
  *  floating over two dots labels nothing and crowds whatever is beside it. */
 const CLUSTER_MARK_MIN = 6;
+
+/** Longest a single line of a group's name may be. At `REGION.FONT` that is
+ *  about 300 user units of a 1200-unit canvas, which is as wide a box as the
+ *  placement can be asked to fit ten times over. */
+const REGION_CHARS = 22;
+
+/** Half the halo's `stroke-width` in `styles.css`, which paints outside the
+ *  glyphs on every side. Reserved on the **width** only: `REGION.LINE_H` is 28
+ *  for a 24px face, so the leading already carries 2 units above and below,
+ *  and padding the height as well would make the placement's own
+ *  `h / lines.length` disagree with the `dy` the second line renders at. */
+const REGION_STROKE = 2;
+
+/** The rendered footprint of a wrapped group name, in font units — the caller
+ *  divides by zoom, because the label carries `scale(1 / zoom)`.
+ *
+ *  Measured rather than estimated wherever a 2D context exists: a placement
+ *  decided by a character count would reserve the same box for `Roma` and for
+ *  `Tomás de Aquino`, and the box is the thing being fitted into a gap. */
+function regionFootprint(lines: readonly string[]): { w: number; h: number } {
+  let w = 0;
+  for (const line of lines) {
+    const measured = measureText(line, {
+      size: REGION.FONT,
+      weight: 600,
+      letterSpacing: 0.02,
+    });
+    if (measured > w) w = measured;
+  }
+  return { w: w + REGION_STROKE * 2, h: lines.length * REGION.LINE_H };
+}
 
 type Selection =
   | { kind: "doc"; id: string }
@@ -332,7 +370,12 @@ export function LibraryGraph({
    *  Two, because one ("Roma") reads as a single node's label and three stops
    *  fitting a legend row. Degree is the right rank: it is the number of books
    *  that mention the concept, so the name is what the group is *about across
-   *  the library*, not what one verbose book repeats. */
+   *  the library*, not what one verbose book repeats.
+   *
+   *  **The parts are kept apart rather than joined**, because the canvas wraps
+   *  them onto one line each — a name placed outside its group has to be about
+   *  as tall as it is wide to find room at all — while the legend, which has a
+   *  row to itself, still reads them as one string. */
   const clusterNames = useMemo(() => {
     if (index === null || clustering === null) return [];
     const best: { label: string; degree: number }[][] = Array.from(
@@ -350,42 +393,75 @@ export function LibraryGraph({
       row
         .sort((a, b) => (b.degree !== a.degree ? b.degree - a.degree : a.label.localeCompare(b.label)))
         .slice(0, CLUSTER_NAME_PARTS)
-        .map((c) => c.label)
-        .join(" · "),
+        .map((c) => c.label),
     );
   }, [index, clustering]);
 
-  /** Where to write each group's name on the canvas: the middle of what is
-   *  *drawn* of it, so the name follows the filters rather than pointing at
-   *  concepts a checkbox removed. A group with only a couple of nodes left
-   *  gets none — a name floating over two dots labels nothing. */
+  /** Where to write each group's name: **outside** the group, at the closest
+   *  clear patch to its own boundary.
+   *
+   *  It used to go at the centroid of what was drawn of the group, under the
+   *  nodes and behind a halo — which is a mitigation rather than a placement.
+   *  The name stayed interleaved with the concepts it describes, and at the old
+   *  44px it was wide enough to reach into the neighbouring region as well.
+   *  `regionLabels.ts` holds the algorithm and the reasoning; what is done here
+   *  is the two things it cannot know.
+   *
+   *  **The radii are converted, and only one of them.** A concept carries
+   *  `scale(1 / zoom)` and a book does not, so at zoom 2 a concept occupies
+   *  half the layout units it did and a book occupies the same. The label
+   *  divides for the same reason. That is also why `zoom` is a dependency: the
+   *  footprints being fitted are zoom-dependent, so the solve is. Pan is not —
+   *  it translates everything at once.
+   *
+   *  A group with fewer than `CLUSTER_MARK_MIN` nodes drawn still gets no name
+   *  at all: a name floating beside two dots labels nothing. */
   const clusterMarks = useMemo(() => {
     if (layout === null || clustering === null) return [];
-    const sums = new Map<number, { x: number; y: number; n: number }>();
+
+    const counts = new Map<number, number>();
+    const nodes: LabelNode[] = [];
     for (const p of layout) {
-      const c = clustering.cluster[p.index] as number;
-      if (c === undefined || c < 0) continue;
-      const at = sums.get(c);
-      if (at === undefined) sums.set(c, { x: p.x, y: p.y, n: 1 });
-      else {
-        at.x += p.x;
-        at.y += p.y;
-        at.n += 1;
-      }
+      const c = clustering.cluster[p.index];
+      const cluster = c === undefined || c < 0 ? -1 : c;
+      if (cluster >= 0) counts.set(cluster, (counts.get(cluster) ?? 0) + 1);
+      nodes.push({
+        x: p.x,
+        y: p.y,
+        r: p.kind === "concept" ? p.r / zoom : p.r,
+        cluster,
+      });
     }
-    const marks: { cluster: number; x: number; y: number; label: string }[] = [];
-    for (const [c, at] of sums) {
-      if (at.n < CLUSTER_MARK_MIN) continue;
-      const label = clusterNames[c];
-      if (label === undefined || label === "") continue;
-      marks.push({ cluster: c, x: at.x / at.n, y: at.y / at.n, label });
+
+    const labels: RegionLabel[] = [];
+    for (const [c, n] of counts) {
+      if (n < CLUSTER_MARK_MIN) continue;
+      const lines = (clusterNames[c] ?? [])
+        .filter((part) => part !== "")
+        .map((part) => truncate(part, REGION_CHARS));
+      if (lines.length === 0) continue;
+      const { w, h } = regionFootprint(lines);
+      labels.push({ cluster: c, lines, w: w / zoom, h: h / zoom });
     }
-    // Largest last, so the biggest group's name is the one on top where two
-    // regions overlap.
-    return marks.sort(
-      (a, b) => (sums.get(a.cluster)?.n ?? 0) - (sums.get(b.cluster)?.n ?? 0),
+    if (labels.length === 0) return [];
+
+    const placed = placeRegionLabels({
+      nodes,
+      labels,
+      // The whole viewBox, which is wider than anything the layout occupies:
+      // `ATLAS_VIEW.MARGIN` leaves a ring nothing is laid out in, and that ring
+      // is where most of these land.
+      bounds: { x1: 0, y1: 0, x2: ATLAS_VIEW.W, y2: ATLAS_VIEW.H },
+    });
+
+    // Largest last. Placement already solved largest *first* — the big regions
+    // get the best ground — and these are two different orders on purpose: this
+    // one only decides which name is on top in the crowded fallback, which is
+    // the one case two of them can still meet.
+    return placed.sort(
+      (a, b) => (counts.get(a.cluster) ?? 0) - (counts.get(b.cluster) ?? 0),
     );
-  }, [layout, clustering, clusterNames]);
+  }, [layout, clustering, clusterNames, zoom]);
 
   const clusterSlot = useCallback(
     (nodeIndex: number): number | null => {
@@ -423,7 +499,10 @@ export function LibraryGraph({
         slot,
         label: ids
           .map((id) =>
-            t("graph.clusterNamed", { name: clusterNames[id] ?? "", count: sizeOf[id] }),
+            t("graph.clusterNamed", {
+              name: (clusterNames[id] ?? []).join(" · "),
+              count: sizeOf[id],
+            }),
           )
           .join(", "),
       }));
@@ -880,29 +959,56 @@ export function LibraryGraph({
                     is 17,814 elements that no longer exist. Paint order is
                     still a contract; it is a stacking order now. */}
 
-                {/* Each group's name, written across the middle of the region
-                    the simulation pulled it into. **First, so it sits under
-                    every node** — this is a map's region label, not a node's
-                    own: it names ground rather than a thing, and a reader
-                    chasing a concept must never have a word of it hidden
-                    behind this. Inverse-scaled like the concepts, so zooming
-                    in does not turn it into a wall of letters, and inert to
-                    the pointer so it cannot swallow a click meant for a node
-                    underneath. */}
+                {/* Each group's name, beside the region the simulation pulled
+                    it into rather than across it. **Still first, so it sits
+                    under every node** — which now matters only in the crowded
+                    fallback, the one case a name can still meet a concept, and
+                    there the node should win because the node is the data.
+                    Inverse-scaled like the concepts, so zooming in does not
+                    turn it into a wall of letters, and inert to the pointer so
+                    it cannot swallow a click meant for a node.
+
+                    The leader is drawn in layout units, not inverse-scaled:
+                    it is a line between two places in the picture, so it has
+                    to stretch with the picture. `non-scaling-stroke` is what
+                    keeps it a hairline while it does. */}
                 <g className="graph-regions" aria-hidden="true">
-                  {clusterMarks.map((mark) => (
-                    <text
-                      key={mark.cluster}
-                      className={`region-label type-${mark.cluster % TYPE_PALETTE_SIZE}`}
-                      x={0}
-                      y={0}
-                      transform={`translate(${mark.x} ${mark.y}) scale(${1 / zoom})`}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                    >
-                      {mark.label}
-                    </text>
-                  ))}
+                  {clusterMarks.map((mark) => {
+                    const slot = mark.cluster % TYPE_PALETTE_SIZE;
+                    // The point on the label's own box nearest its cluster, so
+                    // the leader ends at the name rather than at its anchor —
+                    // which for a right-hand label is its far edge.
+                    const endX = Math.min(Math.max(mark.fromX, mark.box.x1), mark.box.x2);
+                    const endY = Math.min(Math.max(mark.fromY, mark.box.y1), mark.box.y2);
+                    return (
+                      <g key={mark.cluster}>
+                        {mark.pushed > REGION.LEADER_AFTER && (
+                          <line
+                            className={`region-leader type-${slot}`}
+                            x1={mark.fromX}
+                            y1={mark.fromY}
+                            x2={endX}
+                            y2={endY}
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        )}
+                        <text
+                          className={`region-label type-${slot}`}
+                          x={0}
+                          y={0}
+                          transform={`translate(${mark.x} ${mark.y}) scale(${1 / zoom})`}
+                          textAnchor={mark.anchor}
+                          dominantBaseline="middle"
+                        >
+                          {mark.lines.map((line, i) => (
+                            <tspan key={`${i}-${line}`} x={0} dy={i === 0 ? 0 : REGION.LINE_H}>
+                              {line}
+                            </tspan>
+                          ))}
+                        </text>
+                      </g>
+                    );
+                  })}
                 </g>
 
                 {layout.filter((p) => p.kind === "doc").map((p) => {

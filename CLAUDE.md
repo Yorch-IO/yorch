@@ -1683,6 +1683,61 @@ runs in `useLayoutEffect`: React has already rendered the new coordinates by the
 time an effect runs, and a passive one runs *after* paint, so the picture would
 jump to the destination and then animate back from where it used to be.
 
+### A group's name goes beside its region, not across it
+
+Added 2026-09-04. The name was written at the centroid of the cluster's own
+drawn nodes, under them and behind a halo — a mitigation rather than a
+placement, since the words stayed interleaved with the dots they describe.
+`regionLabels.ts` places it outside instead, at the closest clear patch to the
+cluster's own boundary, and is pure for the reason `force.ts` and `radial.ts`
+are: jsdom lays out no SVG, so a rendered test can prove a `<text>` exists and
+nothing about where it landed.
+
+- **The type size decided whether this was possible at all.** A two-concept name
+  at the old 44px is about **540 user units of a 1200-unit canvas — 45% of the
+  width**, and ten of those cannot be placed outside ten clusters by any
+  algorithm. 24px with one concept per line is 126-261 units, which is what
+  makes the problem solvable. The size never depended on cluster size and still
+  does not.
+- **Two occupancy tests, because each is blind where the other sees.** A uniform
+  grid over the drawn nodes answers "is this patch taken", which is also what
+  intruding on another group amounts to — being among its concepts. The convex
+  hulls answer the case the grid cannot: the sparse middle of a spread-out
+  group, where a name sits in clear air and still reads as belonging to the
+  wrong region. Measured, the hull test moves **one sample point of 450** on a
+  library of dense blobs, and is the whole answer on a ring — 218 units of push
+  with it, 26 and sitting in the hollow without. `hideIsolated` and `onlyBook`
+  are what produce rings out of blobs.
+- **`ATLAS_VIEW.MARGIN` is the gutter, and 80 is measured against 120 guessed.**
+  `fit` preserves aspect, so a fitted cloud touches the margin on its binding
+  axis and has slack on the other — and a name can always go to the slack side.
+  The gutter therefore decides nothing except for a cloud already at 1200:820,
+  where both axes are tight. At that aspect, on 73 books and 900 concepts:
+  margin 40 crowds **4 of 10** names, 80 crowds none, and 120 crowds none while
+  costing **21.6% of the drawn picture** against 40. The same library at its own
+  roughly circular shape crowds nothing even at 40. So the constant covers the
+  worst shape at the smallest price, and the crowded fallback — never a bigger
+  number — is what covers a corpus worse than either.
+- **A name is never dropped.** When no clear patch exists the least-bad
+  candidate is taken and flagged `crowded`, which is the one case two names can
+  still meet — and the only reason the paint order (largest last) still matters
+  now that the solve order is largest first. Two orders, on purpose.
+- **The footprint is measured, not counted.** `Roma` and `Tomás de Aquino` need
+  different clearances, so `textMetrics.ts` asks a 2D context and falls back to
+  `radial.ts`'s character ratio where there is none — jsdom, or a webview built
+  without one. Measured against Chrome on twenty real concept names at
+  `600 24px`: **mean real/estimate 0.983**, so the estimate over-reserves
+  slightly, with a worst case of 1.27x on `Roma` — four wide glyphs against an
+  average. Nothing in the product decides on the estimate; a window measures.
+- **The solve is zoom-dependent and pan-independent.** A region label carries
+  `scale(1 / zoom)`, so its footprint in layout units is `measured / zoom` and
+  "no overlap" is a different problem at every zoom — which is also why this
+  cannot live in the atlas worker beside the clustering it names. Pan is a pure
+  translation and re-solves nothing. Measured on 10 labels: **6 ms at 467 nodes,
+  2 ms at 3,067 and 5 ms at 12,867**, because each ray stops at its first clear
+  distance and every grid query is local. What it scales with is the number of
+  names, which is `CLUSTER_TARGET`.
+
 ### Three defects a screenshot found and no assertion could
 
 The recipe in *The Graph screen is the exception* was run again on 2026-09-01 for

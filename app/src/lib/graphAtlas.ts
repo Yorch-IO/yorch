@@ -53,8 +53,34 @@ import { DEFAULT_THRESHOLD, THRESHOLDS } from "./graphModel";
  */
 
 /** The coordinate space every layout is fitted into. Pan and zoom compose on
- *  top, so this is not a viewport. */
-export const ATLAS_VIEW = { W: 1200, H: 820, MARGIN: 40 } as const;
+ *  top, so this is not a viewport.
+ *
+ *  **`MARGIN` is 80, not the 40 it was, and the extra 40 is a gutter rather
+ *  than padding**: a ring of canvas nothing is laid out in, which is where
+ *  `regionLabels.ts` puts a group's name. `fit` already subtracts it from both
+ *  axes before scaling, so this is one constant rather than a wider viewBox —
+ *  which is what keeps `fitBox`, `clientToView`, `panBy` and `useEdgeCanvas`
+ *  untouched, since they all map the viewBox and the viewBox has not moved.
+ *
+ *  **80 is measured, and the first guess was 120.** `fit` preserves aspect, so
+ *  a fitted cloud touches the margin on its binding axis and has slack on the
+ *  other — and a label can always go to the slack side. The gutter therefore
+ *  only decides anything for a cloud whose own aspect is already 1200:820,
+ *  where both axes are tight. Measured on a synthetic library of 73 books and
+ *  900 concepts in ten groups, at that aspect:
+ *
+ *  | margin | scale | crowded of 10 | longest push |
+ *  |---|---|---|---|
+ *  | 40 | 1.079 | **4** | 266 |
+ *  | 80 | 0.962 | 0 | 242 |
+ *  | 120 | 0.845 | 0 | 182 |
+ *
+ *  So 40 is not enough and 120 costs 21.6% of the drawn picture to buy
+ *  headroom over a threshold that sits at 80. The same library at its *own*
+ *  roughly circular shape crowds nothing even at 40, which is why this is
+ *  about the worst case rather than the usual one — and why the crowded
+ *  fallback, not a larger number, is what covers a corpus worse than either. */
+export const ATLAS_VIEW = { W: 1200, H: 820, MARGIN: 80 } as const;
 
 /** The widest threshold — every node of the envelope, and the only layout that
  *  has a position for all of them. Computed last: it is the most expensive by

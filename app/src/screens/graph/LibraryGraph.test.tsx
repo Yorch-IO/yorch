@@ -6,6 +6,7 @@ import type { LibraryGraph as Data } from "../../lib/api";
 import { BackendProvider } from "../../lib/backend";
 import { LibrariesProvider } from "../../lib/libraries";
 import { THRESHOLDS } from "../../lib/graphModel";
+import { REGION } from "../../lib/regionLabels";
 import { clearGraphCache } from "../../lib/libraryGraphStore";
 import { LibraryGraph } from "./LibraryGraph";
 
@@ -719,6 +720,66 @@ describe("the accessible list", () => {
     const legend = within(document.querySelector(".graph-type-legend") as HTMLElement);
     expect(legend.getByText(t("graph.clusterNamed", { name: "Gracia", count: 1 }))).toBeTruthy();
     expect(legend.getByText(t("graph.clusterNamed", { name: "Concilio", count: 1 }))).toBeTruthy();
+  });
+
+  it("writes a group's name beside it, wrapped, with the anchor it was placed at", async () => {
+    // Twenty concepts both books mention. Fewer does not work and the reason
+    // is worth knowing: Louvain at `RESOLUTION` makes singletons of a tiny
+    // complete bipartite graph, and the merge cap is
+    // `ceil(concepts / 10 * SIZE_SLACK)`, which is **1** below about nine
+    // concepts — so no merge is legal and every group stays under
+    // `CLUSTER_MARK_MIN`. At twenty, Louvain itself finds a group of ten.
+    libraryGraph.mockResolvedValue(
+      data({
+        concepts: Array.from({ length: 20 }, (_, i) => ({
+          id: `con_${i}`,
+          name: `Concepto ${i}`,
+          conceptType: null,
+          mentions: 20 - i,
+          documents: 3 + (i % 4),
+        })),
+        edges: Array.from({ length: 20 }, (_, i) => [
+          { versionId: "ver_1", conceptId: `con_${i}`, mentions: 7, confidence: 0.9 },
+          { versionId: "ver_2", conceptId: `con_${i}`, mentions: 3, confidence: 0.8 },
+        ]).flat(),
+      }),
+    );
+    await mounted();
+    const regions = document.querySelector(".graph-canvas .graph-regions") as SVGGElement;
+    const label = regions.querySelector("text.region-label") as SVGTextElement;
+    expect(label).not.toBeNull();
+
+    // Two concepts, one line each — a name placed outside its group has to be
+    // about as tall as it is wide to find room at all.
+    const tspans = [...label.querySelectorAll("tspan")];
+    expect(tspans).toHaveLength(2);
+    expect(tspans.every((n) => (n.textContent ?? "") !== "")).toBe(true);
+    // The second line hangs off the first by the leading the placement
+    // reserved, or the box that was fitted is not the box that renders.
+    expect(tspans[1]?.getAttribute("dy")).toBe(String(REGION.LINE_H));
+
+    // The canvas and the legend name the same group the same way. They are one
+    // `clusterNames`, and this is what stops the wrap turning into a second
+    // wording that only the canvas has.
+    const name = tspans.map((n) => n.textContent).join(" · ");
+    const legend = document.querySelector(".graph-type-legend") as HTMLElement;
+    expect(legend.textContent ?? "").toContain(name);
+
+    // The anchor comes from the placement rather than being fixed at
+    // "middle": which side of the group the name went to decides which way
+    // the text grows, and the box was measured for that direction.
+    expect(["start", "middle", "end"]).toContain(label.getAttribute("text-anchor"));
+    expect(label.getAttribute("class")).toMatch(/region-label type-\d/);
+    expect(label.getAttribute("transform")).toMatch(
+      /^translate\(-?[\d.]+ -?[\d.]+\) scale\(1\)$/,
+    );
+
+    // No leader: this group has the whole canvas to itself, so its name sits
+    // against its own boundary and a connector would be drawing a line
+    // between two touching things. Whether one appears once the name *is*
+    // pushed is `regionLabels.test.ts`'s assertion on `pushed`, because
+    // nothing in jsdom can crowd a canvas.
+    expect(regions.querySelectorAll("line.region-leader")).toHaveLength(0);
   });
 
   it("writes each group's name across the region the layout gave it", () => {

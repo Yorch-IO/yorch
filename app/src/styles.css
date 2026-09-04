@@ -1322,25 +1322,43 @@ button.link.active {
   stroke: var(--graph-concept-stroke);
 }
 
-/* A group's name, written across the region the layout pulled it into.
+/* A group's name, beside the region the layout pulled it into.
    `pointer-events: none` on the layer rather than per label: it sits under
    every node, and without this a name lying across a concept would swallow
    the click meant for it. Larger and dimmer than a node's own label, the way
    a map names a country — the reader should see it while scanning and look
-   past it while reading a node. */
+   past it while reading a node.
+
+   **24px, not the 44px this shipped at.** A two-concept name at 44px is about
+   540 user units of a 1200-unit canvas — 45% of the width — and ten of those
+   cannot be placed outside ten clusters by any algorithm. Halving the type and
+   wrapping it onto one line per concept is what makes the placement in
+   `regionLabels.ts` solvable. `REGION.FONT` and `REGION.LINE_H` must match the
+   two values below, the same contract `radial.ts`'s `LABEL.FONT` carries. */
 .graph-canvas .graph-regions {
   pointer-events: none;
 }
 
 .graph-canvas .region-label {
-  font-size: 44px;
+  font-size: 24px;
   font-weight: 600;
   letter-spacing: 0.02em;
   opacity: 0.5;
   paint-order: stroke fill;
   stroke: var(--graph-halo);
-  stroke-width: 6;
+  /* Half of this paints outside the glyphs on every side, which is the
+     `REGION_STROKE` the footprint reserves. */
+  stroke-width: 4;
   stroke-linejoin: round;
+}
+
+/* Drawn only when the name had to be pushed well past its own boundary, where
+   colour alone stops carrying the association. Dimmer than an edge, so it
+   reads as an annotation rather than as a relation somebody extracted. */
+.graph-canvas .region-leader {
+  fill: none;
+  stroke-width: 1;
+  opacity: 0.35;
 }
 
 .graph-canvas .region-label.type-0 { fill: var(--graph-type-0); }
@@ -1353,6 +1371,17 @@ button.link.active {
 .graph-canvas .region-label.type-7 { fill: var(--graph-type-7); }
 .graph-canvas .region-label.type-8 { fill: var(--graph-type-8); }
 .graph-canvas .region-label.type-9 { fill: var(--graph-type-9); }
+
+.graph-canvas .region-leader.type-0 { stroke: var(--graph-type-0); }
+.graph-canvas .region-leader.type-1 { stroke: var(--graph-type-1); }
+.graph-canvas .region-leader.type-2 { stroke: var(--graph-type-2); }
+.graph-canvas .region-leader.type-3 { stroke: var(--graph-type-3); }
+.graph-canvas .region-leader.type-4 { stroke: var(--graph-type-4); }
+.graph-canvas .region-leader.type-5 { stroke: var(--graph-type-5); }
+.graph-canvas .region-leader.type-6 { stroke: var(--graph-type-6); }
+.graph-canvas .region-leader.type-7 { stroke: var(--graph-type-7); }
+.graph-canvas .region-leader.type-8 { stroke: var(--graph-type-8); }
+.graph-canvas .region-leader.type-9 { stroke: var(--graph-type-9); }
 
 /* A typed concept's colour, generated for the eight `type-N` classes
    LibraryGraph.tsx assigns from `conceptTypeOrder`. Declared after the

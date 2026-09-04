@@ -210,9 +210,14 @@ class TestEffectiveStyleLevel:
         surface `answer._verify` cannot check. Stepping down removes the
         occasion rather than forbidding it in wording the model may not honour.
         """
-        assert effective_style_level("thorough", 5) == "brief"
-        assert effective_style_level("thorough", 8) == "standard"
-        assert effective_style_level("thorough", 16) == "thorough"
+        # Written against the table rather than against literals: the widths
+        # move when the ladder is re-measured, and a hardcoded 16 quietly became
+        # "one below standard" the day `thorough` went to 48.
+        brief, standard, thorough = (BUDGETS[n] for n in EFFORT_LEVELS)
+        assert effective_style_level("thorough", brief.top_k + 1) == "brief"
+        assert effective_style_level("thorough", standard.top_k) == "standard"
+        assert effective_style_level("thorough", thorough.top_k) == "thorough"
+        assert effective_style_level("thorough", thorough.top_k - 1) == "standard"
 
     def test_it_only_ever_narrows(self):
         """Receiving sixteen chunks is not a reason to write an essay somebody

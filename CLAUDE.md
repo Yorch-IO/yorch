@@ -513,6 +513,36 @@ driver, so there is one owner of the schema and one set of models.
   count, for a reason that is easy to miss: `answer._verify` checks that a
   citation names a retrieved chunk and **never that a sentence is supported**,
   so "write more" enlarges the one surface nothing verifies.
+- **The citation count was measured up the curve, and the curve turns — so
+  `thorough` is 48 chunks, not the largest number the clamp allows.** Reported
+  as "only 5 citations for ¿Quién fue Jesucristo?", which turned out to be two
+  separate facts. Five *is* `standard`'s number, so the first answer was that
+  the question had not been asked at the widest level. The second is that
+  `thorough` at 16 chunks produced only 12.3 citations, and **nothing was being
+  dropped**: 0 invented, 0 without a locator, 0 duplicates — every citation the
+  model returned survived `_verify`. The ceiling was the model choosing to
+  attribute 11 or 12 of the 16 it was given, which on inspection was a *sound*
+  judgement: among the uncited were a table-of-contents line
+  (`LA DOCTRINA DE JESUCRISTO ......... 98`) and two chunks about the etymology
+  of "revelación". Forcing it to cite all 16 would have meant citing an index.
+  So the lever was evidence, not wording. Three runs per point, and the first
+  pass with one run per point had said it saturated at 24 — the spread at a
+  single setting is about ±3 citations, wide enough to invent a plateau:
+
+  | `top_k` | 16 | 24 | 32 | 48 | 64 |
+  |---|---|---|---|---|---|
+  | citations | 12.3 | 14.7 | 17.0 | **19.5** | 15.0 |
+  | USD | 0.044 | 0.060 | 0.075 | 0.079 | 0.085 |
+
+  64 is not noise — 14 and 16 against 48's 20 and 19 — and it is
+  `Question.top_k`'s own warning arriving: past some width the model reads more
+  and attributes less. `MAX_TOP_K` went 32 → 96 with it, because a clamp equal
+  to the widest level is not a backstop, it is the level's value written twice.
+  The prose does **not** lengthen (about 1,300-1,450 characters at 48 against
+  1,605 at 16): the extra evidence buys attribution density, not length. On the
+  reported question the shipped default now returns **23 citations against 5**,
+  for $0.0820 against $0.0242 — so `thorough` is about 3.4x a `standard`
+  question, which is a real per-question cost and the reason it is opt-in.
 - **The style is per organisation and editable; the rules are neither.**
   `answer_style` holds one row per (organisation, level) and **only for a level
   somebody edited**, so an absent row means "use the built-in default" — which

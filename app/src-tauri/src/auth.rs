@@ -474,13 +474,15 @@ mod tests {
 
     #[test]
     fn the_config_the_paid_plane_actually_returns_deserialises() {
-        // Byte-for-byte what `GET /auth/config` answered on 2026-08-29, keys
-        // and all. `AuthConfig` carries no `rename_all`, so the plane must emit
-        // snake_case — and a DTO defaulting to camelCase would not fail here,
-        // it would yield empty strings and an authorize URL reading
-        // `https:///oauth2/authorize`, which is a 30-second mystery at the one
-        // moment the user is trying to sign in.
-        let body = r#"{"hosted_ui_domain":"yorch-brain-auth.auth.us-west-2.amazoncognito.com",
+        // The body `GET /auth/config` answers, keys and all — captured
+        // 2026-08-29 and re-pointed at the vervux.com hosted-UI domain on
+        // 2026-09-04, which is the only field the cutover moved. What this test
+        // guards is the SHAPE: `AuthConfig` carries no `rename_all`, so the
+        // plane must emit snake_case — and a DTO defaulting to camelCase would
+        // not fail here, it would yield empty strings and an authorize URL
+        // reading `https:///oauth2/authorize`, which is a 30-second mystery at
+        // the one moment the user is trying to sign in.
+        let body = r#"{"hosted_ui_domain":"vervux-brain-auth.auth.us-west-2.amazoncognito.com",
             "client_id":"7ve86qhj2a1tao98op2mogija0","region":"us-west-2",
             "issuer":"https://cognito-idp.us-west-2.amazonaws.com/us-west-2_69PaEg3l8",
             "flow":"authorization_code_pkce","scopes":["openid","email","profile"]}"#;
@@ -488,7 +490,7 @@ mod tests {
         let config: AuthConfig = serde_json::from_str(body).expect("shape changed");
         assert_eq!(
             config.hosted_ui_domain,
-            "yorch-brain-auth.auth.us-west-2.amazoncognito.com"
+            "vervux-brain-auth.auth.us-west-2.amazoncognito.com"
         );
         assert_eq!(config.client_id, "7ve86qhj2a1tao98op2mogija0");
 

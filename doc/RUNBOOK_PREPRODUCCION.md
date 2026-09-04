@@ -22,7 +22,7 @@ existían; lo que no existía era la prueba de que bastan.
 |---|---|
 | Plano gratuito, `127.0.0.1:8787` | 26 rutas, las siete patas de `/health` en verde |
 | Plano de pago, `127.0.0.1:8788` | **28 rutas** = las mismas 26 + `GET /auth/config` + `POST /uploads` |
-| Grupo de Cognito | **aplicado** — `yorch-brain-auth.auth.us-west-2.amazoncognito.com`, grupo `us-west-2_69PaEg3l8` |
+| Grupo de Cognito | **aplicado** — `vervux-brain-auth.auth.us-west-2.amazoncognito.com`, grupo `us-west-2_69PaEg3l8` (el grupo no cambió con el paso a vervux.com; el dominio de hosted UI sí) |
 | Esquema del catálogo | `20260826180000_tenant_required` — sin `DEFAULT` en ninguna columna `tenant_id` |
 | Organizaciones | `legacy` (72 documentos) y `acme` (1) |
 | Inicio de sesión desde el navegador | **nunca ejecutado** |
@@ -89,7 +89,7 @@ terraform -chdir=envs/prod output -raw brain_cognito_hosted_ui_domain
 ```
 
 **Fíjate en el prefijo `brain_`.** Las salidas sin prefijo son las del panel de
-noticias: `yorch-prod-news-admins`, con su propia política de contraseñas y su
+noticias: `vervux-prod-news-admins`, con su propia política de contraseñas y su
 propia lista de usuarios. Usarlas convertiría a cada cliente de Company Brain en
 administrador del sitio de marketing.
 

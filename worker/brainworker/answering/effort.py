@@ -143,6 +143,27 @@ BUDGETS: dict[str, Budget] = {
     ),
     #: A question spanning several books.
     #:
+    #: **`top_k` is 48 because the citation count was measured up the curve, and
+    #: it turns.** It shipped at 16, which produced 12.3 verified citations on
+    #: "¿Quién fue Jesucristo?" against the real corpus. Three runs per point,
+    #: because one run per point had said this saturated at 24 and that was the
+    #: outlier — the spread at a single setting is about ±3 citations, which is
+    #: wide enough to invent a plateau that is not there:
+    #:
+    #:   16 → 12.3 citations, $0.044      32 → 17.0, $0.075
+    #:   24 → 14.7, $0.060                48 → 19.5, $0.079
+    #:                                    64 → 15.0, $0.085
+    #:
+    #: 64 is not noise — 14 and 16 against 48's 20 and 19 — and it is the
+    #: attention dilution `Question.top_k`'s own docstring warned about
+    #: arriving: past some width the model reads more and attributes less. So
+    #: the ladder stops at the measured peak rather than at the largest number
+    #: the clamp allows.
+    #:
+    #: The prose does *not* get longer with it (about 1,300-1,450 characters at
+    #: 48, against 1,605 at 16). What the extra evidence buys is attribution
+    #: density, not length, which is what was actually asked for.
+    #:
     #: Worth knowing what the wider `top_k` actually buys, because it is not
     #: only "more of the same": `_expand` truncates to `top_k` *total* and
     #: appends graph hits after vector hits, so a full vector result leaves
@@ -174,16 +195,21 @@ BUDGETS: dict[str, Budget] = {
     #: was before anything passed one — and a level that ever wants to name a
     #: budget can, with a number somebody measured.
     "thorough": Budget(
-        top_k=16,
-        candidate_limit=80,
-        prefetch_limit=100,
+        top_k=48,
+        candidate_limit=120,
+        prefetch_limit=150,
         claims_per_chunk=4,
         style=(
             "Desarrolla la respuesta: recorre cada punto distinto que los "
             "fragmentos sostengan sobre la pregunta, uno por uno, explicando "
-            "qué dice cada uno y citándolo. Si los fragmentos discrepan entre "
-            "sí, dilo y atribuye cada postura a su fragmento. Extiéndete solo "
-            "hasta donde los fragmentos den: si sostienen poco, responde poco."
+            "qué dice cada uno. Cita con amplitud: cada afirmación lleva la "
+            "cita del fragmento del que sale, y un fragmento que sostenga dos "
+            "afirmaciones distintas se cita dos veces, una por afirmación. "
+            "Recorre todos los fragmentos que digan algo sobre la pregunta, no "
+            "solo los primeros; el que no aporte nada lo omites, en vez de "
+            "forzarlo. Si los fragmentos discrepan entre sí, dilo y atribuye "
+            "cada postura a su fragmento. Extiéndete solo hasta donde los "
+            "fragmentos den: si sostienen poco, responde poco."
         ),
     ),
 }
@@ -195,8 +221,10 @@ BUDGETS: dict[str, Budget] = {
 #: rather than refused, because an over-large value is a caller asking for more
 #: than the product offers rather than one asking for something meaningless —
 #: and generous against the widest level, so the clamp is a backstop rather than
-#: a second, quieter dial.
-MAX_TOP_K = 32
+#: a second, quieter dial. It moved from 32 to 96 when `thorough` went to 48,
+#: to keep it that: a clamp equal to the widest level is not a backstop, it is
+#: the level's own value written twice.
+MAX_TOP_K = 96
 
 
 def budget_for(effort: str | None) -> Budget:

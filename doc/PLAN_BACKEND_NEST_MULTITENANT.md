@@ -28,7 +28,7 @@ Full execution plan, with the file-level detail:
 
 - **There are 26 routes, not 27.** Counted from the `@app.*` decorators in
   `worker/brainworker/api/main.py`. The 27th is FastAPI's auto-mounted `/docs`.
-- **The Cognito pool in `yorch-aws-platform` is `yorch-prod-news-admins`** — a
+- **The Cognito pool in `yorch-aws-platform` is `vervux-prod-news-admins`** — a
   news admin panel's pool, one app client, no groups, `admin_create_user_only`.
   Reusing it would make every Company Brain customer a news admin, and would
   couple two products' password policy, MFA settings and user list. A dedicated

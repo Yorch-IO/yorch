@@ -558,14 +558,30 @@ driver, so there is one owner of the schema and one set of models.
   it). The length cap is a *field constraint* on both planes rather than a
   hand-raised error, so both answer an oversized body with FastAPI's own
   422-with-a-list, the same decision as `Question.effort`'s `Literal`.
-- **Thin evidence steps the *style* down, never the search.** By the time the
-  evidence count is known it has been retrieved and paid for, so what narrows is
-  how developed the answer is. `effective_style_level` picks the widest level
-  whose own `top_k` the evidence actually reached and **never above the level
-  asked for**: `thorough` that retrieved 5 chunks answers in `brief`'s voice.
-  Verified live — 5 chunks, 359 characters instead of 1719, no padding. This is
-  the design answer to the surface `_verify` cannot check: remove the occasion
-  to pad rather than forbid it in wording the model may or may not honour.
+- **Thin evidence steps the *style* down, never the search — and the obvious
+  signal for "thin" is inert.** By the time the count is known the evidence has
+  been retrieved and paid for, so what narrows is how developed the answer is.
+  The first rule keyed on how many chunks reached the prompt, and measurement
+  killed it: **every on-corpus question fills the width it asked for, however
+  narrow**, because the fused RRF output carries no score floor (invariant #8).
+  "¿Qué dice el texto sobre el Cireneo?" was handed all 48. The only thing below
+  the width was `off_corpus`, where there is no answer to style anyway.
+  What discriminates is how many cleared the **dense** floor, which the
+  topicality gate was already computing and throwing away — so `search` runs
+  that probe at full width instead of `limit=1`, same round trip and no tokens,
+  and reports the count. Measured: 48 of 48 for "¿Quién fue Jesucristo?", 27 for
+  "apokalypsis", **3** for "el Cireneo".
+  **It steps down only when that is drastically thin** — below the narrowest
+  level's own `top_k` — never on a sliding scale, and the measurement is what
+  settles that rather than taste. Narrower prose carries fewer citations, so
+  demoting mid-sized questions would take citations from the ones that have
+  material. And the middle of this signal does not predict citations at all:
+  "apokalypsis" cleared the floor 27 times, kept `thorough`, and the model
+  returned **2 citations in 293 characters** — obeying the style's own "extend
+  only as far as the fragments go" without being told twice. So the rule is a
+  second guard over behaviour that already self-regulates, not the only one.
+  Either signal can fire it: the dense count catches a narrow question against a
+  large corpus, the evidence count catches a small library.
 - **`asdict` serialises declared fields and nothing else, which is how a field
   can exist and be invisible.** `Answer.style_effort` was briefly set by
   `service.ask` as a loose attribute rather than declared on the dataclass.

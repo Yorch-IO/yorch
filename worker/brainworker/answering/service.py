@@ -28,7 +28,8 @@ def ask(settings: Settings, question: Question) -> Answer:
     spend = [plan.spend] if plan.spend else []
 
     try:
-        evidence = search(settings, provider, question, plan, spend)
+        supported: list[int] = []
+        evidence = search(settings, provider, question, plan, spend, supported)
     except OffCorpus as e:
         # Told apart from "not enough evidence" because the remedy differs: this
         # question belongs to a different corpus, not to a gap in this one.
@@ -49,7 +50,9 @@ def ask(settings: Settings, question: Question) -> Answer:
             style_effort=effort_mod.EFFORT_LEVELS[0],
         )
 
-    level = effort_mod.effective_style_level(question.effort, len(evidence))
+    level = effort_mod.effective_style_level(
+        question.effort, len(evidence), supported[0] if supported else None
+    )
     result = answer_mod.compose(
         provider, question, evidence, plan, style=_style(settings, question, level)
     )

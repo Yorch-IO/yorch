@@ -202,22 +202,42 @@ class TestEffectiveStyleLevel:
         for name in EFFORT_LEVELS:
             assert effective_style_level(name, BUDGETS[name].top_k) == name
 
-    def test_the_widest_level_on_thin_evidence_answers_briefly(self):
-        """The case this exists for.
+    def test_a_corpus_that_barely_supports_the_question_answers_briefly(self):
+        """The case this exists for, keyed on the signal that actually moves.
 
-        `thorough` asks for a paragraph per distinct point. Given five chunks it
-        would have to pad, and padding is prose no citation backs — the one
-        surface `answer._verify` cannot check. Stepping down removes the
-        occasion rather than forbidding it in wording the model may not honour.
+        Measured on the real corpus: **every on-corpus question fills the width
+        it asked for**, however narrow, because the fused RRF output carries no
+        score floor — so the count reaching the prompt cannot tell a broad
+        question from a niche one. What can is how many cleared the *dense*
+        floor: 48 of 48 for "¿Quién fue Jesucristo?", 27 for "apokalypsis", and
+        3 for "el Cireneo". A question handed 48 chunks that the corpus
+        supports with three is one where developing every point is padding.
         """
-        # Written against the table rather than against literals: the widths
-        # move when the ladder is re-measured, and a hardcoded 16 quietly became
-        # "one below standard" the day `thorough` went to 48.
-        brief, standard, thorough = (BUDGETS[n] for n in EFFORT_LEVELS)
-        assert effective_style_level("thorough", brief.top_k + 1) == "brief"
-        assert effective_style_level("thorough", standard.top_k) == "standard"
-        assert effective_style_level("thorough", thorough.top_k) == "thorough"
-        assert effective_style_level("thorough", thorough.top_k - 1) == "standard"
+        wide = BUDGETS["thorough"].top_k
+        assert effective_style_level("thorough", wide, 3) == "brief"
+
+    def test_a_niche_question_with_real_material_keeps_its_level(self):
+        """It steps down only when the evidence is drastically thin, never on a
+        sliding scale. Narrower prose carries fewer citations, so demoting every
+        mid-sized question would take citations away from the questions that do
+        have material — the opposite of what the widest level is for."""
+        wide = BUDGETS["thorough"].top_k
+        assert effective_style_level("thorough", wide, 27) == "thorough"
+        assert effective_style_level("thorough", wide, wide) == "thorough"
+
+    def test_a_small_library_is_caught_by_the_other_signal(self):
+        """Two signals, two different thin cases: `supported` catches a narrow
+        question against a large corpus, and the evidence count catches a
+        library where there was never much to retrieve."""
+        floor = BUDGETS[EFFORT_LEVELS[0]].top_k
+        assert effective_style_level("thorough", floor - 1, floor - 1) == "brief"
+
+    def test_no_dense_signal_falls_back_to_the_level_asked_for(self):
+        """A caller that cannot supply one — a test, or a path that never ran the
+        gate — must not be silently demoted."""
+        assert effective_style_level("thorough", BUDGETS["thorough"].top_k, None) == (
+            "thorough"
+        )
 
     def test_it_only_ever_narrows(self):
         """Receiving sixteen chunks is not a reason to write an essay somebody

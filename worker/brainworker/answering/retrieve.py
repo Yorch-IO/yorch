@@ -85,8 +85,15 @@ def search(
     question: Question,
     plan: Plan,
     spend: "list | None" = None,
+    supported: "list | None" = None,
 ) -> list[Evidence]:
     """Retrieve, expand, and return the evidence an answer may rest on.
+
+    ``supported`` is a second out-parameter, for the same reason and by the same
+    convention: it receives how many chunks cleared the *dense* floor, which is
+    what `effort.effective_style_level` needs to tell a narrow question from a
+    broad one. It costs nothing — the topicality gate was already making that
+    search and throwing away everything but whether it was empty.
 
     ``spend`` is an out-parameter rather than a second return value, so the eight
     existing call sites are untouched. It exists because embedding the question
@@ -133,17 +140,28 @@ def search(
     top_k = resolve_top_k(question.top_k, budget)
 
     with Qdrant(settings.qdrant_url, settings.qdrant_collection) as q:
-        # Deliberately on the constant, not on the budget. `topicality_gate`
-        # builds its own `SearchOpts(limit=1, dense_only=True, …)` and discards
-        # the caller's `limit` and `prefetch_limit`, so passing the budget here
-        # would read as a knob and do nothing. It is also the right invariant:
-        # whether a question is about this corpus is a fact about the corpus,
-        # not about how hard the asker chose to look.
-        gate_opts = SearchOpts(
-            limit=CANDIDATE_LIMIT, min_score=MIN_SCORE,
-            dense_only=True, query_text=question.text, filters=filters,
+        # The gate, run directly rather than through `topicality_gate`, which
+        # builds its own `SearchOpts(limit=1, …)` and answers only "was it
+        # empty". The question is identical — dense only, same floor, same
+        # filters, one round trip and no tokens (invariant #9) — and asking for
+        # the whole width instead of one row also answers "how much of this
+        # corpus actually clears the floor", which is the only signal that can
+        # tell a narrow question from a broad one. Every on-corpus question
+        # fills `top_k` after RRF fusion, however narrow, because the fused
+        # output carries no floor (invariant #8); this is what does not.
+        #
+        # `min_score` stays on the constant. Whether a question is about this
+        # corpus is a fact about the corpus, not about how hard the asker looked.
+        probe = q.search(
+            vector,
+            SearchOpts(
+                limit=top_k, min_score=MIN_SCORE, dense_only=True,
+                query_text=question.text, filters=filters,
+            ),
         )
-        on_topic = q.topicality_gate(vector, gate_opts)
+        on_topic = bool(probe)
+        if supported is not None:
+            supported.append(len(probe))
 
         hits = q.search(
             vector,

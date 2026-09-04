@@ -308,33 +308,48 @@ if __name__ == "__main__":  # pragma: no cover - a dump, not behaviour
     print(as_json())
 
 
-def effective_style_level(requested: str | None, evidence_count: int) -> str:
-    """Which level's *style* an answer with this much evidence should use.
+def effective_style_level(
+    requested: str | None, evidence_count: int, supported: int | None = None
+) -> str:
+    """Which level's *style* an answer should use, given what the corpus had.
 
     The search has already run and been paid for by the time this is asked, so
     what steps down is how developed the answer is, never how hard it looked.
 
-    A `thorough` question that retrieved 5 chunks is the case this exists for:
-    the level asked for a paragraph per distinct point and the corpus supplied
-    barely more than `brief` would have, so answering in `thorough`'s voice
-    means padding — and padding is prose no citation backs, which is the one
-    surface `answer._verify` cannot check. Stepping down removes the occasion
-    instead of forbidding it in wording the model may or may not honour.
+    **`supported` is the signal that works, and `evidence_count` is the one that
+    reads as if it should.** The first version keyed on how many chunks reached
+    the prompt, and that turned out to be inert: the fused RRF output carries no
+    score floor — `min_score` may only ever be applied to the dense prefetch
+    (invariant #8) — so hybrid search returns as many rows as it is asked for
+    whenever the collection has them. Measured on the real corpus: every
+    on-corpus question filled `thorough`'s 48, however narrow, and the only
+    thing below it was `off_corpus`, where there is no answer to style anyway.
+    So `supported` is the count that cleared the *dense* floor, which does
+    discriminate: 48 of 48 for "¿Quién fue Jesucristo?", 27 for "¿Qué significa
+    apokalypsis?", and **3** for "¿Qué dice el texto sobre el Cireneo?" — a
+    question handed 48 chunks of which the corpus genuinely supports three.
 
-    Chosen by the widest level whose own `top_k` the evidence actually reached,
-    and **never above the level asked for**: this only ever narrows. Asking for
-    `brief` and receiving sixteen chunks is not a reason to write an essay.
+    **It only steps down when the evidence is drastically thin**, never on a
+    sliding scale, and that is a deliberate limit rather than a simplification.
+    Stepping down narrows the prose, and narrower prose carries fewer citations
+    — so a rule that demoted every mid-sized question would take citations away
+    from the questions that do have material, which is the opposite of what the
+    widest level is for. A niche question with 27 supporting chunks still gets
+    `thorough`; one with 3 does not, because there developing every point is
+    padding, and padding is prose no citation backs.
+
+    Either signal falling below the narrowest level's own `top_k` is enough:
+    `supported` catches the narrow question against a large corpus, and
+    `evidence_count` catches the small library where there was never much to
+    retrieve.
     """
-    budget = budget_for(requested)
-    fits = [
-        name
-        for name in EFFORT_LEVELS
-        if BUDGETS[name].top_k <= evidence_count
-        and BUDGETS[name].top_k <= budget.top_k
-    ]
-    # Nothing reached even the narrowest level's `top_k`, which is a question
-    # answered on a handful of chunks however it was asked.
-    return fits[-1] if fits else EFFORT_LEVELS[0]
+    floor = BUDGETS[EFFORT_LEVELS[0]].top_k
+    thin = evidence_count < floor or (supported is not None and supported < floor)
+    if thin:
+        return EFFORT_LEVELS[0]
+    # Never above what was asked for: receiving plenty is not a reason to write
+    # an essay somebody asked not to have.
+    return DEFAULT_EFFORT if (requested or "") not in BUDGETS else requested
 
 
 def compose_system(base: str, style: str) -> str:

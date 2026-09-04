@@ -9,6 +9,12 @@ import {
   type EvidenceItem,
 } from "../lib/api";
 import {
+  ASK_EFFORTS,
+  loadEffort,
+  saveEffort,
+  type AskEffort,
+} from "../lib/askEffort";
+import {
   askReducer,
   citedEvidence,
   lastId,
@@ -81,6 +87,10 @@ export function AskScreen() {
   // initialiser runs again rather than carrying the other plane's questions.
   const { identity } = useBackend();
   const [session, dispatch] = useReducer(askReducer, identity, loadSession);
+  // Same lazy-initialiser-on-identity shape as the history above, and for the
+  // same reason: the remount on a plane change re-reads the level belonging to
+  // the plane now on screen.
+  const [effort, setEffort] = useState<AskEffort>(() => loadEffort(identity));
   const nextId = useRef(lastId(session));
   const [now, setNow] = useState(() => Date.now());
 
@@ -93,6 +103,10 @@ export function AskScreen() {
   useEffect(() => {
     saveSession(session, identity);
   }, [session, identity]);
+
+  useEffect(() => {
+    saveEffort(effort, identity);
+  }, [effort, identity]);
 
   /** The questions in flight, as a string so the effects below re-run when the
    *  set changes rather than on every unrelated dispatch. */
@@ -151,23 +165,44 @@ export function AskScreen() {
   /** Hand a question over and record the id it comes back with. Shared by the
    *  composer and by "ask again", which is the only way back to a question the
    *  composer already cleared. */
-  const startAsk = useCallback(async (question: string, library: string) => {
-    const id = `q${(nextId.current += 1)}`;
-    dispatch({ type: "submit", id, question, libraryId: library, startedAt: Date.now() });
-    try {
-      const { questionId } = await api.ask({ library_id: library, text: question });
-      dispatch({ type: "started", id, questionId });
-    } catch (e) {
-      dispatch({ type: "failed", id, error: e });
-    }
-  }, []);
+  //
+  // The level is a parameter rather than read from state here, because the two
+  // callers mean different things by it: the composer asks at the level the
+  // control currently shows, while "ask again" asks at the level that entry was
+  // originally asked at. Closing over the state would have silently re-asked
+  // every old question at whatever the control happens to say now, which is the
+  // one thing that would make two entries incomparable.
+  const startAsk = useCallback(
+    async (question: string, library: string, level: AskEffort) => {
+      const id = `q${(nextId.current += 1)}`;
+      dispatch({
+        type: "submit",
+        id,
+        question,
+        libraryId: library,
+        startedAt: Date.now(),
+        effort: level,
+      });
+      try {
+        const { questionId } = await api.ask({
+          library_id: library,
+          text: question,
+          effort: level,
+        });
+        dispatch({ type: "started", id, questionId });
+      } catch (e) {
+        dispatch({ type: "failed", id, error: e });
+      }
+    },
+    [],
+  );
 
   const submit = useCallback(() => {
     const question = text.trim();
     if (!question || !libraryId) return;
     setText("");
-    void startAsk(question, libraryId);
-  }, [libraryId, text, startAsk]);
+    void startAsk(question, libraryId, effort);
+  }, [libraryId, text, startAsk, effort]);
 
   const spent = answer?.spend.reduce((sum, s) => sum + (s.usd ?? 0), 0) ?? 0;
   const anyUnpriced = answer?.spend.some((s) => s.usd === null) ?? false;
@@ -206,7 +241,7 @@ export function AskScreen() {
                       type="button"
                       className="link small"
                       disabled={busy || !libraryId}
-                      onClick={() => void startAsk(e.question, libraryId)}
+                      onClick={() => void startAsk(e.question, libraryId, e.effort)}
                     >
                       {t("ask.again")}
                     </button>
@@ -273,6 +308,31 @@ export function AskScreen() {
               onChange={(e) => setText(e.target.value)}
             />
           </label>
+
+          {/* Below the question rather than above it, so the label "Question"
+              stays next to its field. Three radios rather than three
+              checkboxes: the levels are mutually exclusive, and the same
+              reasoning the import gate records about its profile choice
+              applies — independent switches would invite a request nobody can
+              honour. `fieldset.stages` is reused verbatim, so this control has
+              no layout of its own to break at a narrow width. */}
+          <fieldset className="stages">
+            <legend>{t("ask.effortLegend")}</legend>
+            {ASK_EFFORTS.map((level) => (
+              <label key={level}>
+                <input
+                  type="radio"
+                  name="ask-effort"
+                  value={level}
+                  checked={effort === level}
+                  disabled={busy}
+                  onChange={() => setEffort(level)}
+                />
+                <span>{t(`ask.effort.${level}`)}</span>
+                <span className="muted small">{t(`ask.effortHint.${level}`)}</span>
+              </label>
+            ))}
+          </fieldset>
 
           <button
             type="button"

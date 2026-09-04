@@ -45,6 +45,7 @@ function twoAsked(): AskSession {
     question: "¿la primera?",
     libraryId: "lib_a",
     startedAt: 0,
+    effort: "standard",
   });
   s = askReducer(s, { type: "answered", id: "q1", answer: answered(["c1", "c2"]) });
   return askReducer(s, {
@@ -53,6 +54,7 @@ function twoAsked(): AskSession {
     question: "¿la segunda?",
     libraryId: "lib_b",
     startedAt: 0,
+    effort: "standard",
   });
 }
 
@@ -139,6 +141,7 @@ describe("citedEvidence", () => {
       question: "¿?",
       libraryId: "lib_a",
       startedAt: 0,
+      effort: "standard",
     });
     s = askReducer(s, { type: "answered", id: "q1", answer: orphan });
 

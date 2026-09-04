@@ -106,6 +106,11 @@ class VectorProvider:
         class _S:
             model = "gemini-3.6-flash"
             embedding_model = "gemini-embedding-2"
+            # See the note on the same fields in `test_answer.py`: typed like
+            # the real `Gemini` so the reasoning policy can be exercised rather
+            # than crashed into.
+            stage_thinking: dict[str, int | None] = {}
+            thinking_budget: int | None = None
 
         self.settings = _S()
 

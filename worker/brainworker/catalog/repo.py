@@ -353,6 +353,61 @@ class Catalog:
             )
         return library_id
 
+    def answer_styles(self, *, tenant_id: str) -> dict[str, str]:
+        """One organisation's overridden answer styles, keyed by effort level.
+
+        Only levels somebody edited are rows here, so an absent key means "use
+        the built-in default" rather than "empty style". That is what makes
+        restoring a default a delete instead of a lookup of what the default
+        used to be, lets a level added later need no backfill, and lets an
+        improved default in `effort.py` reach every organisation that never
+        overrode it.
+
+        `tenant_id` is required for the reason every other listing here takes
+        one: a style is a house style, and falling back to the legacy
+        organisation's when a caller forgets would put one organisation's
+        wording on another's answers with nothing saying so.
+        """
+        with self._conn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                rows = cur.execute(
+                    "SELECT effort, body FROM answer_style WHERE tenant_id = %s",
+                    (tenant_id,),
+                ).fetchall()
+        return {r["effort"]: r["body"] for r in rows}
+
+    def set_answer_style(self, effort: str, body: str, *, tenant_id: str) -> None:
+        """Override one level's style, or clear the override.
+
+        An empty or blank `body` deletes the row rather than storing whitespace,
+        so "restore the default" and "save an empty box" are the same gesture
+        and cannot drift into two different states — a stored empty string would
+        otherwise mean "no style at all", which is a third behaviour nobody
+        asked for and which `compose_system` would silently render as the bare
+        rules.
+        """
+        if not body.strip():
+            with self._conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM answer_style "
+                        "WHERE tenant_id = %s AND effort = %s",
+                        (tenant_id, effort),
+                    )
+            return
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO answer_style (tenant_id, effort, body, updated_at)
+                    VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (tenant_id, effort)
+                    DO UPDATE SET body = EXCLUDED.body,
+                                  updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (tenant_id, effort, body.strip()),
+                )
+
     def libraries(self, *, tenant_id: str) -> list[dict[str, Any]]:
         """One organisation's libraries, with how much is answerable in each.
 

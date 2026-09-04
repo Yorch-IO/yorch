@@ -457,6 +457,111 @@ driver, so there is one owner of the schema and one set of models.
 - **`off_corpus` and `insufficient_evidence` are different states.** The first
   means nothing cleared `topicality_gate`'s dense floor, the second means the
   corpus was searched and came up short. They have different fixes.
+- **Asking has an effort level, and what it may *not* reach is the interesting
+  half.** `brief`/`standard`/`thorough` move `top_k`, the fused candidate limit,
+  the per-leg prefetch width and `claims_per_chunk` together;
+  `answering/effort.py` is the only place those numbers appear, and `standard`
+  reproduces exactly what the product served before the levels existed —
+  asserted against the constants it replaced rather than against literals, so
+  adopting it changed nothing until somebody moved the control. **Measured
+  2026-09-03 on `preprod`/`lib_teologia`, four questions:** evidence 4/8/16 as
+  designed, verified citations **4.50 / 5.50 / 9.25**, and **$0.0228 / $0.0316 /
+  $0.0407** — so `thorough` roughly doubles the citations for 1.8x the bill, and
+  `thorough` beat `standard` on every one of the four.
+  **The wire carries the level name, never the numbers.** A client that sent
+  figures could ask for two hundred chunks on a paid call, and the paid plane
+  would have to police a table it does not own. Its fork
+  (`src/ask/effort.ts`) is three strings and *no default*, guarded by
+  `ask.parity.spec.ts` — which also compares the `Question` dataclass field by
+  field, because `ask.service.ts` hand-builds that payload and Temporal's
+  converter **silently drops a key naming no field**; for `tenant_id` that is a
+  cross-tenant read with no error anywhere.
+  A bad level is refused by FastAPI's own `Literal` validation — 422 with a
+  list — never by a hand-raised 400 carrying a `kind`, because the paid plane's
+  filter renders `class-validator` failures in that same FastAPI shape on
+  purpose. A hand-rolled kind would have made the two planes answer one bad
+  request two different ways.
+- **Two retrieval knobs are deliberately off the effort ladder, for two
+  different reasons.** `MIN_SCORE` is the topicality floor and the recorded
+  sweep already settled it: 0.50 scored best of everything tried and is wrong,
+  because that index's noise floor is 0.5153. `PER_SECTION` *looks* like a
+  volume control and is not — **`diversify` backfills in score order when the
+  cap leaves it short, so `diversify(hits, 2, 16)` returns 16, not 6** — so
+  raising it would only buy back the near-duplicates the cap was measured to
+  remove, and it already has a per-version claimant in a profile's `retrieval`
+  block. It was in the table until that was measured.
+  `top_k` survives as an explicit override, now clamped to `[1, 32]`, which
+  closed a live hole rather than a theoretical one: it was an unbounded int
+  straight from the request body, and **`top_k = 0` returned all 40 fused
+  candidates rather than none**, because `diversify` compares
+  `len(out) == top_k` only *after* appending.
+- **The effort ladder scaled what the model *reads* and not what it writes, and
+  that gap was invisible until somebody asked.** Measured 2026-09-03 on the real
+  corpus: evidence 4/8/16 and citations 4.50/5.50/9.25, with the answer itself
+  stuck between 705 and 1346 characters — and on "¿Quién fue Jesucristo?",
+  `brief` came back **954 characters against `standard`'s 705 and `thorough`'s
+  798**. The widest level wrote the second-shortest answer. Nothing in
+  `answer.SYSTEM` mentions length and `max_output_tokens` is unset, so the prose
+  was never connected to anything: its length was noise. `thorough` spent its
+  extra tokens on *reasoning* (4084 against 2635) and then wrote the same
+  summary.
+  So each level now carries a `style` — appended **below** the six answering
+  rules by `effort.compose_system`, with a sentence between them saying the
+  rules win. Re-measured after: **278 / 660 / 1719 characters**, monotone at
+  last, and `thorough` came back organised by theme. The style is written as
+  *coverage* ("develop each point the fragments support"), never as a word
+  count, for a reason that is easy to miss: `answer._verify` checks that a
+  citation names a retrieved chunk and **never that a sentence is supported**,
+  so "write more" enlarges the one surface nothing verifies.
+- **The style is per organisation and editable; the rules are neither.**
+  `answer_style` holds one row per (organisation, level) and **only for a level
+  somebody edited**, so an absent row means "use the built-in default" — which
+  is what makes restoring a default a `DELETE` rather than a lookup of what the
+  default used to be, lets a level added later need no backfill, and lets an
+  improved default in `effort.py` reach everyone who never overrode it. How
+  developed an answer should be is a house style; that the answer may not use
+  general knowledge is not, and the six rules are unreachable from any screen.
+  The default wording is forked into `../yorch-tauri-backend/src/ask/effort.ts`
+  because that plane serves the same settings screen and cannot call Python to
+  fill a text box — prose is a set of strings, which is what the fork convention
+  permits, and `ask.parity.spec.ts` compares it verbatim (verified by breaking
+  it). The length cap is a *field constraint* on both planes rather than a
+  hand-raised error, so both answer an oversized body with FastAPI's own
+  422-with-a-list, the same decision as `Question.effort`'s `Literal`.
+- **Thin evidence steps the *style* down, never the search.** By the time the
+  evidence count is known it has been retrieved and paid for, so what narrows is
+  how developed the answer is. `effective_style_level` picks the widest level
+  whose own `top_k` the evidence actually reached and **never above the level
+  asked for**: `thorough` that retrieved 5 chunks answers in `brief`'s voice.
+  Verified live — 5 chunks, 359 characters instead of 1719, no padding. This is
+  the design answer to the surface `_verify` cannot check: remove the occasion
+  to pad rather than forbid it in wording the model may or may not honour.
+- **`asdict` serialises declared fields and nothing else, which is how a field
+  can exist and be invisible.** `Answer.style_effort` was briefly set by
+  `service.ask` as a loose attribute rather than declared on the dataclass.
+  Python allows that, so the answered path worked and every test passed — while
+  `/ask/{id}`, which returns `asdict(outcome.answer)`, dropped it from every
+  response. There was no error anywhere; there was a field the UI could never
+  see. It surfaced only because the `off_corpus` path returns *before* the
+  assignment, so reading it there raised `AttributeError` during a live probe.
+  `test_the_style_level_survives_serialisation` asserts through `asdict` rather
+  than on the object, because reading the attribute directly is exactly what did
+  not catch it.
+- **A fixed reasoning budget can be a reduction, and that is why every level
+  names none.** `thorough` shipped at 8192 on the reasoning that the widest
+  level should think hardest. A/B on the real corpus 2026-09-03, four questions
+  with its 16 chunks held constant: **8192 gave 7.00 citations and 3322 output
+  tokens; leaving it unset gave 7.75 and 3582** — the default won 3, tied 1 and
+  never lost, spending *more* output on 3 of 4. `None` sends no `ThinkingConfig`
+  at all, so the model picks per question: a literal does not raise that
+  **dynamic** value, it caps it. The number meant to buy more care was buying
+  less, and the only symptom was one citation fewer on an answer that still
+  looked perfectly grounded. The field stays, threaded and inert like
+  `SearchOpts.prefetch_limit` was; any number named there has to beat the
+  model's own choice, not merely look generous. Note the guard this needs:
+  `BRAIN_THINKING_ANSWERING` **and** a global `BRAIN_THINKING_BUDGET` both
+  outrank a level, the second because `answering` is deliberately absent from
+  the stage map so a global reaches it.
 - **The approval gate is bounded and its timeout is a rejection.** Seven days,
   because a user may close the lid on Friday; not unbounded, because a workflow
   that never reports an outcome accumulates in the namespace. A timeout costs

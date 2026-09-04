@@ -53,7 +53,10 @@ export type ControlErrorKind =
   | "version_not_found"
   | "source_path_unknown"
   | "rebuild_unavailable"
-  | "question_not_found";
+  | "question_not_found"
+  /** A level name no effort table has. Only reachable by a hand-built request:
+   *  the settings screen renders one box per level it was given. */
+  | "effort_not_found";
 
 export interface AppError {
   kind: AppErrorKind;
@@ -591,12 +594,50 @@ export interface Approval {
 
 // -- questions ---------------------------------------------------------------
 
+export type { AskEffort } from "./askEffort";
+import type { AskEffort } from "./askEffort";
+
 export interface Question {
   library_id: string;
   text: string;
+  /** Absent means "the effort level decides", which is what this app sends. */
   top_k?: number;
   filters?: Record<string, string>;
   confidence_floor?: number;
+  /**
+   * How much evidence and reasoning the question may spend.
+   *
+   * A level name, never a set of numbers: what each one means lives in the
+   * worker, so a client cannot ask for two hundred chunks and neither control
+   * plane has to police a number. Absent means the server's default.
+   */
+  effort?: AskEffort;
+}
+
+/**
+ * One effort level's answer wording, as the settings screen needs it.
+ *
+ * `body` is what would actually be used; `custom` says whether that is the
+ * organisation's override or the built-in default. Both matter: the text fills
+ * the box, the flag decides whether "restore the default" would do anything,
+ * and `defaultBody` is what it would restore to — carried here so restoring
+ * needs no second request.
+ */
+export interface AnswerStyle {
+  effort: AskEffort;
+  body: string;
+  defaultBody: string;
+  custom: boolean;
+}
+
+export interface AnswerStyles {
+  levels: AnswerStyle[];
+  maxChars: number;
+}
+
+export interface AnswerStyleSaved {
+  effort: AskEffort;
+  custom: boolean;
 }
 
 export interface Citation {
@@ -663,6 +704,15 @@ export interface Answer {
   evidence: EvidenceItem[];
   reason: string;
   spend: Spend[];
+  /**
+   * The level this answer was produced at, echoed by the server.
+   *
+   * Optional because an answer collected from a worker older than the level
+   * carries none, and because it must not become a required field that every
+   * test factory has to learn about. Read it rather than what the client
+   * remembers sending: an answer can be collected on another machine.
+   */
+  effort?: AskEffort;
 }
 
 // -- provider ----------------------------------------------------------------
@@ -1135,6 +1185,9 @@ export const api = {
   libraries: () => invoke<Libraries>("libraries"),
   libraryDocuments: (libraryId: string, includeAbsent = false) =>
     invoke<Library>("library_documents", { libraryId, includeAbsent }),
+  answerStyles: () => invoke<AnswerStyles>("answer_styles"),
+  setAnswerStyle: (effort: AskEffort, body: string) =>
+    invoke<AnswerStyleSaved>("set_answer_style", { effort, update: { body } }),
   ask: (question: Question) => invoke<AskStarted>("ask", { question }),
 
   /** Collect a question started earlier. Safe to call repeatedly; the API keeps

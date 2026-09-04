@@ -283,3 +283,52 @@ def test_asking_as_another_organisation_finds_nothing(settings, on_topic, librar
             question(library, tenant_id="tnt_" + "9" * 24),
             vector_only(),
         )
+
+
+# --- the effort level's claim allowance -------------------------------------
+
+
+def test_the_claims_cap_follows_the_level_rather_than_the_constant():
+    """A wider level must actually get more claims per chunk.
+
+    The parameter defaults to the module constant so the four-argument call
+    sites above keep working; this is what proves the argument is read at all.
+    """
+    from brainworker.answering import retrieve
+    from brainworker.answering.effort import BUDGETS
+
+    wide = BUDGETS["thorough"].claims_per_chunk
+    rows = [
+        {"chunk_id": "chk_1", "id": f"clm_{i}", "text": f"c{i}", "confidence": 0.9,
+         "quote": "", "status": "afirma", "concept": ""}
+        for i in range(wide + 4)
+    ]
+    evidence = [_evidence("chk_1")]
+
+    retrieve._attach_claims(
+        StubGraph(rows), evidence, 0.6, LEGACY_TENANT_ID, wide
+    )
+    assert len(evidence[0].claims) == wide
+    assert wide > retrieve.CLAIMS_PER_CHUNK, "otherwise this asserts nothing"
+
+
+def test_the_row_limit_and_the_per_chunk_cap_are_the_same_number():
+    """Two places one cap is spelled, and they must move together.
+
+    The query asks for `len(ids) * cap` rows *globally* and the loop then allows
+    `cap` per chunk. Threading the level into only the loop leaves the wider
+    level unreachable — the query would fetch three per chunk's worth of rows
+    and the loop would sit there willing to accept four. Nothing would error;
+    the level would just quietly not work.
+    """
+    from brainworker.answering import retrieve
+    from brainworker.answering.effort import BUDGETS
+
+    wide = BUDGETS["thorough"].claims_per_chunk
+    graph = StubGraph([])
+    evidence = [_evidence("chk_1"), _evidence("chk_2")]
+
+    retrieve._attach_claims(graph, evidence, 0.6, LEGACY_TENANT_ID, wide)
+
+    [(_, params)] = graph.calls
+    assert params["limit"] == len(evidence) * wide

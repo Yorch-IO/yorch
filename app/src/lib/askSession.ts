@@ -15,6 +15,7 @@
  * window was shut be collected on the next launch rather than paid for twice.
  */
 import { errorMessage, isAppError, type Answer, type EvidenceItem } from "./api";
+import { DEFAULT_ASK_EFFORT, isAskEffort, type AskEffort } from "./askEffort";
 import { scopedKey } from "./backend";
 
 export interface AskEntry {
@@ -39,6 +40,11 @@ export interface AskEntry {
   /** Index into `answer.citations`. Kept per entry, so returning to an earlier
    *  question finds it where you left it rather than reset to the first. */
   citation: number;
+  /** The level it was asked at. Recorded per entry rather than read off the
+   *  current control, because the control moves and the entry does not: asking
+   *  an old question again must repeat what it did, and two entries with
+   *  different answers to the same question are otherwise unexplained. */
+  effort: AskEffort;
 }
 
 export interface AskSession {
@@ -48,7 +54,14 @@ export interface AskSession {
 }
 
 export type AskAction =
-  | { type: "submit"; id: string; question: string; libraryId: string; startedAt: number }
+  | {
+      type: "submit";
+      id: string;
+      question: string;
+      libraryId: string;
+      startedAt: number;
+      effort: AskEffort;
+    }
   | { type: "started"; id: string; questionId: string }
   | { type: "answered"; id: string; answer: Answer }
   | { type: "failed"; id: string; error: unknown }
@@ -84,6 +97,7 @@ export function askReducer(state: AskSession, action: AskAction): AskSession {
             answer: null,
             error: null,
             citation: 0,
+            effort: action.effort,
           },
           ...state.entries,
         ],
@@ -212,6 +226,11 @@ export function loadSession(identity: string): AskSession {
         e.status === "pending" && !e.questionId
           ? { kind: "io", message: "interrupted" }
           : e.error,
+      // Every entry already in a user's history predates the level, and was
+      // asked at what is now the default. Validated rather than trusted for the
+      // same reason `loadEffort` validates: a bad value here would be handed
+      // straight back to the server by "ask again".
+      effort: isAskEffort(e.effort) ? e.effort : DEFAULT_ASK_EFFORT,
     }));
 
     return {

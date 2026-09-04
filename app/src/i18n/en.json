@@ -101,6 +101,16 @@
     },
     "stopNotice": "Stopping removes the containers but keeps every volume, so your vectors and catalog survive."
   },
+  "styles": {
+    "title": "Answer wording",
+    "intro": "How developed an answer should be at each effort level. The rules that keep every answer grounded in your documents are not editable here and always win.",
+    "save": "Save",
+    "restore": "Restore the default",
+    "custom": "edited",
+    "loading": "Loading…",
+    "retry": "Try again",
+    "unavailable": "The answer wording could not be read."
+  },
   "docker": {
     "checking": "Looking for Docker…",
     "found": "Docker {{docker}} · Compose {{compose}}",
@@ -283,6 +293,17 @@
     "question": "Question",
     "placeholder": "What do these documents say about…?",
     "submit": "Ask",
+    "effortLegend": "How hard to look",
+    "effort": {
+      "brief": "Brief",
+      "standard": "Balanced",
+      "thorough": "Thorough"
+    },
+    "effortHint": {
+      "brief": "fewer passages, quicker",
+      "standard": "the usual balance",
+      "thorough": "more passages, slower and dearer"
+    },
     "thinking": "Searching…",
     "answered": "Answer",
     "insufficient": "Not enough evidence",

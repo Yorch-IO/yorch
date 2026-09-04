@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 use auth::{AuthConfig, Pkce, Session};
 use backend::{BackendMode, BackendSettings};
 use control::{
+    AnswerStyleSaved, AnswerStyleUpdate, AnswerStyles,
     Activation, Approval, Auth, AskProgress, AskStarted, ChunkContext, ConceptClaims, Control,
     DocumentDetail,
     GateReport, Health, IngestRequest, Libraries, Library, LibraryGraph, Outline, PingResult,
@@ -947,6 +948,24 @@ async fn explore_claims(
     control.concept_claims(&concept_id).await
 }
 
+/// How this organisation words an answer at each effort level.
+#[tauri::command]
+async fn answer_styles(state: State<'_, AppState>) -> Result<AnswerStyles> {
+    let control = state.control().await?;
+    control.answer_styles().await
+}
+
+/// Override one level's wording, or clear it with an empty body.
+#[tauri::command]
+async fn set_answer_style(
+    state: State<'_, AppState>,
+    effort: String,
+    update: AnswerStyleUpdate,
+) -> Result<AnswerStyleSaved> {
+    let control = state.control().await?;
+    control.set_answer_style(&effort, &update).await
+}
+
 /// Hand a question over. Returns as soon as the API has taken it, not when it
 /// has an answer — `ask_result` collects that.
 #[tauri::command]
@@ -999,6 +1018,8 @@ pub fn run() {
             libraries,
             library_documents,
             ask,
+            answer_styles,
+            set_answer_style,
             ask_result,
             explore_outline,
             explore_section_chunks,

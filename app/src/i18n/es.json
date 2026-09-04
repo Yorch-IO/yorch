@@ -101,6 +101,16 @@
     },
     "stopNotice": "Detener elimina los contenedores pero conserva todos los volúmenes, así que tus vectores y tu catálogo sobreviven."
   },
+  "styles": {
+    "title": "Redacción de las respuestas",
+    "intro": "Cuánto debe desarrollarse la respuesta en cada nivel de esfuerzo. Las reglas que mantienen cada respuesta pegada a tus documentos no se editan aquí y siempre mandan.",
+    "save": "Guardar",
+    "restore": "Restaurar el valor por defecto",
+    "custom": "editado",
+    "loading": "Cargando…",
+    "retry": "Reintentar",
+    "unavailable": "No se pudo leer la redacción de las respuestas."
+  },
   "docker": {
     "checking": "Buscando Docker…",
     "found": "Docker {{docker}} · Compose {{compose}}",
@@ -283,6 +293,17 @@
     "question": "Pregunta",
     "placeholder": "¿Qué dicen estos documentos sobre…?",
     "submit": "Preguntar",
+    "effortLegend": "Cuánto buscar",
+    "effort": {
+      "brief": "Breve",
+      "standard": "Equilibrado",
+      "thorough": "Exhaustivo"
+    },
+    "effortHint": {
+      "brief": "menos fragmentos, más rápido",
+      "standard": "el equilibrio habitual",
+      "thorough": "más fragmentos, más lento y caro"
+    },
     "thinking": "Buscando…",
     "answered": "Respuesta",
     "insufficient": "Evidencia insuficiente",

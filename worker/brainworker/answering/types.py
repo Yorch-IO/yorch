@@ -10,18 +10,25 @@ from __future__ import annotations
 
 from ..graph.schema import LEGACY_TENANT_ID
 from dataclasses import dataclass, field
+from typing import Literal
 
 from ..pipeline import Spend
+from .effort import DEFAULT_EFFORT
 
 
 @dataclass
 class Question:
     library_id: str
     text: str
-    #: How many chunks reach the answering model. Small on purpose: the model
-    #: must read all of them, and a larger set buys recall at the cost of the
-    #: attention that makes citations accurate.
-    top_k: int = 8
+    #: How many chunks reach the answering model, or None to let `effort`
+    #: decide — which is what every request from the desktop app says.
+    #:
+    #: Small on purpose at every level: the model must read all of them, and a
+    #: larger set buys recall at the cost of the attention that makes citations
+    #: accurate. An explicit value still wins, because the API has accepted one
+    #: since before levels existed, but it is clamped rather than trusted —
+    #: `effort.resolve_top_k` is where both rules live.
+    top_k: int | None = None
     #: Payload equality filters, e.g. `{"document_id": "doc_…"}` to ask about
     #: one book. Validated against an allowlist before reaching Qdrant.
     filters: dict[str, str] = field(default_factory=dict)
@@ -32,6 +39,26 @@ class Question:
     #: authenticated request, and `_validate` overwrites whatever a model put
     #: there.
     tenant_id: str = LEGACY_TENANT_ID
+    #: How much evidence and reasoning this question may spend, as a level name
+    #: rather than a set of numbers — see `effort.py` for what each one means and
+    #: for why the numbers stay on this side of the wire. Appended last so the
+    #: field order both control planes mirror is unchanged.
+    #:
+    #: **Spelled as a `Literal` so FastAPI refuses an unknown level itself**,
+    #: rather than hand-raising a 400 with a `kind`. The paid plane validates the
+    #: same field with `class-validator`, whose failures its exception filter
+    #: renders as FastAPI's *own* 422-with-a-list shape — deliberately, so the
+    #: two planes answer a bad request identically. A hand-rolled 400 here would
+    #: have made one plane answer 400-with-an-object and the other
+    #: 422-with-a-list for the same input. `effort.budget_for` stays total behind
+    #: this as the second guard, the same two-guards-for-one-property shape as
+    #: `ALLOWED_FILTERS` and the forced `tenant_id`.
+    #:
+    #: The values are restated here rather than built from `EFFORT_LEVELS`
+    #: because `Literal` needs them at type-check time;
+    #: `test_effort.py::test_the_literal_and_the_level_tuple_cannot_drift` is
+    #: what keeps the two copies equal.
+    effort: Literal["brief", "standard", "thorough"] = DEFAULT_EFFORT
 
 
 @dataclass
@@ -117,6 +144,29 @@ class Answer:
     reason: str = ""
     plan: Plan | None = None
     spend: list[Spend] = field(default_factory=list)
+    #: The level this answer was produced at, echoed back.
+    #:
+    #: Not redundant with what the client sent: an answer is collected by a
+    #: second request that may reach a different machine, and two answers to the
+    #: same question are otherwise incomparable with nothing recording why they
+    #: differ. Empty only for an `Answer` built before the level was resolved.
+    effort: str = ""
+    #: The level whose *style* actually wrote this answer, which is `effort`
+    #: unless the corpus supplied too little to justify it — a `thorough`
+    #: question that retrieved five chunks is answered in `brief`'s voice, so
+    #: that developing every point does not become padding nothing can check.
+    #:
+    #: Reported rather than kept internal: a question asked at the widest level
+    #: and answered in three sentences otherwise looks like the control is
+    #: broken, when the honest answer is that there were only five fragments.
+    #:
+    #: **A declared field, and that is the whole point of it being here.** It was
+    #: briefly set as a loose attribute by `service.ask` instead, which Python
+    #: allows and which worked on the answered path — while `asdict()` silently
+    #: dropped it from every API response, because `asdict` serialises declared
+    #: fields and nothing else. The symptom was not an error anywhere; it was a
+    #: field the UI could never see.
+    style_effort: str = ""
 
     @property
     def grounded(self) -> bool:

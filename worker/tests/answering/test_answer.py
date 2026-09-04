@@ -7,11 +7,13 @@ before it, because there is no way to tell the two apart by looking.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import pytest
 
 from brainworker.answering import answer as mod
+from brainworker.answering.effort import BUDGETS
 from brainworker.answering.types import Evidence, Question
 from brainworker.providers.gemini import Generation, Usage
 
@@ -22,15 +24,29 @@ class FakeProvider:
     def __init__(self, payload: dict | str) -> None:
         self.payload = payload
         self.prompts: list[str] = []
+        self.budgets: list[int | None] = []
 
+        # Typed like the real `Gemini`, not trimmed to what today's assertions
+        # touch. `compose` reads both of these to decide whether a per-question
+        # effort level may override the configured reasoning budget, and a
+        # double that omitted them would fail with an AttributeError rather than
+        # exercise the policy.
         class _S:
             model = "gemini-3.6-flash"
+            stage_thinking: dict[str, int | None] = {}
+            thinking_budget: int | None = None
 
         self.settings = _S()
 
     def generate(self, prompt, *, system=None, temperature=0.0,
-                 max_output_tokens=None, response_schema=None, stage=None):
+                 max_output_tokens=None, response_schema=None, stage=None,
+                 thinking_budget=None):
         self.prompts.append(prompt)
+        # Recorded as "what the provider was actually handed", including the
+        # absence of a budget — `None` here means the adapter forwarded nothing
+        # and `thinking_for(stage)` decides, which is a different outcome from
+        # being handed a number that happens to match.
+        self.budgets.append(thinking_budget)
         text = (
             self.payload if isinstance(self.payload, str)
             else json.dumps(self.payload, ensure_ascii=False)
@@ -287,3 +303,119 @@ def test_a_chunk_with_no_claims_sends_no_key_for_them():
     mod.compose(provider, question(), evidence(2))
     for fragment in json.loads(provider.prompts[0])["fragmentos"]:
         assert "lecturas" not in fragment
+
+
+# --- the effort level's reasoning budget -----------------------------------
+#
+# `compose` is where the policy lives: an effort level may raise the answering
+# reasoning budget only when the operator has expressed no opinion. Both ways
+# of expressing one are checked, because the second is the easy one to miss.
+
+
+def _answered(chunk: int = 0) -> dict:
+    return {
+        "suficiente": True, "respuesta": "Sí.",
+        "citas": [{"chunk_id": f"chk_{chunk:024d}", "afirmacion": "Sí."}],
+        "motivo": "",
+    }
+
+
+def _asked_at(effort: str) -> Question:
+    return Question(library_id="lib_1", text="¿Qué hace feliz?", effort=effort)
+
+
+def test_the_default_level_forwards_no_budget_at_all():
+    """`standard` must leave `thinking_for("answering")` reaching the provider
+    untouched — that resolution is the product's recorded position, and a level
+    that merely re-sent the same number would have taken ownership of it."""
+    provider = FakeProvider(_answered())
+    mod.compose(provider, _asked_at("standard"), evidence(2))
+    assert provider.budgets == [None]
+
+
+def test_no_level_names_a_reasoning_budget_today():
+    """And that is measured, not merely unset.
+
+    `thorough` shipped at 8192 on the reasoning that the widest level should
+    think hardest. Measured on the real corpus 2026-09-03, four questions with
+    its evidence held constant: leaving it unset won 3 and tied 1, never losing,
+    and spent *more* output on 3 of 4. `None` sends no `ThinkingConfig`, so the
+    model picks per question — a literal caps that rather than raising it. See
+    the note in `BUDGETS`.
+    """
+    assert all(BUDGETS[n].thinking_override is None for n in BUDGETS)
+
+
+def _with_override(monkeypatch, level, value):
+    """Give one level a reasoning budget, so the plumbing can be exercised.
+
+    Every level names None today, so a test reading the real table could not
+    tell a threaded override from one silently dropped. These monkeypatch a
+    number in rather than asserting against the table, which keeps the
+    mechanism pinned while the table stays measured.
+    """
+    monkeypatch.setitem(
+        BUDGETS, level, dataclasses.replace(BUDGETS[level], thinking_override=value)
+    )
+
+
+def test_a_level_that_names_a_budget_has_it_forwarded(monkeypatch):
+    _with_override(monkeypatch, "thorough", 4096)
+    provider = FakeProvider(_answered())
+    mod.compose(provider, _asked_at("thorough"), evidence(2))
+    assert provider.budgets == [4096]
+
+
+def test_naming_the_answering_stage_wins_over_the_level(monkeypatch):
+    """`BRAIN_THINKING_ANSWERING` lands in `stage_thinking`. Somebody naming
+    this stage explicitly means this stage, and outranks a per-question dial."""
+    _with_override(monkeypatch, "thorough", 4096)
+    provider = FakeProvider(_answered())
+    provider.settings.stage_thinking = {"answering": 0}
+    mod.compose(provider, _asked_at("thorough"), evidence(2))
+    assert provider.budgets == [None], "the level must not override the operator"
+
+
+def test_a_global_budget_of_zero_still_reaches_answering_at_every_level(monkeypatch):
+    """The guard that is easy to get wrong, and the reason it is written twice.
+
+    `answering` is deliberately *absent* from the stage map so that a global
+    `BRAIN_THINKING_BUDGET` reaches it — the config's own words are "someone
+    turning off every reasoning cost means it". A guard that checked only the
+    per-stage map would be satisfied here and let `thorough` spend against an
+    operator who had globally set zero.
+    """
+    _with_override(monkeypatch, "thorough", 4096)
+    provider = FakeProvider(_answered())
+    provider.settings.thinking_budget = 0
+    mod.compose(provider, _asked_at("thorough"), evidence(2))
+    assert provider.budgets == [None]
+
+
+# --- the level is recorded on the answer ------------------------------------
+
+
+def test_every_way_out_of_compose_records_the_level_it_answered_at():
+    """Five returns, and the four that are not the happy path are the ones a
+    user reaches when they are about to blame the effort setting."""
+    asked = _asked_at("thorough")
+
+    # No evidence at all.
+    assert mod.compose(FakeProvider(_answered()), asked, []).effort == "thorough"
+
+    # The generation call itself failed.
+    assert mod.compose(FakeProvider("not json"), asked, evidence(2)).effort == "thorough"
+
+    # The model said the fragments do not contain the answer.
+    thin = FakeProvider({"suficiente": False, "motivo": "no está", "citas": []})
+    assert mod.compose(thin, asked, evidence(2)).effort == "thorough"
+
+    # It claimed an answer and cited nothing checkable.
+    unbacked = FakeProvider({
+        "suficiente": True, "respuesta": "Sí.", "motivo": "",
+        "citas": [{"chunk_id": "chk_" + "f" * 24, "afirmacion": "inventado"}],
+    })
+    assert mod.compose(unbacked, asked, evidence(2)).effort == "thorough"
+
+    # And the answered path.
+    assert mod.compose(FakeProvider(_answered()), asked, evidence(2)).effort == "thorough"

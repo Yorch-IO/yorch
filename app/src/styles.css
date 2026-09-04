@@ -582,6 +582,22 @@ fieldset.stages legend {
   padding: 0 0.4rem;
 }
 
+/* One effort level: its box, then the two things you can do to it. Without a
+   separator the three levels run together and the buttons read as belonging to
+   the box below rather than the one above. A vertical stack at any width, so
+   unlike the grids further down it needs no media query of its own. */
+.answer-style {
+  border-top: 1px solid var(--line);
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+}
+
+.answer-style:first-of-type {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
 /* --- the gate ------------------------------------------------------------ */
 
 .gate {

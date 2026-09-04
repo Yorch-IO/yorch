@@ -83,11 +83,15 @@ def test_the_prefetch_width_reaches_both_legs():
 
 
 def test_the_default_prefetch_width_is_still_the_module_constant():
-    """The change must be inert until somebody asks for it.
+    """A caller that names no width must get the one the engine would have used.
 
-    Every caller in both planes builds `SearchOpts` without this field, so a
-    default that differed from `PREFETCH_LIMIT` would silently re-tune
-    production retrieval as a side effect of making the knob measurable.
+    This used to say that *every* caller in both planes omitted the field, which
+    stopped being true when the worker's answering path grew effort levels and
+    began passing one. The property that matters is unchanged and is if anything
+    now load-bearing rather than merely tidy: the default level passes the same
+    number this constant holds, so the two must not drift apart — a narrower
+    default here would silently retrieve less for every question, and nothing
+    would error.
     """
     assert qd.SearchOpts().prefetch_limit == qd.PREFETCH_LIMIT
     q = FakeQdrant()

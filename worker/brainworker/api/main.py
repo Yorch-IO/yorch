@@ -16,7 +16,9 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 from uuid import uuid4
 
 import httpx
@@ -30,6 +32,7 @@ from ..artifacts import ArtifactRef, ArtifactStore
 from ..catalog import Catalog, MigrationError, current_version, require_schema
 from ..graph import DEFAULT_CONFIDENCE_FLOOR, Graph, GraphError
 from ..graph.queries import TemplateError, bind, get
+from ..answering.effort import MAX_STYLE_CHARS
 from ..graph.schema import LEGACY_TENANT_ID, SEMANTIC_EDGES
 from ..activities.rebuild import REQUIRED_ARTIFACT
 
@@ -92,6 +95,20 @@ app = FastAPI(title="Company Brain control API", version="0.1.0", lifespan=lifes
 #: decide whether a caller may see a run at all. A run with no memo forces that
 #: check back onto the catalog, and `AskWorkflow` never writes a catalog row.
 _OWNED_BY_LEGACY = {"tenant_id": LEGACY_TENANT_ID}
+
+
+@dataclass
+class AnswerStyleUpdate:
+    """The new wording for one effort level. Empty clears the override.
+
+    The cap is a field constraint rather than a hand-raised error so that
+    FastAPI answers it in its own 422-with-a-list shape — which is the shape the
+    paid plane's exception filter reproduces for `class-validator` failures. The
+    same reasoning as `Question.effort`: a hand-rolled kind here would make the
+    two planes answer one oversized body two different ways.
+    """
+
+    body: Annotated[str, Field(max_length=MAX_STYLE_CHARS)] = ""
 
 
 async def _describe(handle: Any) -> Any | None:
@@ -1681,6 +1698,79 @@ def _explore(template_id: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                 "message": f"No se pudo consultar el grafo: {e}",
             },
         ) from e
+
+
+@app.get("/answer-styles")
+def answer_styles() -> dict[str, Any]:
+    """How this organisation words an answer at each effort level.
+
+    Returns every level, always, with the text that would actually be used —
+    the organisation's override where there is one and the built-in default
+    where there is not — plus `custom`, which is what lets the screen show a
+    "restore the default" affordance only where it would do something.
+
+    `LEGACY_TENANT_ID` is named at the call site rather than defaulted, the way
+    every other listing on this plane names it: this plane *is* that
+    organisation, and saying so is what makes it a decision.
+    """
+    from ..answering.effort import BUDGETS, EFFORT_LEVELS
+
+    try:
+        with Catalog(settings().database_url, pooled=False) as catalog:
+            saved = catalog.answer_styles(tenant_id=LEGACY_TENANT_ID)
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"kind": "catalog_unreachable", "message": str(e)},
+        ) from e
+
+    return {
+        "levels": [
+            {
+                "effort": name,
+                "body": saved.get(name, BUDGETS[name].style),
+                "default_body": BUDGETS[name].style,
+                "custom": name in saved,
+            }
+            for name in EFFORT_LEVELS
+        ],
+        "max_chars": MAX_STYLE_CHARS,
+    }
+
+
+@app.put("/answer-styles/{effort}")
+def set_answer_style(effort: str, payload: AnswerStyleUpdate) -> dict[str, Any]:
+    """Override one level's wording, or clear the override.
+
+    An empty body clears it, so "restore the default" is the same request as
+    "save an empty box" and the two cannot drift into different states.
+
+    The level is validated against the table rather than trusted: a row written
+    for a level that does not exist would be invisible — reads are keyed by the
+    level being asked for — so it would look like a save that silently did
+    nothing.
+    """
+    from ..answering.effort import EFFORT_LEVELS
+
+    if effort not in EFFORT_LEVELS:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "kind": "effort_not_found",
+                "message": f"no existe el nivel {effort!r}",
+            },
+        )
+    try:
+        with Catalog(settings().database_url, pooled=False) as catalog:
+            catalog.set_answer_style(
+                effort, payload.body, tenant_id=LEGACY_TENANT_ID
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"kind": "catalog_unreachable", "message": str(e)},
+        ) from e
+    return {"effort": effort, "custom": bool(payload.body.strip())}
 
 
 @app.get("/versions/{version_id}/outline")

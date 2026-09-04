@@ -21,6 +21,7 @@ import re
 
 from ..pipeline import Spend
 from ..providers import Provider, VertexAdapter
+from .effort import budget_for, compose_system
 from .types import Answer, Citation, Evidence, Plan, Question
 
 log = logging.getLogger(__name__)
@@ -73,17 +74,43 @@ SCHEMA = {
 }
 
 
+def _thinking_override(provider: Provider, question: Question) -> int | None:
+    """The effort level's reasoning budget, unless an operator has spoken.
+
+    Configuration wins over a per-question level, in both of the two ways it can
+    be expressed, and the second is the one that is easy to miss:
+
+    * ``BRAIN_THINKING_ANSWERING`` puts ``"answering"`` in ``stage_thinking``.
+      Somebody naming this stage explicitly means this stage.
+    * ``BRAIN_THINKING_BUDGET`` sets the global fallback. ``answering`` is
+      deliberately *absent* from the stage map so that a global reaches it —
+      `config.py` says so in as many words: "someone turning off every reasoning
+      cost means it." A guard that checked only the per-stage map would let
+      ``thorough`` spend against an operator who had globally set zero, which is
+      exactly the promise that comment makes.
+
+    So the level's override applies only when neither is set — that is, only when
+    the resolved budget would have been the model's own default anyway.
+    """
+    gemini = provider.settings
+    if "answering" in gemini.stage_thinking or gemini.thinking_budget is not None:
+        return None
+    return budget_for(question.effort).thinking_override
+
+
 def compose(
     provider: Provider,
     question: Question,
     evidence: list[Evidence],
     plan: Plan | None = None,
+    style: str = "",
 ) -> Answer:
     if not evidence:
         return Answer(
             state="insufficient_evidence",
             reason="la búsqueda no devolvió ningún fragmento de esta biblioteca",
             plan=plan,
+            effort=question.effort,
         )
 
     adapter = VertexAdapter(provider)
@@ -91,7 +118,9 @@ def compose(
 
     try:
         raw = adapter.generate_json(
-            prompt, system=SYSTEM, schema=SCHEMA, stage="answering"
+            prompt, system=compose_system(SYSTEM, style), schema=SCHEMA,
+            stage="answering",
+            thinking_budget=_thinking_override(provider, question),
         )
     except Exception as e:
         log.warning("answer generation failed: %s", e)
@@ -101,6 +130,7 @@ def compose(
             evidence=evidence,
             plan=plan,
             spend=[_spend(provider, adapter)],
+            effort=question.effort,
         )
 
     spend = [_spend(provider, adapter)]
@@ -112,6 +142,7 @@ def compose(
             evidence=evidence,
             plan=plan,
             spend=spend,
+            effort=question.effort,
         )
 
     citations, invented = _verify(raw.get("citas") or [], evidence)
@@ -135,6 +166,7 @@ def compose(
             evidence=evidence,
             plan=plan,
             spend=spend,
+            effort=question.effort,
         )
 
     return Answer(
@@ -144,6 +176,7 @@ def compose(
         evidence=evidence,
         plan=plan,
         spend=spend,
+        effort=question.effort,
     )
 
 

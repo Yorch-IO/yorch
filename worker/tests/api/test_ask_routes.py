@@ -192,3 +192,48 @@ def test_asking_without_a_provider_refuses_before_starting(monkeypatch):
     assert response.status_code == 503
     assert response.json()["detail"]["kind"] == "provider_unconfigured"
     assert fake.started == []
+
+
+def test_the_effort_level_reaches_the_workflow(configured):
+    fake = with_outcome(configured, AskOutcome(state="running"))
+    api = TestClient(main.app)
+    api.post("/ask", json={
+        "library_id": "lib_a", "text": "¿y el arrianismo?", "effort": "thorough",
+    })
+    assert fake.started[0].effort == "thorough"
+
+
+def test_a_question_that_names_no_level_is_asked_at_the_default(configured):
+    """Every client older than the level is this case, and so is `curl`."""
+    from brainworker.answering.effort import DEFAULT_EFFORT
+
+    fake = with_outcome(configured, AskOutcome(state="running"))
+    api = TestClient(main.app)
+    api.post("/ask", json={"library_id": "lib_a", "text": "¿y el arrianismo?"})
+    assert fake.started[0].effort == DEFAULT_EFFORT
+
+
+def test_a_level_the_table_does_not_name_is_refused(configured):
+    """Refused by FastAPI's own validation rather than by a hand-raised error.
+
+    The shape matters as much as the status. The paid plane validates this field
+    with class-validator, and its exception filter renders those failures in
+    FastAPI's own 422-with-a-list form precisely so the two planes answer a bad
+    request identically. A hand-rolled 400-with-a-`kind` here would have made
+    them disagree for the same input.
+    """
+    with_outcome(configured, AskOutcome(state="running"))
+    api = TestClient(main.app)
+    r = api.post("/ask", json={
+        "library_id": "lib_a", "text": "¿y?", "effort": "exhaustivo",
+    })
+    assert r.status_code == 422
+    assert isinstance(r.json()["detail"], list)
+
+
+def test_a_refused_level_never_starts_a_workflow(configured):
+    """A question that was not asked must not be billed or booked."""
+    fake = with_outcome(configured, AskOutcome(state="running"))
+    api = TestClient(main.app)
+    api.post("/ask", json={"library_id": "lib_a", "text": "¿y?", "effort": "más"})
+    assert fake.started == []

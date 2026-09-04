@@ -61,9 +61,13 @@ from brainworker.indexing import version_scope  # noqa: E402
 #: somebody changed one of them, and would then explain a retrieval that never
 #: happened.
 from brainworker.answering.retrieve import (  # noqa: E402
-    CANDIDATE_LIMIT,
     MIN_SCORE,
     PER_SECTION,
+)
+from brainworker.answering.effort import (  # noqa: E402
+    DEFAULT_EFFORT,
+    EFFORT_LEVELS,
+    budget_for,
 )
 
 #: How deep to look when placing the chunk. Only affects the *reported* rank:
@@ -71,9 +75,13 @@ from brainworker.answering.retrieve import (  # noqa: E402
 #: is reported as unranked within it rather than as ranked last.
 DEFAULT_DEPTH = 500
 
-#: What `Question.top_k` defaults to. Restated here only because a probe may be
-#: run without a Question object; passed explicitly it always wins.
-DEFAULT_TOP_K = 8
+#: What `Question.top_k` defaults to, at the default effort level.
+#:
+#: Derived rather than restated since levels exist: a probe run against a
+#: question that was asked at `thorough` and defaulted to 8 here would explain
+#: a retrieval half the size of the real one. `--effort` moves all three of the
+#: figures the level owns together.
+DEFAULT_TOP_K = budget_for(DEFAULT_EFFORT).top_k
 
 
 def _ids(hits: list[Any]) -> list[str]:
@@ -99,6 +107,7 @@ def probe(
     per_section: int,
     top_k: int,
     depth: int,
+    effort: str = DEFAULT_EFFORT,
 ) -> dict[str, Any]:
     from docagent.bm25 import tokenize
     from docagent.qdrant import Qdrant, SearchOpts, diversify
@@ -177,10 +186,19 @@ def probe(
         "candidate_limit": candidate_limit,
         "per_section": per_section,
         "top_k": top_k,
+        "effort": effort,
+        # Compared against *the named level's* budget, not against the module
+        # constants. Those describe `standard` only, so checking against them
+        # would report "differs from production" for every faithful probe of a
+        # question asked at any other level — and the note it prints is what a
+        # reader uses to decide whether the explanation applies at all.
+        # `min_score` and `per_section` stay on the constants because no level
+        # scales them.
         "matches_production": (
             min_score == MIN_SCORE
-            and candidate_limit == CANDIDATE_LIMIT
             and per_section == PER_SECTION
+            and candidate_limit == budget_for(effort).candidate_limit
+            and prefetch_limit == budget_for(effort).prefetch_limit
         ),
     }
     report["scope"] = filters
@@ -267,11 +285,14 @@ def main() -> int:
     p.add_argument("--tenant", required=True)
     p.add_argument("--version", default="", help="narrow the scope to one version")
     p.add_argument("--min-score", type=float, default=MIN_SCORE)
+    p.add_argument("--effort", choices=EFFORT_LEVELS, default=DEFAULT_EFFORT,
+                   help="the level the question was asked at; sets the defaults "
+                        "for --prefetch, --candidates and --top-k")
     p.add_argument("--prefetch", type=int, default=None,
-                   help="per-leg prefetch width (default: the engine's PREFETCH_LIMIT)")
-    p.add_argument("--candidates", type=int, default=CANDIDATE_LIMIT)
+                   help="per-leg prefetch width (default: the level's)")
+    p.add_argument("--candidates", type=int, default=None)
     p.add_argument("--per-section", type=int, default=PER_SECTION)
-    p.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    p.add_argument("--top-k", type=int, default=None)
     p.add_argument("--depth", type=int, default=DEFAULT_DEPTH,
                    help="how deep to look when placing the chunk")
     p.add_argument("--json", dest="json_out", default="")
@@ -284,17 +305,27 @@ def main() -> int:
     if args.version:
         filters = {**filters, **version_scope(args.tenant, args.version)}
 
+    # An explicit flag always wins; the level supplies the rest, so a probe of a
+    # question asked at `thorough` explains that retrieval rather than a
+    # standard one it never ran.
+    budget = budget_for(args.effort)
+
     report = probe(
         settings,
         question=args.question,
         target=args.chunk,
         filters=filters,
         min_score=args.min_score,
-        prefetch_limit=args.prefetch if args.prefetch is not None else PREFETCH_LIMIT,
-        candidate_limit=args.candidates,
+        prefetch_limit=(
+            args.prefetch if args.prefetch is not None else budget.prefetch_limit
+        ),
+        candidate_limit=(
+            args.candidates if args.candidates is not None else budget.candidate_limit
+        ),
         per_section=args.per_section,
-        top_k=args.top_k,
+        top_k=args.top_k if args.top_k is not None else budget.top_k,
         depth=args.depth,
+        effort=args.effort,
     )
 
     print(render(report))

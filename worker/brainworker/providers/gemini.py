@@ -289,6 +289,7 @@ class Provider:
         model: str | None = None,
         stage: str | None = None,
         history: Sequence[tuple[str, str]] | None = None,
+        thinking_budget: int | None = None,
     ) -> Generation:
         """One completion, with usage attached.
 
@@ -320,7 +321,16 @@ class Provider:
         # mechanical and separately verified, and answering is the one genuine
         # judgement call. `thinking_for` resolves the engine's own stage names
         # too, so `stage="correct"` does not quietly miss.
-        budget = self.settings.thinking_for(stage)
+        #
+        # An explicit argument wins, full stop. This function stays dumb about
+        # *why* one was passed: deciding whether a per-question effort level may
+        # override the configured stage budget is policy, and it lives at the one
+        # call site that has one (`answering/answer.py`), not here.
+        budget = (
+            thinking_budget
+            if thinking_budget is not None
+            else self.settings.thinking_for(stage)
+        )
         if budget is not None:
             config.thinking_config = types.ThinkingConfig(thinking_budget=budget)
         if response_schema is not None:

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "../i18n";
 import type { Answer, Citation, EvidenceItem } from "../lib/api";
+import { DEFAULT_ASK_EFFORT } from "../lib/askEffort";
 import { BackendProvider } from "../lib/backend";
 import { LibrariesProvider } from "../lib/libraries";
 import { AskScreen } from "./AskScreen";
@@ -365,5 +366,75 @@ describe("the clock", () => {
     expect(
       await screen.findAllByText(/Searching… [1-9]/, {}, { timeout: 4000 }),
     ).toHaveLength(2);
+  });
+});
+
+describe("the effort level", () => {
+  it("asks at the balanced level when nothing has been chosen", async () => {
+    // The property that made shipping the control safe: an untouched screen
+    // asks exactly what every question asked before the control existed.
+    willAnswer(answer());
+    await askQuestion("¿qué dice el libro?");
+    expect(ask).toHaveBeenCalledWith(
+      expect.objectContaining({ effort: DEFAULT_ASK_EFFORT }),
+    );
+  });
+
+  it("sends the level the user picked", async () => {
+    willAnswer(answer());
+    await mounted();
+    fireEvent.click(screen.getByRole("radio", { name: /thorough/i }));
+    await submitQuestion("¿y esto?");
+    await waitFor(() => expect(ask).toHaveBeenCalled());
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ effort: "thorough" }));
+  });
+
+  it("remembers the level for the next question", async () => {
+    // Persisted rather than component state: the screen is remounted whenever
+    // the plane changes, and re-picking a level after every switch would be a
+    // tax on the setting nobody would pay.
+    willAnswer(answer());
+    await mounted();
+    fireEvent.click(screen.getByRole("radio", { name: /brief/i }));
+    await waitFor(() =>
+      expect(window.localStorage.getItem("companyBrain.askEffort")).toBe("brief"),
+    );
+
+    cleanup();
+    await mounted();
+    await submitQuestion("otra");
+    await waitFor(() => expect(ask).toHaveBeenCalled());
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ effort: "brief" }));
+  });
+
+  it("asks again at the level the original question used", async () => {
+    // The second `startAsk` call site, and the one that gets forgotten. Reading
+    // the level off the control here instead of off the entry would silently
+    // re-ask an old question at whatever the control happens to say now, which
+    // is exactly what makes two answers to one question incomparable.
+    willAnswer(answer());
+    await mounted();
+    fireEvent.click(screen.getByRole("radio", { name: /thorough/i }));
+    await submitQuestion("la original");
+    await waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
+    await screen.findByText("la respuesta");
+
+    // Move the control somewhere else before pressing "ask again".
+    fireEvent.click(screen.getByRole("radio", { name: /brief/i }));
+    fireEvent.click(screen.getByRole("button", { name: t("ask.again") }));
+
+    await waitFor(() => expect(ask).toHaveBeenCalledTimes(2));
+    expect(ask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "la original", effort: "thorough" }),
+    );
+  });
+
+  it("never sends a top_k of its own", async () => {
+    // The level decides how many passages reach the model, and that decision
+    // lives on the server. A client that also sent a number would be a second
+    // opinion about the same thing, and the two would drift.
+    willAnswer(answer());
+    await askQuestion("¿algo?");
+    expect(ask.mock.calls[0]?.[0]).not.toHaveProperty("top_k");
   });
 });

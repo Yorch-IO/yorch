@@ -2,6 +2,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { AnswerStyles } from "./AnswerStyles";
+
 import { useBackend } from "../lib/backend";
 import {
   api,
@@ -590,6 +592,8 @@ export function StackScreen() {
           {savedProject && <p className="warn">{t("provider.needsRestart")}</p>}
         </>
       )}
+
+      <AnswerStyles />
 
       <h3>{t("ping.title")}</h3>
       <p>{t("ping.intro")}</p>

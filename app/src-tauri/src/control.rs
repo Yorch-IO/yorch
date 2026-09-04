@@ -642,20 +642,74 @@ pub struct Approval {
 pub struct Question {
     pub library_id: String,
     pub text: String,
-    #[serde(default = "default_top_k")]
-    pub top_k: u32,
+    /// Absent means "the effort level decides", which is what the app always
+    /// says. Omitted from the payload entirely rather than sent as `null`, so
+    /// the two control planes see the same thing a `curl` that never mentioned
+    /// it would send — and so neither has to decide what a null means.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
     #[serde(default)]
     pub filters: std::collections::BTreeMap<String, String>,
     #[serde(default = "default_floor")]
     pub confidence_floor: f64,
-}
-
-fn default_top_k() -> u32 {
-    8
+    /// How much evidence and reasoning the question may spend. The numbers
+    /// behind each level live in the worker (`answering/effort.py`); nothing on
+    /// this side knows or needs to know what they are.
+    ///
+    /// Defaulted rather than optional because a level is always in effect —
+    /// there is no such thing as a question asked at no effort — and a webview
+    /// older than this shell must keep asking at the level that behaves the way
+    /// it always has.
+    #[serde(default = "default_effort")]
+    pub effort: String,
 }
 
 fn default_floor() -> f64 {
     0.6
+}
+
+/// One effort level's answer wording, as the settings screen needs it.
+///
+/// `body` is what would actually be used — the organisation's override where
+/// there is one and the built-in default where there is not — and `custom` says
+/// which of the two it is. Both are needed: the text goes in the box, the flag
+/// decides whether "restore the default" would do anything.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AnswerStyle {
+    pub effort: String,
+    pub body: String,
+    pub default_body: String,
+    pub custom: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AnswerStyles {
+    pub levels: Vec<AnswerStyle>,
+    pub max_chars: usize,
+}
+
+/// The new wording for one level. Empty clears the override.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct AnswerStyleUpdate {
+    #[serde(default)]
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AnswerStyleSaved {
+    pub effort: String,
+    pub custom: bool,
+}
+
+/// Kept equal to `DEFAULT_EFFORT` in `worker/brainworker/answering/effort.py`.
+/// Restated here only because a webview may omit the field; every other default
+/// in this struct is there for the same reason.
+fn default_effort() -> String {
+    "standard".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1324,6 +1378,20 @@ impl Control {
         .await
     }
 
+    async fn put_json<B: Serialize, T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        timeout: Duration,
+    ) -> Result<T> {
+        self.send(
+            self.http.put(format!("{}{path}", self.base)).json(body),
+            path,
+            timeout,
+        )
+        .await
+    }
+
     async fn send<T: serde::de::DeserializeOwned>(
         &self,
         req: reqwest::RequestBuilder,
@@ -1519,6 +1587,19 @@ impl Control {
 
     /// Which libraries exist. Free, and the first call every screen needs: a
     /// library id is not something a person can be expected to type.
+    pub async fn answer_styles(&self) -> Result<AnswerStyles> {
+        self.get("/answer-styles", HEALTH_TIMEOUT).await
+    }
+
+    pub async fn set_answer_style(
+        &self,
+        effort: &str,
+        body: &AnswerStyleUpdate,
+    ) -> Result<AnswerStyleSaved> {
+        self.put_json(&format!("/answer-styles/{effort}"), body, HEALTH_TIMEOUT)
+            .await
+    }
+
     pub async fn libraries(&self) -> Result<Libraries> {
         self.get("/libraries", HEALTH_TIMEOUT).await
     }
@@ -1888,11 +1969,38 @@ mod request_direction {
     fn a_question_stays_snake_case_on_both_sides() {
         // The exception, pinned rather than left to be rediscovered: this is the
         // one request type the TypeScript side spells the Python way.
-        let from_webview = r#"{"library_id": "lib_1", "text": "¿qué?"}"#;
+        let from_webview =
+            r#"{"library_id": "lib_1", "text": "¿qué?", "effort": "thorough"}"#;
         let parsed: Question = serde_json::from_str(from_webview).unwrap();
         assert_eq!(parsed.library_id, "lib_1");
+        assert_eq!(parsed.effort, "thorough");
         let out = serde_json::to_value(&parsed).unwrap();
         assert_eq!(out["library_id"], "lib_1");
+        assert_eq!(out["effort"], "thorough");
+    }
+
+    #[test]
+    fn a_question_omitting_the_effort_still_asks_at_the_default() {
+        // A webview older than this shell sends no `effort`. Without the serde
+        // default that is not a question asked at the default level, it is a
+        // body serde refuses outright — so the whole Ask screen would stop
+        // working rather than degrade.
+        let parsed: Question =
+            serde_json::from_str(r#"{"library_id": "lib_1", "text": "¿qué?"}"#).unwrap();
+        assert_eq!(parsed.effort, "standard");
+        assert_eq!(parsed.top_k, None);
+    }
+
+    #[test]
+    fn a_question_that_names_no_top_k_omits_the_key_rather_than_nulling_it() {
+        // `top_k` absent means "the level decides", and that decision belongs to
+        // one place — the worker's effort table. Sending `null` would make both
+        // control planes answer a question they should never be asked: what does
+        // an explicitly-null top_k mean?
+        let parsed: Question =
+            serde_json::from_str(r#"{"library_id": "lib_1", "text": "¿qué?"}"#).unwrap();
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert!(out.get("top_k").is_none(), "got {out}");
     }
 
     #[test]

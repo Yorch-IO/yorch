@@ -52,6 +52,7 @@ class VertexAdapter:
         image_png: bytes | None = None,
         max_output_tokens: int | None = None,
         history: Sequence[tuple[str, str]] | None = None,
+        thinking_budget: int | None = None,
     ) -> str:
         if image_png is not None:
             # OCR is the only caller that passes an image, and it is a paid
@@ -75,6 +76,11 @@ class VertexAdapter:
             # turn, and this class duck-types `docagent.vertex.Vertex` for the
             # engine's correction pass — which knows nothing about the argument.
             **({"history": history} if history else {}),
+            # Same conditional shape, same reason, plus one of its own: a caller
+            # with no opinion must reach `thinking_for(stage)` untouched, and
+            # every stage but answering has none. Forwarding it unconditionally
+            # would also break the duck-type above.
+            **({"thinking_budget": thinking_budget} if thinking_budget is not None else {}),
         )
         self.usage.add(result.usage)
         log.debug(
@@ -91,6 +97,7 @@ class VertexAdapter:
         schema: dict,
         stage: str = "generate",
         history: Sequence[tuple[str, str]] | None = None,
+        thinking_budget: int | None = None,
     ) -> Any:
         """Structured output, parsed.
 
@@ -100,7 +107,7 @@ class VertexAdapter:
         """
         raw = self.generate(
             prompt, system=system, temperature=0.0, json_schema=schema, stage=stage,
-            history=history,
+            history=history, thinking_budget=thinking_budget,
         )
         try:
             return json.loads(raw)

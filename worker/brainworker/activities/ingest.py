@@ -542,8 +542,10 @@ async def register_document(
             run_id=run_id,
             workflow_id=workflow_id,
             # 'reindex' has been in the CHECK constraint since the first
-            # migration and nothing had ever written it.
-            kind="reindex" if request.reindex else "index",
+            # migration and nothing had ever written it. `run_kind` is the
+            # override a caller that is not staging a file uses; empty keeps
+            # every existing caller on exactly this line's old behaviour.
+            kind=request.run_kind or ("reindex" if request.reindex else "index"),
             document_id=doc_id,
         )
         version, created = catalog.register_version(
@@ -748,6 +750,23 @@ async def preview_chunks(
 async def estimate_cost(
     preview: Preview, options: StageOptions, decision: ProfileDecision | None = None
 ) -> Estimate:
+    """Project the work from a preview's character and chunk counts.
+
+    A thin wrapper over :func:`estimate_for`, which is where the arithmetic
+    lives so a second gate can reuse it rather than reimplement it. The video
+    route does exactly that: it has the same characters and chunks to reason
+    about and no `Preview` to put them in, and a gate whose numbers were
+    computed twice would eventually quote two different bills for one pipeline.
+    """
+    return estimate_for(preview.characters, preview.chunk_count, options, decision)
+
+
+def estimate_for(
+    characters: int,
+    chunk_count: int,
+    options: StageOptions,
+    decision: ProfileDecision | None = None,
+) -> Estimate:
     """Project the work from character counts, before spending anything.
 
     Token counts deliberately over-estimate: `CHARS_PER_TOKEN` takes the low end
@@ -759,7 +778,7 @@ async def estimate_cost(
     `PRICES_PER_MILLION`.
     """
     settings = _settings()
-    tokens = int(preview.characters / CHARS_PER_TOKEN)
+    tokens = int(characters / CHARS_PER_TOKEN)
     stages: list[StageEstimate] = []
 
     # Reasoning is billed as output, so an estimate that ignored it under-reported
@@ -797,8 +816,8 @@ async def estimate_cost(
         )
 
     # Calls, not characters, is what the prompt overhead multiplies by.
-    correction_calls = max(1, -(-preview.characters // CORRECTION_BATCH_CHARS))
-    semantic_calls = max(1, preview.chunk_count)
+    correction_calls = max(1, -(-characters // CORRECTION_BATCH_CHARS))
+    semantic_calls = max(1, chunk_count)
 
     # Learning is skipped entirely when the family already has a profile, so the
     # second document of a family is cheaper than the first — which is the whole
@@ -848,7 +867,7 @@ async def estimate_cost(
         # cap rather than as one per concept. One per concept would over-report by
         # orders of magnitude, and pushing a user to decline affordable work
         # misleads them exactly as much as billing more than they approved.
-        condense_calls = max(1, preview.chunk_count // CONDENSE_SOURCE_CAP)
+        condense_calls = max(1, chunk_count // CONDENSE_SOURCE_CAP)
         add(
             "semantics-condense",
             settings.gemini.model,
@@ -867,14 +886,14 @@ async def estimate_cost(
         #
         # It had never mattered, because nothing implemented the stage.
         sample = EVAL_SAMPLE_TUNING if options.tune else EVAL_SAMPLE
-        evalset_calls = min(sample, max(1, preview.chunk_count))
+        evalset_calls = min(sample, max(1, chunk_count))
         # The chunk this document actually has, not the cap — bounded by it.
         # `EVALSET_INPUT_CHARS` is right for a document at the chunker's ceiling
         # and 4.5x too big for one whose chunks run 580 characters, which is what
         # the first real run had: 11,456 input tokens quoted against 4,408 spent.
         # Over-reporting is the correct direction and *wildly* over-reporting is
         # the other failure the range exists to avoid.
-        chunk_chars = preview.characters / max(1, preview.chunk_count)
+        chunk_chars = characters / max(1, chunk_count)
         evalset_chars = min(EVALSET_INPUT_CHARS, chunk_chars + 2 * EVALSET_NEIGHBOUR_CHARS)
         add(
             "evalset",
@@ -1393,6 +1412,14 @@ async def project_structure(
             char_end=row.get("char_to", 0),
             section_path=paths.get(_heading_titles(row)),
             page=row.get("page"),
+            # `sheet` and `slide` were declared on ChunkNode, written by
+            # `_MERGE_CHUNKS` and rendered by `_locator` — and set by nothing,
+            # because no row schema carried them. Read them here rather than
+            # adding `start_s` beside two fields with the same bug.
+            sheet=row.get("cell_ref") or None,
+            slide=row.get("slide"),
+            start_s=row.get("start_s"),
+            end_s=row.get("end_s"),
         )
         for i, row in enumerate(rows)
     ]

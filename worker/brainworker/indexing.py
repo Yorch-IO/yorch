@@ -94,6 +94,45 @@ class StoredChunk:
         return " > ".join(p for p in (self.chapter, self.section) if p)
 
 
+def chunk_row(chunk: Any, *, start_s: float | None = None,
+              end_s: float | None = None) -> dict[str, Any]:
+    """One row of ``chunks.jsonl``, written by every stage that writes one.
+
+    A function rather than a dict literal at each call site, and it lives here
+    rather than beside a caller, because :meth:`StoredChunk.from_row` is the
+    *reader* and the two must not drift. Two writers with their own literals is
+    how a field ends up written by one and expected by the other.
+
+    ``para_from``/``para_to`` are recorded even though only a timed source needs
+    them: they are already on ``docagent.chunk.Chunk`` and were being discarded,
+    and they are what makes a chunk's timestamp checkable after the fact against
+    the run's own cue table rather than only at the moment it was derived.
+
+    ``start_s``/``end_s`` are absent for a document, which is what keeps
+    ``project_structure``'s ``row.get`` returning ``None`` and the locator on
+    its byte-range branch.
+    """
+    row: dict[str, Any] = {
+        "index": chunk.index,
+        "kind": chunk.kind,
+        "chapter": chunk.chapter,
+        "section": chunk.section,
+        "text": chunk.text,
+        "context": chunk.context,
+        "overlap": chunk.overlap,
+        "embed_text": chunk.embed_text(),
+        "char_from": chunk.char_from,
+        "char_to": chunk.char_to,
+        "cell_ref": chunk.cell_ref,
+        "para_from": chunk.para_from,
+        "para_to": chunk.para_to,
+    }
+    if start_s is not None:
+        row["start_s"] = start_s
+        row["end_s"] = end_s
+    return row
+
+
 class QdrantWriter:
     """Stamps this organisation's identity onto every point the engine produces.
 

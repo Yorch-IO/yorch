@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
+from ..videosource import hhmmss, watch_url
 from .client import Graph
 from .schema import (
     LEGACY_TENANT_ID,
@@ -69,6 +70,10 @@ class ChunkNode:
     page: int | None = None
     sheet: str | None = None
     slide: int | None = None
+    #: When this chunk was spoken, for a source that has a clock rather than
+    #: pages. Seconds from the start of the media. `None` for every document.
+    start_s: float | None = None
+    end_s: float | None = None
     qdrant_point_id: str | None = None
 
 
@@ -187,6 +192,7 @@ MERGE (c:Chunk {id: row.id})
 SET c.ordinal = row.ordinal, c.kind = row.kind, c.text = row.text,
     c.char_start = row.char_start, c.char_end = row.char_end,
     c.page = row.page, c.sheet = row.sheet, c.slide = row.slide,
+    c.start_s = row.start_s, c.end_s = row.end_s,
     c.qdrant_point_id = row.qdrant_point_id, c.version_id = $version_id,
     c.tenant_id = $tenant_id
 MERGE (v)-[:HAS_CHUNK]->(c)
@@ -319,6 +325,8 @@ def project_structure(graph: Graph, version: VersionNode) -> dict[str, int]:
             "page": c.page,
             "sheet": c.sheet,
             "slide": c.slide,
+            "start_s": c.start_s,
+            "end_s": c.end_s,
             "qdrant_point_id": c.qdrant_point_id,
         }
         for cid, c in zip(chunk_ids, version.chunks)
@@ -389,6 +397,10 @@ def _title_for(version: VersionNode, chunk: ChunkNode) -> str | None:
     return None
 
 
+#: Formats whose chunks are located by a clock rather than by a byte range.
+TIMED_FORMATS = frozenset({"youtube"})
+
+
 def _locator(version: VersionNode, chunk: ChunkNode) -> str:
     """A human-readable pointer the UI can open, and the answer can print.
 
@@ -396,7 +408,22 @@ def _locator(version: VersionNode, chunk: ChunkNode) -> str:
     differ by format: a PDF has pages, a spreadsheet has sheets, a deck has
     slides, and a plain text file has only the byte range that every format
     carries.
+
+    **A timed source returns early, and carries neither the title nor the byte
+    range.** Both would be wrong here for the same reason, which is that
+    ``citation_id`` is ``digest(chunk, locator)`` — the locator *is* the
+    citation's identity. A video's title is something its uploader can change
+    without telling anybody, so putting it here would re-mint every ``cit_`` on
+    the next projection; the byte range indexes a corrected transcript nobody
+    will ever open. What is left is two facts that cannot move: when it was
+    said, and where to hear it. The title is not lost — it is on the
+    ``DocumentVersion``, on the evidence, and in every Qdrant payload as
+    ``source_title``.
     """
+    if chunk.start_s is not None and version.fmt in TIMED_FORMATS:
+        vid = version.source_key.rsplit("/", 1)[-1]
+        return f"{hhmmss(chunk.start_s)} · {watch_url(vid, chunk.start_s)}"
+
     parts = [version.title]
     if chunk.page is not None:
         parts.append(f"p. {chunk.page}")

@@ -49,6 +49,8 @@ from ..pipeline import (
     TuneOutcome,
 )
 from ..indexing import PAYLOAD_INDEXES, QdrantWriter, StoredChunk, version_scope
+from ..indexing import chunk_row as indexing_chunk_row
+from .. import videosource
 from ..providers import CachedEmbedder, Provider, VertexAdapter
 from ..providers.gemini import RETRIEVAL_DOCUMENT, Usage
 from .ingest import (
@@ -114,12 +116,21 @@ def _embed_cache_dir(settings) -> "pathlib.Path":
     return settings.paths.cache / "embed"
 
 
-def _charge(run_id: str, spend: Spend) -> Spend:
+def _charge(run_id: str, spend: Spend, provider: str = "vertex") -> Spend:
     """Record real spend in the catalog. Append-only.
 
     A retried activity spent its tokens whether or not the attempt succeeded, so
     this appends rather than overwriting — a total that could be revised
     downwards by a retry would under-report the bill that was actually incurred.
+
+    **That premise is false in exactly one place**, and the caller there says so:
+    an Amazon Transcribe job is started under a name derived from the version, so
+    a retry finds the job already running and Amazon bills once. Charging again
+    on the retry would double-report a bill that was incurred once.
+
+    `provider` defaults to the one that charges for everything else here.
+    `cost_entry.provider` has no CHECK constraint, so a new one needs no
+    migration.
     """
     try:
         settings = _settings()
@@ -129,7 +140,7 @@ def _charge(run_id: str, spend: Spend) -> Spend:
             catalog.record_cost(
                 run_id,
                 stage=spend.stage,
-                provider="vertex",
+                provider=provider,
                 model=spend.model,
                 input_tokens=spend.input_tokens,
                 output_tokens=spend.output_tokens,
@@ -324,6 +335,15 @@ async def correct_text(run_id: str, extraction: Extraction) -> Correction:
         engine_correct.correct_paragraphs, adapter, paragraphs, stage="correct"
     )
 
+    if extraction.single_line_paragraphs:
+        # A transcript's paragraph index is what carries its timestamp, and
+        # `verify` bounds length, scripture references, digits and proper nouns
+        # while looking for no newline at all. A model returning "…dijo.\n\nY
+        # entonces…" splits one paragraph into two on the join below and moves
+        # every later timestamp by one. Collapsing is safe here and only here —
+        # see `Extraction.single_line_paragraphs`.
+        corrected = videosource.repair_paragraphs(corrected)
+
     # Re-joined exactly the way `split_paragraphs` expects to find them, because
     # every char_span computed after this indexes *this* byte stream.
     body = "\n\n".join(corrected).encode("utf-8")
@@ -402,22 +422,9 @@ async def chunk_final(
     rules = decision.rules if decision and decision.source != "default" else None
     paragraphs = split_paragraphs(data)
     chunks = build_chunks(data, paragraphs, chunk_rules(rules), kind_classifier(rules))
-    rows = [
-        {
-            "index": c.index,
-            "kind": c.kind,
-            "chapter": c.chapter,
-            "section": c.section,
-            "text": c.text,
-            "context": c.context,
-            "overlap": c.overlap,
-            "embed_text": c.embed_text(),
-            "char_from": c.char_from,
-            "char_to": c.char_to,
-            "cell_ref": c.cell_ref,
-        }
-        for c in chunks
-    ]
+    # One row schema, written through one function — see `indexing.chunk_row`,
+    # which sits beside `StoredChunk.from_row`, the reader it must agree with.
+    rows = [indexing_chunk_row(c) for c in chunks]
     ref = _record(run_id, "chunks", store.write_jsonl("chunks", rows))
     kinds = Counter(c.kind for c in chunks)
     return Chunked(

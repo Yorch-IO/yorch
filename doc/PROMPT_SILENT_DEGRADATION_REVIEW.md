@@ -127,13 +127,3 @@ with anything that writes.
   something, copy it to your scratchpad first.
 - **Another session may be working in the same tree.** Run `git status` before
   planning and again before editing.
-
-## Two method traps, already paid for here
-
-- **Do not optimize against an anecdote.** One case is a diagnostic probe, not
-  an objective function. If you measure retrieval, measure against an eval set
-  and accept a change only when it clears the bootstrap margin.
-- **A heuristic detector that does not know it failed reports zero, and zero
-  reads as "no problem".** When you review one, ask what it returns when it has
-  no basis to judge, and whether that value is distinguishable from a real
-  measurement. This repo already has a recorded defect of exactly that shape.

@@ -73,6 +73,39 @@ REBUILD_STAGES: tuple[str, ...] = (
     "done",
 )
 
+#: :class:`VideoIngestWorkflow`'s own set.
+#:
+#: **A display order, not a schedule**, and two stages here move between the two
+#: transcript sources — the same caveat ``INGEST_STAGES`` makes about
+#: ``extracting`` running twice:
+#:
+#: - When the video has captions, ``grouping`` runs *before* ``previewing``, so
+#:   the gate can quote correction from the real character count and show a real
+#:   chunk preview. ``fetching`` and ``transcribing`` never happen and nothing
+#:   is charged for the transcript.
+#: - When it does not, ``previewing`` quotes from the duration alone, and
+#:   ``fetching`` (audio to S3) then ``transcribing`` (the Amazon Transcribe job)
+#:   run *after* approval, with ``grouping`` after them.
+#:
+#: ``probing`` and ``registering`` precede the ``run`` row for the reason
+#: ``IngestWorkflow`` buffers its own first two: ``_insert_event`` derives its
+#: tenant from that row, so an event written before it is silently dropped.
+VIDEO_STAGES: tuple[str, ...] = (
+    "probing",
+    "registering",
+    "grouping",
+    "previewing",
+    "awaiting_approval",
+    "fetching",
+    "transcribing",
+    "correcting",
+    "chunking",
+    "projecting",
+    "embedding",
+    "activating",
+    "done",
+)
+
 #: The two stages :mod:`brainworker.removal` walks, in the order it walks them.
 #:
 #: That order is not cosmetic — ``removal.py`` owns it precisely so no caller can
@@ -110,6 +143,12 @@ COST_STAGES: dict[str, tuple[str, ...]] = {
     "tuning": ("tuning",),
     "semantics": ("semantics", "semantics-condense"),
     "replaying semantics": ("semantics-replay",),
+    # The first charge in this product that is not tokens times a third-party
+    # multiplier: Amazon Transcribe bills per second of audio, so the figure is
+    # exact rather than projected. It is absent entirely on the caption path,
+    # where the stage never runs — which is what makes `cost: null` there mean
+    # "free", not "the charge was lost".
+    "transcribing": ("transcription",),
 }
 
 #: ``cost_entry.stage`` -> the workflow stage that charged it.
@@ -158,6 +197,16 @@ ARTIFACT_STAGES: dict[str, str] = {
     "semantics": "semantics",
     "ledger": "done",
     "events": "done",
+    # The video path. Each of these is written by exactly one stage, which is
+    # why `grouping` exists as a stage of its own rather than being folded into
+    # whichever half produced the cues: the transcript is built the same way
+    # from either source, and an artifact attributed to two stages would make
+    # this map a lie on one of the two paths.
+    "video_probe": "probing",
+    "captions": "probing",
+    "transcription_result": "transcribing",
+    "transcript": "grouping",
+    "transcript_text": "grouping",
 }
 
 
@@ -198,6 +247,7 @@ def as_json() -> str:
         {
             "ingest_stages": list(INGEST_STAGES),
             "rebuild_stages": list(REBUILD_STAGES),
+            "video_stages": list(VIDEO_STAGES),
             "removal_stages": list(REMOVAL_STAGES),
             "activation_stages": list(ACTIVATION_STAGES),
             "terminal_outcomes": sorted(TERMINAL_OUTCOMES),

@@ -1,0 +1,80 @@
+# The overlay for the hosted deployment. Applied by apply.sh on the EC2 host in
+# ../../yorch-aws-platform, never on a workstation:
+#
+#     docker compose -p company-brain \
+#       -f docker-compose.yaml -f docker-compose.adc.yaml -f docker-compose.ec2.yaml \
+#       --profile paid up -d
+#
+# NOTE WHICH OVERLAY IS ABSENT. `docker-compose.dev.yaml` is not applied there
+# and must not be: it is the file that carries the `build:` sections, and the
+# host has neither checkout. Images arrive from ECR through BRAIN_WORKER_IMAGE
+# and BRAIN_BACKEND_IMAGE, which the base file already reads.
+#
+# Nothing here republishes a port. Every service stays on 127.0.0.1 exactly as
+# it is on a laptop, and that is the whole security model of the free plane —
+# Caddy on the host reverse-proxies the ONE service that has authentication.
+#
+# What this file is for is memory. The base compose file declares no resource
+# limits at all: Memgraph's `--memory-limit` flag is the only bound anywhere in
+# the stack, and it bounds one container. On a workstation that is right — the
+# host has room and the user is watching. On an 8 GiB instance it means the
+# first thing to allocate hard takes everything else down with it, and the two
+# candidates are known: POST /uploads buffers up to 200 MB in memory
+# (uploads.controller.ts), and correction activities hold a document's chunk set
+# while they work.
+#
+# The caps deliberately sum to more than the host has. They are ceilings, not
+# reservations; their job is to stop one runaway container, not to partition the
+# machine. What decides who dies when the host really is out is oom_score_adj
+# below.
+
+services:
+  # The three stores and Temporal are left at score 0 — the default — because
+  # losing one of them is the expensive outcome. Postgres in particular is the
+  # source of truth that Qdrant and Memgraph are projections of, and it also
+  # holds Temporal's history: killing it loses the record of what a run had
+  # already paid for.
+  postgres:
+    mem_limit: 1g
+
+  qdrant:
+    mem_limit: 1500m
+
+  memgraph:
+    # Above BRAIN_MEMGRAPH_MEMORY_MB (1536 by default here) with room for the
+    # process around the graph store. Memgraph treats its own limit as a ceiling
+    # it is allowed to reach, so a cap equal to it is a cap it hits.
+    mem_limit: 2g
+
+  temporal:
+    mem_limit: 768m
+
+  # Kept, and kept small. It is the only way to see why a workflow is stuck, and
+  # on a host with no inbound ports the way to it is
+  # `deploy-brain.sh tunnel 8380`.
+  temporal-ui:
+    mem_limit: 256m
+
+  migrate:
+    mem_limit: 512m
+
+  api:
+    # The free plane. Running, because both control planes and the worker share
+    # one Temporal client, one catalog and one set of stores — but unreachable
+    # from outside the host, which is the assumption its own module docstring
+    # says it depends on absolutely.
+    mem_limit: 640m
+    oom_score_adj: 400
+
+  worker:
+    # The most likely thing to spike and the cheapest thing to lose: an activity
+    # killed mid-flight is retried by Temporal, and the sender-style claim with a
+    # lease means a retry converges rather than duplicating. So it is offered to
+    # the OOM killer first, ahead of anything holding state.
+    mem_limit: 2g
+    oom_score_adj: 500
+
+  backend:
+    # 200 MB of that is one upload buffered in memory before it is written.
+    mem_limit: 1500m
+    oom_score_adj: 200

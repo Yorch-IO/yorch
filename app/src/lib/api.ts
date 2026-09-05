@@ -44,6 +44,7 @@ export type ControlErrorKind =
   | "tenant_required"
   | "tenant_scope_pending"
   | "unsupported_format"
+  | "not_a_video_url"
   | "run_not_found"
   | "gate_not_ready"
   | "provider_unconfigured"
@@ -112,6 +113,7 @@ const GUIDANCE: Partial<Record<AppErrorKind, string>> = {
 /** Advice keyed on the control API's own `kind`, read out of the error body. */
 const CONTROL_GUIDANCE: Partial<Record<ControlErrorKind, string>> = {
   unsupported_format: "error.unsupportedFormat",
+  not_a_video_url: "error.notAVideoUrl",
   provider_unconfigured: "error.providerUnconfigured",
   run_not_found: "error.runNotFound",
   graph_unreachable: "error.graphUnreachable",
@@ -228,6 +230,85 @@ export interface IngestRequest {
   /** What to call the library, when this import is the one that creates it.
    *  Empty leaves an existing name alone rather than replacing it with the id. */
   libraryName?: string;
+}
+
+// -- video --------------------------------------------------------------------
+
+/** One video to index.
+ *
+ * A URL where `IngestRequest` carries a path, and that is the whole difference
+ * at this end: nothing is staged, so no `stageSource` call precedes this. A
+ * path typed by hand cannot work in either plane — the app and the container
+ * see two different namespaces — but a URL has no such problem, which is why
+ * this screen has a text box and the file one does not.
+ */
+export interface VideoRequest {
+  libraryId: string;
+  url: string;
+  title?: string;
+  author?: string | null;
+  autoApprove?: boolean;
+  reindex?: boolean;
+  libraryName?: string;
+  /** Caption languages to prefer, best first. Empty lets the worker choose. */
+  languages?: string[];
+}
+
+export interface CaptionTrack {
+  language: string;
+  /** `manual` or `auto`. An automatic track is a machine transcript with no
+   *  punctuation, which is the one case correction is suggested for. */
+  kind: string;
+  ext: string;
+  name: string;
+}
+
+export interface VideoProbe {
+  videoId: string;
+  canonicalUrl: string;
+  sourceKey: string;
+  title: string;
+  channel: string;
+  durationS: number;
+  uploadDate: string;
+  tracks: CaptionTrack[];
+  /** null when Amazon Transcribe has to run, which is what turns a free
+   *  transcript into a paid one. */
+  chosen: CaptionTrack | null;
+  warnings: string[];
+}
+
+export interface Transcribed {
+  source: string;
+  paragraphs: number;
+  characters: number;
+  coveredS: number;
+  warnings: string[];
+}
+
+/** The two switches a video's gate offers. A video run has no profile,
+ *  semantics, eval-set or tuning stage, so those are not shown. */
+export interface RecommendedStages {
+  correct: boolean;
+  embed: boolean;
+}
+
+/** A video run's gate.
+ *
+ * `preview` is null when the video has no captions: there is no text to preview
+ * until the money has been spent, and saying so is the point of a gate. Do not
+ * render a zero there.
+ */
+export interface VideoGateReport {
+  runId: string;
+  documentId: string;
+  versionId: string;
+  probe: VideoProbe;
+  estimate: Estimate;
+  preview: Preview | null;
+  transcript: Transcribed | null;
+  warnings: string[];
+  recommended: RecommendedStages | null;
 }
 
 /** Where a staged file landed, as the *worker* sees it.
@@ -1161,6 +1242,14 @@ export const api = {
   /** null while the free stages are still running — a normal first answer. */
   ingestGate: (workflowId: string) =>
     invoke<GateReport | null>("ingest_gate", { workflowId }),
+  /** Start indexing a video. No staging call precedes this: there is no file. */
+  videoStart: (request: VideoRequest, options: StageOptions = DEFAULT_STAGES) =>
+    invoke<StartedRun>("video_start", { request, options }),
+  /** A video run's gate. Its own route, because the report is a different
+   *  shape — `preview` is null when there are no captions to preview. null here
+   *  means the probe is still running, which is the ordinary first answer. */
+  videoGate: (workflowId: string) =>
+    invoke<VideoGateReport | null>("video_gate", { workflowId }),
   /** Where a run *is*, which `ingestGate` alone cannot say. See `RunState`. */
   runStatus: (workflowId: string) => invoke<RunState>("run_status", { workflowId }),
   ingestApprove: (workflowId: string, approval: Approval) =>

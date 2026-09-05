@@ -14,7 +14,12 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { GateReport, StageOptions } from "./lib/api";
+import type {
+  Estimate,
+  GateReport,
+  StageEstimate,
+  StageOptions,
+} from "./lib/api";
 import { Cost, range } from "./Money";
 
 /** The three mutually exclusive things a person can decide about rules. */
@@ -164,57 +169,8 @@ export function GateReview({
         </fieldset>
       </div>
 
-      <table className="estimate">
-        <thead>
-          <tr>
-            <th>{t("gate.stage")}</th>
-            <th>{t("gate.model")}</th>
-            <th>{t("gate.tokensIn")}</th>
-            <th>{t("gate.tokensOut")}</th>
-            <th>{t("gate.cost")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {report.estimate.stages.map((s) => (
-            <tr key={s.stage}>
-              <td>
-                {t(`gate.stages.${s.stage}`, { defaultValue: s.stage })}
-              </td>
-              <td className="model">{s.model}</td>
-              <td>{s.inputTokens.toLocaleString()}</td>
-              <td>
-                {s.outputTokensHigh > s.outputTokens ? (
-                  <span className="range">
-                    {range(
-                      s.outputTokens.toLocaleString(),
-                      s.outputTokensHigh.toLocaleString(),
-                    )}
-                  </span>
-                ) : (
-                  s.outputTokens.toLocaleString()
-                )}
-              </td>
-              <td>
-                <Cost usd={s.usd} high={s.usdHigh} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td colSpan={4}>{t("gate.total")}</td>
-            <td>
-              <Cost
-                usd={report.estimate.totalUsd}
-                high={report.estimate.totalUsdHigh}
-              />
-            </td>
-          </tr>
-        </tfoot>
-      </table>
+      <EstimateTable estimate={report.estimate} />
 
-      {/* The caveat travels with the figure, always: the token counts are
-          measured, the prices are second-hand. */}
       <p className="caveat">{report.estimate.priceSource}</p>
 
       <div className="actions">
@@ -226,5 +182,84 @@ export function GateReview({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * What a run will cost, stage by stage.
+ *
+ * Exported because two gates render it and a second copy would eventually quote
+ * two different bills for one pipeline — the same reason `estimate_for` was
+ * pulled out of `estimate_cost` on the worker side.
+ *
+ * A row with no tokens at all is rendered as "—" rather than as two zeroes.
+ * Amazon Transcribe bills seconds of audio, so zero tokens is *true* there and
+ * a pair of zeroes would read as a stage that is about to do nothing.
+ */
+export function EstimateTable({ estimate }: { estimate: Estimate }) {
+  const { t } = useTranslation();
+  const untokenised = (s: StageEstimate) =>
+    s.inputTokens === 0 && s.outputTokens === 0;
+
+  return (
+    <>
+    <table className="estimate">
+      <thead>
+        <tr>
+          <th>{t("gate.stage")}</th>
+          <th>{t("gate.model")}</th>
+          <th>{t("gate.tokensIn")}</th>
+          <th>{t("gate.tokensOut")}</th>
+          <th>{t("gate.cost")}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {estimate.stages.map((s) => (
+          <tr key={s.stage}>
+            <td>
+              {t(`gate.stages.${s.stage}`, { defaultValue: s.stage })}
+            </td>
+            <td className="model">{s.model}</td>
+            <td>{untokenised(s) ? "—" : s.inputTokens.toLocaleString()}</td>
+            <td>
+              {untokenised(s) ? (
+                "—"
+              ) : s.outputTokensHigh > s.outputTokens ? (
+                <span className="range">
+                  {range(
+                    s.outputTokens.toLocaleString(),
+                    s.outputTokensHigh.toLocaleString(),
+                  )}
+                </span>
+              ) : (
+                s.outputTokens.toLocaleString()
+              )}
+            </td>
+            <td>
+              <Cost usd={s.usd} high={s.usdHigh} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colSpan={4}>{t("gate.total")}</td>
+          <td>
+            <Cost
+              usd={estimate.totalUsd}
+              high={estimate.totalUsdHigh}
+            />
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+
+    {/* The caveat travels with the figure, always: the token counts are
+        measured, the prices are second-hand. */}
+
+      {/* The caveat travels with the figure, always: the token counts are
+          measured, the prices are second-hand. */}
+      <p className="caveat">{estimate.priceSource}</p>
+    </>
   );
 }

@@ -54,6 +54,7 @@ const item = (
   stage: over.stage ?? "semantics",
   progress: over.progress ?? null,
   gate: over.gate ?? null,
+  videoGate: over.videoGate ?? null,
   run: run(over.run),
 });
 

@@ -135,6 +135,35 @@ pub struct IngestRequest {
     pub library_name: String,
 }
 
+/// One video to index.
+///
+/// Renamed on the **deserialize** side for the same reason `IngestRequest` is:
+/// this travels webview → Rust → Python, so it accepts the webview's camelCase
+/// and emits Python's snake_case.
+///
+/// It carries a URL where `IngestRequest` carries a path, and that is the whole
+/// difference between the two pipelines at this end: there is nothing to stage,
+/// so no `stage_source` call precedes this and no `sourcePath` is ever computed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct VideoRequest {
+    pub library_id: String,
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub auto_approve: bool,
+    #[serde(default)]
+    pub reindex: bool,
+    #[serde(default)]
+    pub library_name: String,
+    /// Caption languages to prefer, best first. Empty lets the worker choose.
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
 /// Where a file the app uploaded landed, as the *worker* sees it.
 ///
 /// `source_path` is a container path (`/workspace/tenants/<id>/inbox/…`) and is
@@ -578,6 +607,102 @@ pub struct GateReport {
     /// including ones that had one.
     #[serde(default)]
     pub profile: Option<ProfileDecision>,
+}
+
+/// One caption track a video offers.
+///
+/// `kind` is `manual` or `auto`, and the distinction is not cosmetic: an
+/// automatic track is a machine transcript with no punctuation, which is why it
+/// is the only one correction is suggested for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct CaptionTrack {
+    pub language: String,
+    pub kind: String,
+    pub ext: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+/// Everything free that could be learned about a video before the gate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VideoProbe {
+    pub video_id: String,
+    pub canonical_url: String,
+    pub source_key: String,
+    pub title: String,
+    #[serde(default)]
+    pub channel: String,
+    pub duration_s: i64,
+    #[serde(default)]
+    pub upload_date: String,
+    #[serde(default)]
+    pub tracks: Vec<CaptionTrack>,
+    /// The track that will be read, or `null` when Amazon Transcribe must run —
+    /// which is the difference between a free transcript and a paid one, and the
+    /// only thing the gate needs to explain the transcription line.
+    #[serde(default)]
+    pub chosen: Option<CaptionTrack>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+/// The transcript, once it exists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Transcribed {
+    /// `captions:es:manual` or `transcribe`, so a reader can tell a human
+    /// transcript from a machine one without a second call.
+    pub source: String,
+    pub paragraphs: i64,
+    pub characters: i64,
+    #[serde(default)]
+    pub covered_s: f64,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+/// A video run's gate, which is a different shape from a document's.
+///
+/// `preview` is optional here and it is the whole reason this is its own type:
+/// a video with no captions has no text to preview until the money has been
+/// spent, and `null` says so rather than quoting a chunk count nobody measured.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VideoGateReport {
+    pub run_id: String,
+    pub document_id: String,
+    pub version_id: String,
+    pub probe: VideoProbe,
+    pub estimate: Estimate,
+    #[serde(default)]
+    pub preview: Option<Preview>,
+    #[serde(default)]
+    pub transcript: Option<Transcribed>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    /// Which switches the gate should open with, given where this transcript
+    /// came from. A suggestion, not a rule — the approval carries whatever the
+    /// person actually ticked.
+    #[serde(default)]
+    pub recommended: Option<RecommendedStages>,
+}
+
+/// The two switches a video's gate actually offers.
+///
+/// A response-side twin of `StageOptions` rather than the type itself, and for
+/// two reasons. `StageOptions` renames on the *deserialize* side, because it
+/// travels webview → Python; this travels the other way and has to rename on
+/// serialize, and one struct cannot do both. And a video run has no profile,
+/// semantics, eval-set or tuning stage at all, so offering those switches would
+/// quote work that cannot happen. Python sends the full nine fields and serde
+/// drops the seven this does not name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RecommendedStages {
+    pub correct: bool,
+    pub embed: bool,
 }
 
 /// Mirrors `brainworker.pipeline.ProfileRules` — the flattened rules, not the
@@ -1492,6 +1617,43 @@ impl Control {
         .await
     }
 
+    /// Start a video run. Free until the gate is answered.
+    ///
+    /// The body pairs the request and the switches by name, exactly as
+    /// `/ingest` does — the embedded shape rather than the bare one, because
+    /// that is what both planes serve for a two-body-parameter route.
+    pub async fn start_video(
+        &self,
+        request: &VideoRequest,
+        options: &StageOptions,
+    ) -> Result<StartedRun> {
+        self.post_json(
+            "/videos",
+            &serde_json::json!({ "request": request, "options": options }),
+            START_TIMEOUT,
+        )
+        .await
+    }
+
+    /// A video run's gate, or `Ok(None)` while the probe is still running.
+    ///
+    /// Its own route, not `/runs/{id}/gate`: the two reports differ in shape,
+    /// and decoding one into the other drops every field they do not share
+    /// without failing — the same reason `rebuild-gate` is separate.
+    pub async fn video_gate(&self, workflow_id: &str) -> Result<Option<VideoGateReport>> {
+        match self
+            .get::<VideoGateReport>(
+                &format!("/runs/{workflow_id}/video-gate"),
+                HEALTH_TIMEOUT,
+            )
+            .await
+        {
+            Ok(report) => Ok(Some(report)),
+            Err(AppError::ControlStatus { status: 409, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// The gate report, or `Ok(None)` while the free stages are still running.
     ///
     /// A 409 is the normal answer for the first few seconds of every run, so it
@@ -1928,6 +2090,77 @@ mod request_direction {
         let out = serde_json::to_value(&parsed).unwrap();
         assert_eq!(out["library_id"], "lib_1");
         assert!(out.get("libraryId").is_none());
+    }
+
+    #[test]
+    fn a_video_request_travels_webview_to_python_like_an_ingest_request() {
+        let from_webview = r#"{
+            "libraryId": "lib_videos",
+            "url": "https://youtu.be/dQw4w9WgXcQ",
+            "autoApprove": false,
+            "libraryName": ""
+        }"#;
+        let parsed: VideoRequest = serde_json::from_str(from_webview).unwrap();
+        assert_eq!(parsed.library_id, "lib_videos");
+        assert!(parsed.url.ends_with("dQw4w9WgXcQ"));
+
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(out["library_id"], "lib_videos");
+        assert!(out.get("libraryId").is_none());
+        assert_eq!(out["auto_approve"], false);
+    }
+
+    #[test]
+    fn a_video_gate_travels_python_to_webview_the_other_way() {
+        // The opposite direction, and therefore the opposite rename. A report
+        // that renamed on deserialize would arrive with every field undefined
+        // in TypeScript and the gate would render a video with no title, no
+        // duration and no transcript source — without failing anywhere.
+        let from_python = r#"{
+            "run_id": "video-1",
+            "document_id": "doc_v",
+            "version_id": "ver_v",
+            "probe": {
+                "video_id": "dQw4w9WgXcQ",
+                "canonical_url": "https://youtu.be/dQw4w9WgXcQ",
+                "source_key": "youtube/dQw4w9WgXcQ",
+                "title": "Charla",
+                "channel": "Canal",
+                "duration_s": 1800,
+                "upload_date": "20260101",
+                "tracks": [],
+                "chosen": null,
+                "warnings": []
+            },
+            "estimate": {
+                "stages": [], "total_usd": null, "price_source": "x",
+                "unpriced_stages": [], "total_usd_high": null
+            },
+            "preview": null,
+            "transcript": null,
+            "warnings": [],
+            "recommended": {
+                "correct": true, "embed": true, "extract_semantics": false,
+                "generate_evalset": false, "learn_profile": false,
+                "ignore_profile": false, "review_correction": false,
+                "tune": false, "condense_descriptions": false
+            }
+        }"#;
+        let parsed: VideoGateReport = serde_json::from_str(from_python).unwrap();
+        assert_eq!(parsed.probe.duration_s, 1800);
+        // `null` and not a fabricated preview: without captions there is no
+        // text to preview until the transcription is paid for.
+        assert!(parsed.preview.is_none());
+        assert!(parsed.recommended.as_ref().unwrap().correct);
+
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(out["probe"]["durationS"], 1800);
+        assert_eq!(out["probe"]["canonicalUrl"], "https://youtu.be/dQw4w9WgXcQ");
+        assert!(out["probe"].get("duration_s").is_none());
+        assert_eq!(out["recommended"]["correct"], true);
+        // The seven switches a video run has no stage for are dropped rather
+        // than offered.
+        assert!(out["recommended"].get("extractSemantics").is_none());
     }
 
     #[test]

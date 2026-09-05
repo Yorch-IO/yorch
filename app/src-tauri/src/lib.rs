@@ -29,6 +29,7 @@ use control::{
     ProjectSummary, Question, RebuildReport, RelatedDocuments, Removal, RunAudit,
     RunEventPage, RunListPage, SectionChunks,
     RunState, StageOptions, StagedSource, StartedRun, VersionConcepts,
+    VideoGateReport, VideoRequest,
 };
 use error::{AppError, Result};
 use ports::Ports;
@@ -622,6 +623,30 @@ async fn ingest_gate(state: State<'_, AppState>, workflow_id: String) -> Result<
     control.gate(&workflow_id).await
 }
 
+/// Start indexing a video. No staging call precedes this: there is no file.
+#[tauri::command]
+async fn video_start(
+    state: State<'_, AppState>,
+    request: VideoRequest,
+    options: Option<StageOptions>,
+) -> Result<StartedRun> {
+    let control = state.control().await?;
+    control
+        .start_video(&request, &options.unwrap_or_default())
+        .await
+}
+
+/// A video run's gate. `None` while the probe is still running, which is the
+/// ordinary first answer and not a failure.
+#[tauri::command]
+async fn video_gate(
+    state: State<'_, AppState>,
+    workflow_id: String,
+) -> Result<Option<VideoGateReport>> {
+    let control = state.control().await?;
+    control.video_gate(&workflow_id).await
+}
+
 #[tauri::command]
 async fn run_status(state: State<'_, AppState>, workflow_id: String) -> Result<RunState> {
     let control = state.control().await?;
@@ -1012,6 +1037,8 @@ pub fn run() {
             stage_source,
             ingest_start,
             ingest_gate,
+            video_start,
+            video_gate,
             run_status,
             cancel_run,
             ingest_approve,

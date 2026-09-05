@@ -38,6 +38,7 @@ def test_applying_every_migration_creates_every_table(database_url: str):
         "20260831160000_run_kind_ask",
         "20260901120000_run_event",
         "20260903180000_answer_style",
+        "20260905060000_run_kind_video",
     ]
     assert {
         "library",
@@ -95,6 +96,7 @@ def test_require_schema_accepts_a_catalog_ahead_of_the_code(database_url: str):
         "20260831140000_run_blocked",
         "20260831160000_run_kind_ask",
         "20260901120000_run_event",
+        "20260903180000_answer_style",
         m.REQUIRED_MIGRATION,
     ]
 

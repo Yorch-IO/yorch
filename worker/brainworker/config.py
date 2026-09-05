@@ -281,6 +281,44 @@ class Gemini:
 
 
 @dataclass(frozen=True)
+class Aws:
+    """Amazon Transcribe, and the bucket the audio passes through.
+
+    Note what is *not* here, for the same reason `Gemini` says it: a credential.
+    The worker runs in a container on an EC2 host whose instance profile already
+    carries the permissions, and ``http_put_response_hop_limit = 2`` on that
+    instance is what lets a *container* reach IMDS — set so google-auth could,
+    and boto3 takes the same route. So the ordinary deployment configures a
+    region and a bucket and nothing secret. A developer running off the host
+    falls back to boto3's standard chain, which reads its own environment.
+
+    ``usd_per_minute`` is the batch rate for the standard model. **Published, not
+    measured** — the same caveat `ledger.py` carries about its token prices, and
+    it should be repeated wherever this figure reaches a screen. Zero means "no
+    price known", which surfaces as "sin precio" and never as free.
+    """
+
+    region: str = ""
+    bucket: str = ""
+    #: Where the audio and Transcribe's own output both live. One prefix,
+    #: because a single S3 lifecycle rule then retires both — and the instance
+    #: role is deliberately granted no `s3:DeleteObject` anywhere, so that rule
+    #: is the cleanup rather than a call this code makes.
+    prefix: str = "transcribe"
+    usd_per_minute: float = 0.0
+
+    @property
+    def configured(self) -> bool:
+        """Whether a Transcribe job could be started at all.
+
+        Checked before the gate quotes one, so "this deployment cannot
+        transcribe" is a refusal somebody reads while deciding, rather than a
+        failure forty minutes into a run they approved.
+        """
+        return bool(self.region and self.bucket)
+
+
+@dataclass(frozen=True)
 class Settings:
     workspace: pathlib.Path
     temporal_target: str
@@ -297,6 +335,7 @@ class Settings:
     log_level: str
     secrets_file: pathlib.Path
     gemini: "Gemini" = field(default_factory=lambda: Gemini())
+    aws: "Aws" = field(default_factory=lambda: Aws())
     api_host: str = "127.0.0.1"
     api_port: int = 8000
     secrets: dict[str, str] = field(default_factory=dict, repr=False)
@@ -396,6 +435,12 @@ def load() -> Settings:
             ),
             stage_thinking=_stage_thinking(),
             max_gleaning=max(0, int(_env("BRAIN_MAX_GLEANING", "0"))),
+        ),
+        aws=Aws(
+            region=_env("BRAIN_AWS_REGION", ""),
+            bucket=_env("BRAIN_TRANSCRIBE_BUCKET", ""),
+            prefix=_env("BRAIN_TRANSCRIBE_PREFIX", "transcribe"),
+            usd_per_minute=float(_env("BRAIN_TRANSCRIBE_USD_PER_MINUTE", "0") or 0),
         ),
         # Loopback by default. The API has no authentication — it is reachable
         # only because nothing off the machine can route to it — so binding all

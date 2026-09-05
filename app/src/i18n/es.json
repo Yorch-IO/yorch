@@ -47,7 +47,8 @@
         "scan": "exploración",
         "ask": "pregunta",
         "removal": "eliminación",
-        "activate": "activación"
+        "activate": "activación",
+        "video": "vídeo"
       },
       "state": {
         "running": "en curso",
@@ -154,7 +155,8 @@
     "userInactive": "Esta cuenta está deshabilitada.",
     "noMembership": "Esta cuenta no pertenece a esa organización.",
     "tenantRequired": "Esta cuenta pertenece a más de una organización, y esta versión trabaja con una. Un operador tiene que dejar una sola membresía activa.",
-    "tenantScopePending": "El corpus de esta organización lo gestiona el backend local, que escribe directamente en el volumen, así que el servicio de pago no tiene bandeja donde dejar el fichero. Cambia al backend local para importar en él, o inicia sesión en una organización propia."
+    "tenantScopePending": "El corpus de esta organización lo gestiona el backend local, que escribe directamente en el volumen, así que el servicio de pago no tiene bandeja donde dejar el fichero. Cambia al backend local para importar en él, o inicia sesión en una organización propia.",
+    "notAVideoUrl": "Ese enlace no es un solo vídeo de YouTube. Las listas de reproducción y los canales no se expanden: pega el enlace de cada vídeo."
   },
   "library": {
     "title": "Biblioteca",
@@ -234,7 +236,11 @@
     "chooseMore": "Añadir otro archivo",
     "removeFile": "quitar",
     "startBatch": "Preparar {{count}} archivo(s)",
-    "someRefused": "No se pudieron preparar {{count}} archivo(s)"
+    "someRefused": "No se pudieron preparar {{count}} archivo(s)",
+    "videoTitle": "Vídeos",
+    "videoHint": "Pega enlaces de YouTube, uno por línea. Cada uno se convierte en su propia importación, con su propia aprobación.",
+    "videoPlaceholder": "https://youtu.be/…",
+    "videoStart": "Indexar vídeos"
   },
   "queue": {
     "title": "Importaciones",
@@ -273,7 +279,8 @@
       "evalset": "Conjunto de evaluación",
       "profile": "Aprender las reglas del documento",
       "tuning": "Ajuste — una segunda pasada de embeddings",
-      "evaluation": "Medición — embeber las preguntas"
+      "evaluation": "Medición — embeber las preguntas",
+      "transcription": "Transcripción — Amazon lee el audio"
     },
     "profileTitle": "Reglas",
     "profileReused": "Se reutiliza el perfil «{{slug}}», aprendido de {{learnedFrom}} (revisión {{revisions}}).",
@@ -285,7 +292,23 @@
     "profileUseInherited": "Usar las reglas heredadas",
     "profileLearnFresh": "Aprender reglas nuevas (de pago)",
     "profileUseDefaults": "Usar las reglas por defecto",
-    "profileCollisionHelp": "La huella es estructural, no temática, así que dos familias sin relación con la misma maquetación coinciden exactamente. Un solapamiento bajo es el caso que hay que mirar."
+    "profileCollisionHelp": "La huella es estructural, no temática, así que dos familias sin relación con la misma maquetación coinciden exactamente. Un solapamiento bajo es el caso que hay que mirar.",
+    "video": {
+      "title": "Aprobar este vídeo",
+      "intro": "Todavía no se ha pagado nada. La transcripción y la corrección empiezan solo cuando apruebas.",
+      "video": "Vídeo",
+      "duration": "Duración",
+      "source": "Transcripción",
+      "captions": {
+        "manual": "los subtítulos del propio vídeo ({{language}}), escritos por una persona — gratis",
+        "auto": "los subtítulos automáticos de YouTube ({{language}}) — gratis, y sin puntuación"
+      },
+      "transcribe": "no hay subtítulos publicados, así que Amazon Transcribe leerá el audio — esto es lo que cuesta",
+      "noPreview": "No hay subtítulos que leer, así que no hay texto que previsualizar hasta pagar la transcripción. Las cifras de abajo se proyectan desde la duración del vídeo con una velocidad de habla que aún no se ha medido, y por eso el rango es amplio.",
+      "correctAuto": "Los subtítulos automáticos llegan sin puntuación, que es justo lo que la corrección sabe reparar: por eso empieza activada. También es la etapa que domina la factura, y su valor sobre una transcripción no está medido.",
+      "correctManual": "Estos subtítulos ya los escribió y puntuó una persona, así que la corrección empieza desactivada: su valor sobre una transcripción no está medido y es la etapa que domina la factura.",
+      "correctTranscribe": "Amazon puntúa su propia salida, así que la corrección empieza desactivada: su valor sobre una transcripción no está medido y es la etapa que domina la factura."
+    }
   },
   "ask": {
     "title": "Preguntar a la biblioteca",
@@ -366,7 +389,8 @@
       "nota": "nota al pie",
       "tabla_fila": "fila de tabla",
       "tabla_resumen": "resumen de tabla",
-      "diapositiva": "diapositiva"
+      "diapositiva": "diapositiva",
+      "transcripcion": "transcripción"
     }
   },
   "provider": {
@@ -540,7 +564,8 @@
       "evaluating": "midiendo el índice",
       "tuning": "afinando",
       "blocked": "retenida"
-    }
+    },
+    "kind": {}
   },
   "audit": {
     "unattributed": "sin etapa",

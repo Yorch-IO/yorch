@@ -41,10 +41,17 @@ from ..activities.rebuild import REQUIRED_ARTIFACT
 #: probe and the reader must not be able to drift apart.
 SCORES_ARTIFACT = "scores"
 from ..answering import Question, ask
-from ..pipeline import SUPPORTED_FORMATS, IngestRequest, StageOptions
+from .. import videosource
+from ..pipeline import (
+    SUPPORTED_FORMATS,
+    IngestRequest,
+    StageOptions,
+    VideoRequest,
+)
 from ..workflows.ask import AskWorkflow
 from ..workflows.ingest import Approval, IngestWorkflow
 from ..workflows.rebuild import RebuildWorkflow
+from ..workflows.video import VideoIngestWorkflow
 from ..workflows.ping import PingWorkflow
 
 log = logging.getLogger(__name__)
@@ -430,6 +437,86 @@ async def start_ingest(request: IngestRequest, options: StageOptions | None = No
         memo=_OWNED_BY_LEGACY,
     )
     return {"workflow_id": handle.id, "state": "running"}
+
+
+#: `document.format` for a source located by a clock rather than a byte range.
+#: The same string `graph.projection.TIMED_FORMATS` branches on, and the reason
+#: it is a named constant in both places rather than a literal in either.
+TIMED_FORMAT = "youtube"
+
+
+@app.post("/videos")
+async def start_video(
+    request: VideoRequest, options: StageOptions | None = None
+) -> dict[str, Any]:
+    """Start a video run. Free until someone answers the gate.
+
+    The URL is validated **here as well as** inside `probe_video`, and that is
+    belt and braces on purpose — the same doubling `retrieve.search` keeps for
+    `tenant_id`. `videosource.video_id` is not only a parser: it is the host
+    allowlist, and yt-dlp is an SSRF-shaped dependency with ~1800 extractors and
+    a `generic` one that will fetch an arbitrary host. Unlike `stage_source`
+    there is no `Paths.contains` to inherit, so this is the check that stands in
+    its place, and refusing in the request that asked is what gets the user an
+    answer rather than a failed run to go and read.
+    """
+    s = settings()
+    try:
+        videosource.video_id(request.url)
+    except videosource.NotAVideoUrl as e:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "kind": "not_a_video_url",
+                "message": f"{request.url!r} no es el enlace de un vídeo de YouTube",
+                "detail": str(e),
+            },
+        ) from e
+
+    client = await temporal()
+    handle = await client.start_workflow(
+        VideoIngestWorkflow.run,
+        args=[request, options or StageOptions()],
+        id=f"video-{_ulid()}",
+        task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
+    )
+    return {"workflow_id": handle.id, "state": "running"}
+
+
+@app.get("/runs/{workflow_id}/video-gate")
+async def video_gate(workflow_id: str) -> dict[str, Any]:
+    """A video run's gate, which is a different shape from a document's.
+
+    A separate route from `/runs/{id}/gate` even though both workflows name the
+    query `gate_report` — the same decision, for the same reason, as
+    `/runs/{id}/rebuild-gate`: querying through the ingest workflow's *typed*
+    handle would decode a `VideoGateReport` into a `GateReport` and drop every
+    field the two do not share, without failing.
+
+    They genuinely differ. `GateReport.preview` is a required `Preview` holding
+    two required artifact references, and a video with no captions has no text
+    to preview until the money has been spent — so here it is optional, and
+    `null` says so rather than quoting a count nobody measured.
+    """
+    handle = (await temporal()).get_workflow_handle(workflow_id)
+    try:
+        report = await handle.query(VideoIngestWorkflow.gate_report)
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail={"kind": "run_not_found", "message": f"{type(e).__name__}: {e}"},
+        ) from e
+    if report is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "kind": "gate_not_ready",
+                "message": "todavía se está examinando el vídeo",
+                "stage": await handle.query(VideoIngestWorkflow.stage),
+            },
+        )
+    return asdict(report)
 
 
 @app.get("/runs/{workflow_id}/gate")
@@ -1559,6 +1646,31 @@ async def reindex_document(
                     ),
                 },
             )
+
+    if document.format == TIMED_FORMAT:
+        # A video's `source_path` is its URL, not a path. Handing it to
+        # `IngestWorkflow` puts it through `stage_source`, which checks tenant
+        # containment on a filesystem path and dies with
+        # `'https://youtu.be/…' is outside this organisation's workspace` —
+        # three frames from the cause, on a button whose whole purpose is to
+        # re-run what already worked once.
+        video = VideoRequest(
+            library_id=library_id,
+            url=document.source_path,
+            title=document.title,
+            author=document.author,
+            reindex=True,
+            tenant_id=LEGACY_TENANT_ID,
+        )
+        client = await temporal()
+        handle = await client.start_workflow(
+            VideoIngestWorkflow.run,
+            args=[video, options or StageOptions()],
+            id=f"video-{_ulid()}",
+            task_queue=s.task_queue,
+            memo=_OWNED_BY_LEGACY,
+        )
+        return {"workflow_id": handle.id, "state": "running", "kind": "video"}
 
     request = IngestRequest(
         library_id=library_id,

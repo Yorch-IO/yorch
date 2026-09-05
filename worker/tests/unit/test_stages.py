@@ -19,6 +19,7 @@ from brainworker import stages
 ROOT = pathlib.Path(stages.__file__).resolve().parent
 INGEST = (ROOT / "workflows" / "ingest.py").read_text(encoding="utf-8")
 REBUILD = (ROOT / "workflows" / "rebuild.py").read_text(encoding="utf-8")
+VIDEO = (ROOT / "workflows" / "video.py").read_text(encoding="utf-8")
 PAID = (ROOT / "activities" / "paid.py").read_text(encoding="utf-8")
 
 
@@ -48,6 +49,25 @@ def test_every_stage_the_ingest_workflow_sets_is_in_the_list() -> None:
 def test_every_stage_the_rebuild_workflow_sets_is_in_the_list() -> None:
     missing = _assigned(REBUILD) - set(stages.REBUILD_STAGES) - {"starting"}
     assert missing == set()
+
+
+def test_every_stage_the_video_workflow_sets_is_in_the_list() -> None:
+    missing = _assigned(VIDEO) - set(stages.VIDEO_STAGES) - {"starting"}
+    assert missing == set(), (
+        f"VideoIngestWorkflow sets {sorted(missing)}, which stages.VIDEO_STAGES "
+        "does not name — the audit view cannot order or translate them"
+    )
+
+
+def test_the_video_list_names_no_stage_the_workflow_never_sets() -> None:
+    """The other direction. Two stages here run at different points depending on
+    whether the video had captions, but each is still *set* somewhere in the
+    source, so this holds for both paths."""
+    unused = set(stages.VIDEO_STAGES) - _assigned(VIDEO)
+    assert unused == set(), (
+        f"stages.VIDEO_STAGES names {sorted(unused)}, which the workflow never "
+        "enters"
+    )
 
 
 def test_the_list_names_no_stage_no_workflow_sets() -> None:
@@ -93,9 +113,25 @@ def test_the_cost_map_inverts_without_collision() -> None:
     assert len(stages.STAGE_FOR_COST) == len(flat)
 
 
+def _every_stage() -> set[str]:
+    """Every stage any workflow names.
+
+    A union rather than a literal, so a workflow added later is covered by the
+    two tests below the moment its tuple exists — the failure they exist to
+    catch is a *new* stage nobody attributed, and a hand-written list would have
+    to be remembered at exactly the moment it was being forgotten.
+    """
+    return (
+        set(stages.INGEST_STAGES)
+        | set(stages.REBUILD_STAGES)
+        | set(stages.VIDEO_STAGES)
+        | set(stages.REMOVAL_STAGES)
+        | set(stages.ACTIVATION_STAGES)
+    )
+
+
 def test_every_cost_stage_belongs_to_a_stage_the_workflow_has() -> None:
-    known = set(stages.INGEST_STAGES) | set(stages.REBUILD_STAGES)
-    assert set(stages.COST_STAGES) <= known
+    assert set(stages.COST_STAGES) <= _every_stage()
 
 
 def test_every_artifact_kind_is_attributed_to_a_stage() -> None:
@@ -106,8 +142,7 @@ def test_every_artifact_kind_is_attributed_to_a_stage() -> None:
         "artifacts.KINDS and stages.ARTIFACT_STAGES disagree: "
         f"{sorted(set(KINDS) ^ set(stages.ARTIFACT_STAGES))}"
     )
-    known = set(stages.INGEST_STAGES) | set(stages.REBUILD_STAGES)
-    assert set(stages.ARTIFACT_STAGES.values()) <= known
+    assert set(stages.ARTIFACT_STAGES.values()) <= _every_stage()
 
 
 def test_an_unknown_stage_sorts_last_rather_than_first() -> None:

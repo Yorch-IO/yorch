@@ -80,6 +80,18 @@ KINDS: dict[str, str] = {
     #: again.
     "tuning": "tuning.json",
     "ledger": "ledger.json",
+    # The video path. `captions` and `transcription_result` are the *source*
+    # documents, kept for the reason `semantics.json` is kept: the grouping
+    # constants will be tuned, and re-grouping from the raw file is free where
+    # re-transcribing is not. `transcript` is the cue table plus provenance;
+    # `transcript_text` is the paragraph stream `split_paragraphs` reads, and it
+    # is a kind of its own rather than `raw_text` because `ARTIFACT_STAGES`
+    # already attributes that one to `extracting`.
+    "video_probe": "video-probe.json",
+    "captions": "captions.vtt",
+    "transcription_result": "transcription-result.json",
+    "transcript": "transcript.json",
+    "transcript_text": "transcript.txt",
     "events": "events.jsonl",
 }
 

@@ -255,6 +255,24 @@ services:
       # and it exists to be measured. Compose interpolates at `up` time, so
       # changing it needs the service recreated.
       BRAIN_MAX_GLEANING: ${BRAIN_MAX_GLEANING:-}
+      # Amazon Transcribe, for the video path. **Not credentials**: on the EC2
+      # host boto3 picks up the instance role through IMDS, which the instance's
+      # `http_put_response_hop_limit = 2` already lets a container reach.
+      #
+      # These have to be listed here and not only written into `.env`. A
+      # variable in `.env` is available to *compose* for `${...}` interpolation
+      # and reaches no container by itself — which is exactly how the first real
+      # deploy shipped a worker that could not name its own bucket while the
+      # value sat correctly in `.env` two directories away.
+      #
+      # Empty is meaningful, like `BRAIN_GEMINI_PROJECT_ID` above:
+      # `Aws.configured` is `bool(region and bucket)`, so an unset pair makes
+      # the gate refuse to quote a transcription rather than failing forty
+      # minutes into a run somebody approved.
+      BRAIN_AWS_REGION: ${BRAIN_AWS_REGION:-}
+      BRAIN_TRANSCRIBE_BUCKET: ${BRAIN_TRANSCRIBE_BUCKET:-}
+      BRAIN_TRANSCRIBE_PREFIX: ${BRAIN_TRANSCRIBE_PREFIX:-}
+      BRAIN_TRANSCRIBE_USD_PER_MINUTE: ${BRAIN_TRANSCRIBE_USD_PER_MINUTE:-}
     volumes:
       - ${BRAIN_WORKSPACE:-./workspace}:/workspace
       # Provider API keys. Written 0600 by the app from the OS keychain and

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Locator } from "../Locator";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -267,7 +268,7 @@ export function ExploreScreen() {
                 <p className="neighbour empty">{t("explore.noAfter")}</p>
               )}
               {context.citation ? (
-                <p className="locator">{context.citation.locator}</p>
+                <Locator text={context.citation.locator} className="locator" />
               ) : (
                 // A citation the user cannot open is not a citation, so its
                 // absence is stated rather than rendered as a blank line.

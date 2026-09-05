@@ -10,6 +10,7 @@ from temporalio.worker import Worker
 
 from . import config
 from .activities import activating, asking, ingest, paid, rebuild, removing
+from .activities import video as videoacts
 from .activities.health import probe_provider, probe_services
 from .workflows.activation import ActivationWorkflow
 from .workflows.ask import AskWorkflow
@@ -18,6 +19,7 @@ from .workflows.ping import PingWorkflow
 from .workflows.probe import ProviderProbeWorkflow
 from .workflows.rebuild import RebuildWorkflow
 from .workflows.removal import RemovalWorkflow
+from .workflows.video import VideoIngestWorkflow
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +31,7 @@ WORKFLOWS = [
     RemovalWorkflow,
     ActivationWorkflow,
     ProviderProbeWorkflow,
+    VideoIngestWorkflow,
 ]
 
 # Every activity the workflows reference must be registered here or the worker
@@ -65,6 +68,17 @@ ACTIVITIES = [
     paid.promote_candidate_scores,
     paid.persist_profile_scores,
     paid.extract_semantics,
+    videoacts.probe_video,
+    videoacts.record_video_artifacts,
+    videoacts.group_transcript,
+    videoacts.preview_transcript,
+    videoacts.estimate_video,
+    videoacts.fetch_audio,
+    videoacts.start_transcription,
+    videoacts.poll_transcription,
+    videoacts.collect_transcript,
+    videoacts.abandon_transcription,
+    videoacts.chunk_transcript,
     rebuild.load_rebuild_inputs,
     rebuild.replay_semantics,
 ]

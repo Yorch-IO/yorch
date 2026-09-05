@@ -31,6 +31,14 @@ KIND_FOOTNOTE = "nota"
 KIND_TABLE_ROW = "tabla_fila"
 KIND_TABLE_SUMMARY = "tabla_resumen"
 KIND_SLIDE = "diapositiva"
+#: A grouped run of transcript cues from a video.
+#:
+#: Spanish on the wire like every other kind, because these are stored in Qdrant
+#: payloads and used in filters; renaming one breaks every existing collection.
+#: It is a kind of its own rather than `cuerpo` because a transcript is speech
+#: the machine heard, not prose an editor set, and a reader deciding whether to
+#: trust a fragment should be told which.
+KIND_TRANSCRIPT = "transcripcion"
 
 
 @dataclass(frozen=True)

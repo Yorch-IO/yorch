@@ -15,7 +15,7 @@ Three things, and one of them is **not** in this checkout:
 - **`../yorch-tauri-backend`** — a **second HTTP control plane**, in its own
   checkout beside this one. NestJS, multi-tenant, Cognito-authenticated: the
   *paid* product. The FastAPI plane in `worker/` is the *free, self-managed*
-  one, and it is not going away. Both serve the same 26 paths with the same
+  one, and it is not going away. Both serve the same 28 paths with the same
   payloads, both read the same Postgres, Memgraph, Qdrant and Temporal worker,
   and the desktop app picks one with a backend-mode setting. That repository has
   its own `CLAUDE.md`; the entries below are the parts that constrain work
@@ -32,6 +32,15 @@ load-bearing — every path must use `docaget/`.
 Design plan: `~/.claude/plans/write-a-plan-to-shiny-eclipse.md`.
 Current build status, verified commands and known blockers: `doc/COMPANY_BRAIN.md`.
 
+**Video indexing has its own document: `doc/VIDEO.md`.** Read it before touching
+`workflows/video.py`, `activities/video.py`, `videosource.py`,
+`docagent/transcript.py`, or the `start_s`/`end_s` fields on `ChunkNode`. It is
+not loaded automatically, and it holds the rules that are not visible from any
+one file — why the *paragraph index* carries a chunk's timestamp rather than a
+byte offset, why the locator drops the video's title, why a Temporal retry must
+not charge Amazon a second time, and why waiting for a transcription job is a
+workflow timer and never a polling activity.
+
 ## Commands
 
 Prerequisites live in `~/.local/bin` (`uv`) and `~/.cargo/bin` (Rust); add both
@@ -47,17 +56,17 @@ any more, and reaching for it in the dev loop is now the expensive mistake — s
 
 ```bash
 # Engine
-cd docaget && uv sync && uv run pytest -q          # 194 passed, 15 skipped
+cd docaget && uv sync && uv run pytest -q          # 256 passed, 16 skipped
 uv run pytest tests/test_invariants.py::test_inv01_char_span_is_byte_exact -q
 uv run docagent index --dry-run libro.pdf          # free structural preview
 uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # 550 passed, 78 skipped
-# With the stack up the graph/ and catalog/ integration tests run instead of
-# skipping; that figure was last taken as 528 passed, 12 skipped, before the 34
-# audit tests were added. The Bolt port must come from `docker`, not
+cd worker && uv sync && uv run pytest -q           # 637 passed, 150 skipped
+# That is with the stack **down**, which is when graph/ and catalog/ skip. With
+# it up they run instead: 711 passed, 78 skipped, measured 2026-09-05.
+# The Bolt port must come from `docker`, not
 # `infra/.env`: BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789. Do **not** point that
 # run at a disposable BRAIN_QDRANT_COLLECTION to be safe — tests/answering read
 # the real index and 12 of them fail against an empty collection.
@@ -75,17 +84,28 @@ BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789 \
 BRAIN_DATABASE_URL="postgresql://brain:$BRAIN_PG_PASSWORD@127.0.0.1:5532/brain" \
 uv run python scripts/audit_version.py ver_… [--measure] [--json out.json]
 
+# Measure the speech rate the video gate projects a correction bill from.
+# Free — captions and metadata cost nothing and no transcription job is started.
+# See doc/VIDEO.md; the constant it feeds was a guess until 2026-09-05.
+uv run python scripts/measure_speech_rate.py --queries "predicación" -n 12
+
 # Desktop app
 cd app && npm install
-npm run typecheck && npx vitest run && npm run build   # 348 passed
+npm run typecheck && npx vitest run && npm run build   # 425 passed
 npx vitest run -t "define no key"                  # single test by name
-COMPANY_BRAIN_REPO_ROOT=/home/jjimenez/yorch npm run tauri dev
+COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch npm run tauri dev
+
+# The window needs this on a host with no GPU compositing, or the binary starts,
+# reports `Running`, and maps no window at all — with nothing in the log to say
+# why. Measured on this machine 2026-09-05.
+WEBKIT_DISABLE_COMPOSITING_MODE=1 COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch \
+  npm run tauri dev
 
 # Rust — needs the Linux system libraries (see doc/COMPANY_BRAIN.md, Blocked)
 # and PKG_CONFIG_PATH set, or the `soup3-sys` build script fails first. No
 # `--release`: the tuned dev profile runs this gate in 60s at 412% CPU.
 export PKG_CONFIG_PATH=~/.local/tauri-sysroot/prefix/usr/lib/x86_64-linux-gnu/pkgconfig
-cd app/src-tauri && cargo test                     # 93 passed
+cd app/src-tauri && cargo test                     # 102 passed
 
 # Rebuild the image the API and worker actually run. **All three overlays.**
 # Without `dev` the `--build` recreates the containers and changes nothing;
@@ -1100,6 +1120,19 @@ activity behind it, so there is nothing to score answer quality with. This is
 the same reason `doc/CLAUDE.md` says structural diagnostics rather than recall
 are what detect a bad profile. See `doc/COMPANY_BRAIN.md`, "Profiles: learned,
 applied, and measured".
+
+**Video indexing is built and deployed, and three things about it have never
+run.** `doc/VIDEO.md` is the record; what belongs in *this* list is what is
+missing. **Nobody has approved a video gate from the UI** — the panel and all
+three gate states were screenshotted in the real window and clicks navigate, but
+synthetic keystrokes do not reach the WebKit webview on this machine, so typing a
+URL and pressing Approve is untested by anything but code. **No video has been
+indexed on the paid plane**: production serves `POST /videos` (verified — it
+answers 401 where an unknown route answers 404) and no run has ever started
+there. And **nothing longer than 19 seconds has been indexed at all**, on either
+plane, so the grouping constants meet a real hour-long talk for the first time
+whenever somebody tries one. Playlists and channels are refused by design, not
+missing.
 
 **Folder watching does not exist.** `source_folder` and its repository methods
 are there; there is no scan workflow, no add/change/delete detection, and

@@ -20,7 +20,13 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, type GateReport, type RunListItem, type RunProgress } from "./api";
+import {
+  api,
+  type GateReport,
+  type RunListItem,
+  type RunProgress,
+  type VideoGateReport,
+} from "./api";
 
 /** How often to re-ask. Matches `activeRuns.ts`: slow enough not to matter, and
  *  roughly one chunk of semantic extraction per poll. */
@@ -39,8 +45,16 @@ export interface QueueItem {
   state: string | null;
   stage: string | null;
   progress: RunProgress | null;
-  /** Present only while this run is parked at its gate. */
+  /** Present only while this run is parked at its gate.
+   *
+   *  Two fields rather than a union, because which one is filled follows from
+   *  `run.kind` and the two reports genuinely differ: a video's carries a probe
+   *  and an optional preview, a document's carries a required preview and a
+   *  profile. Polling a video at `/gate` would decode its report into the wrong
+   *  type and drop every field they do not share, without failing — the hazard
+   *  `rebuild-gate` was split out to avoid. */
   gate: GateReport | null;
+  videoGate: VideoGateReport | null;
 }
 
 /** A run the catalog thinks has not finished.
@@ -66,7 +80,7 @@ export function useImportQueue(libraryId: string | null) {
   const alive = useRef(true);
   // Which gates have already been fetched, so a run parked for seven days is
   // not re-asked every five seconds for a report that cannot change.
-  const gates = useRef(new Map<string, GateReport>());
+  const gates = useRef(new Map<string, GateReport | VideoGateReport>());
 
   const poll = useCallback(async () => {
     if (!libraryId) {
@@ -106,17 +120,27 @@ export function useImportQueue(libraryId: string | null) {
           }
         }
 
-        let gate = gates.current.get(run.workflowId) ?? null;
-        if (gate === null && waiting(run)) {
+        const isVideo = run.kind === "video";
+        let cached = gates.current.get(run.workflowId) ?? null;
+        if (cached === null && waiting(run)) {
           try {
-            gate = await api.ingestGate(run.workflowId);
-            if (gate) gates.current.set(run.workflowId, gate);
+            cached = isVideo
+              ? await api.videoGate(run.workflowId)
+              : await api.ingestGate(run.workflowId);
+            if (cached) gates.current.set(run.workflowId, cached);
           } catch {
             // 404 for a rebuild parked at its own gate, which this queue does
             // not render a report for. Not an error the person can act on.
           }
         }
-        return { run, state, stage, progress, gate };
+        return {
+          run,
+          state,
+          stage,
+          progress,
+          gate: isVideo ? null : (cached as GateReport | null),
+          videoGate: isVideo ? (cached as VideoGateReport | null) : null,
+        };
       }),
     );
     if (alive.current) {

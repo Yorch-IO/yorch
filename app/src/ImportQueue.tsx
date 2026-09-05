@@ -18,6 +18,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { GateReview } from "./GateReview";
+import { VideoGateReview } from "./VideoGateReview";
 import { RunAudit } from "./RunAudit";
 import { api, errorGuidanceKey, errorMessage, type StageOptions } from "./lib/api";
 import { unfinished, waiting, type QueueItem } from "./lib/importQueue";
@@ -251,7 +252,20 @@ function Row({
           }}
         />
       )}
-      {waiting(run) && !item.gate && <p className="waiting">{t("queue.gateComing")}</p>}
+      {waiting(run) && item.videoGate && (
+        <VideoGateReview
+          report={item.videoGate}
+          stages={stages}
+          busy={deciding}
+          onDecide={(approved, options) => {
+            setDeciding(true);
+            onDecide(run.workflowId, approved, options);
+          }}
+        />
+      )}
+      {waiting(run) && !item.gate && !item.videoGate && (
+        <p className="waiting">{t("queue.gateComing")}</p>
+      )}
 
       {open && !live && <RunAudit runId={run.workflowId} />}
     </li>

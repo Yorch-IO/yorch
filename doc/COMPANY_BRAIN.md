@@ -38,6 +38,7 @@ infra/     Docker Compose stack definition
 | Gemini provider on ADC (no API keys) | **done** — 22 tests, mocked client |
 | Catalog repository (documents, versions, runs, cost) | **done** — 21 tests |
 | Ingest workflow + free approval gate | **done** — 18 workflow, 22 activity tests, **run end to end** |
+| Indexación de vídeo (`VideoIngestWorkflow`) | **done** — 12 workflow, 13 activity tests, **ejecutado de punta a punta** en local y contra AWS; desplegado a producción |
 | Paid stages: correction, embedding+Qdrant, semantics | **done and run for real** — one page through all four stages against Gemini Enterprise |
 | Gemini Enterprise migration (engine + app) | **done** — endpoint, models and auth verified against the live API |
 | Question answering: planner, retrieval, cited answer | **done and run for real** — 34 tests, real Qdrant + Memgraph |
@@ -2719,3 +2720,82 @@ URL que intentaron y las otras tres siguen respondiendo; y con un `ver_…`
 inexistente. `550 passed, 78 skipped` en el worker y `194 passed, 15 skipped` en
 el motor. Después: 6.202 puntos en la colección, 234 en la versión y
 `cost_entry` sumando 3,757165 — las mismas cifras que antes de auditar.
+
+---
+
+## Indexar vídeo, y las dos cosas que solo aparecieron al ejecutarlo — 2026-09-05
+
+Las decisiones y sus mediciones están en **`doc/VIDEO.md`**, que es el documento
+del subsistema. Aquí queda lo que este documento existe para registrar: qué se
+ejecutó, con qué números, y qué sigue sin probarse.
+
+### La ruta de subtítulos, de punta a punta en el stack local
+
+`https://youtu.be/jNQXAC9IVRw` — 19 s, subtítulos manuales en inglés — a través
+del plano gratuito, al tenant heredado:
+
+```
+gate      1 párrafo · 217 caracteres · cubre 18.881s de 19s · 1 fragmento
+          recomendado: correct=False embed=True semantics=False profile=False
+          estimación:  embedding $0.000012      <- solo lo que puede ejecutarse
+facturado embedding · gemini-embedding-2 · 51 tokens · $0.000010
+          => la estimación sobre-reportó 1.2x, que es la dirección que exige la regla
+run       kind=video state=succeeded, 11 eventos de auditoría
+qdrant    1 punto, kind=transcripcion, char_span [0, 217]
+LOCATOR   0:01 · https://youtu.be/jNQXAC9IVRw?t=1
+```
+
+**Convergencia**, comprobada con una forma de URL deliberadamente distinta
+(`watch?v=…&list=PLxyz&t=5`): cortocircuitó en `registering`, **gastó $0**, y
+dejó una versión y un punto. Un enlace de lista de reproducción: `422
+not_a_video_url`.
+
+### La ruta de Amazon Transcribe, contra la cuenta real
+
+Forzando el camino sin subtítulos sobre el mismo audio, desde el host:
+
+```
+audio     yt-dlp -> .m4a, 302 KiB, SIN transcodificar  <- por eso no hace falta ffmpeg
+job       brain-ver_…  COMPLETED en ~10 s
+agrupado  2 párrafos · 225 caracteres · cubre 18.58s
+chunk     [1.4-18.6s] "All right, so here we are in front of the elephants. Um, …"
+```
+
+**La idempotencia, verificada en vivo y no con un doble**: repitiendo
+exactamente lo que haría un reintento de Temporal, `fetch_audio` devolvió
+`reused=True` (ni segunda descarga ni segunda subida), `start_transcription`
+encontró el trabajo existente, y **no se registró ningún cargo**. Amazon facturó
+una vez. `abandon_transcription` borró el trabajo después.
+
+Modelo de coste confirmado: 19 s → **$0.0076**; una charla de 90 minutos →
+**$2.16**, que es la cifra que justifica que exista una puerta de aprobación.
+
+### La velocidad del habla, medida
+
+`worker/scripts/measure_speech_rate.py` sobre **11.21 horas de predicación y
+teología reales en español** — 20 vídeos, 548.750 caracteres, el dominio que este
+corpus indexa: **pooled 13.59 c/s, mediana 12.40, máximo 15.24**.
+
+La suposición de 16 estaba mal **en las dos direcciones**: quedaba por encima del
+vídeo más rápido de la muestra, así que no era un extremo bajo y sobre-reportaba
+cada presupuesto. Y `SPEECH_RATE_SPREAD` **estaba declarada y no la usaba nada** —
+el mismo defecto que `ChunkNode.sheet`. Ahora 14.5 × 1.40, ambas medidas, y el
+rango se aplica de verdad: una charla de 90 minutos proyecta 78.300..109.619
+caracteres donde antes había un solo número.
+
+### Producción
+
+Desplegado 2026-09-05, imagen `7bc8cdb-c238668-dirty20260905T144734Z`.
+`POST /videos` responde **401 `unauthenticated`** donde una ruta inexistente
+responde 404 — el discriminador que prueba que está registrada. El worker informa
+13 etapas, las constantes medidas, y un rol de instancia que funciona.
+
+### Lo que sigue sin probarse
+
+Nadie ha aprobado una puerta de vídeo **desde la interfaz**: el panel y los tres
+estados de la puerta se capturaron en la ventana real y los clics navegan, pero
+las pulsaciones sintéticas no llegan al webview de WebKit en esta máquina.
+**Ningún vídeo se ha indexado en el plano de pago.** Y **nada más largo de 19
+segundos** se ha indexado en ninguno de los dos planos, así que las constantes de
+agrupación se encuentran con una charla real de una hora la primera vez que
+alguien lo intente.

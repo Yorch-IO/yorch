@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { Locator } from "../Locator";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -67,7 +68,7 @@ function Passage({ item }: { item: EvidenceItem }) {
         {t(`ask.source.${item.source}`, { defaultValue: item.source })}
       </span>
       <p className="chunk-text">{item.text}</p>
-      <p className="locator">{item.locator}</p>
+      <Locator text={item.locator} className="locator" />
     </div>
   );
 }
@@ -359,7 +360,7 @@ export function AskScreen() {
                     >
                       {c.claim}
                     </button>
-                    <span className="locator">{c.locator}</span>
+                    <Locator text={c.locator} className="locator" />
                   </li>
                 ))}
               </ol>

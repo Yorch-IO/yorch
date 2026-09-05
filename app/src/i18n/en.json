@@ -47,7 +47,8 @@
         "scan": "scan",
         "ask": "question",
         "removal": "removal",
-        "activate": "activation"
+        "activate": "activation",
+        "video": "video"
       },
       "state": {
         "running": "running",
@@ -154,7 +155,8 @@
     "userInactive": "This account has been disabled.",
     "noMembership": "This account does not belong to that organisation.",
     "tenantRequired": "This account belongs to more than one organisation, and this release works with one. An operator has to leave a single active membership in place.",
-    "tenantScopePending": "This organisation's corpus is managed by the local backend, which writes to the volume directly, so the paid service has no inbox to put a file in. Switch to the local backend to import into it, or sign in to an organisation of your own."
+    "tenantScopePending": "This organisation's corpus is managed by the local backend, which writes to the volume directly, so the paid service has no inbox to put a file in. Switch to the local backend to import into it, or sign in to an organisation of your own.",
+    "notAVideoUrl": "That link is not a single YouTube video. Playlists and channels are not expanded — paste each video's own link."
   },
   "library": {
     "title": "Library",
@@ -234,7 +236,11 @@
     "chooseMore": "Add another file",
     "removeFile": "remove",
     "startBatch": "Prepare {{count}} file(s)",
-    "someRefused": "{{count}} file(s) could not be prepared"
+    "someRefused": "{{count}} file(s) could not be prepared",
+    "videoTitle": "Videos",
+    "videoHint": "Paste YouTube links, one per line. Each one becomes its own import, with its own gate.",
+    "videoPlaceholder": "https://youtu.be/…",
+    "videoStart": "Index videos"
   },
   "queue": {
     "title": "Imports",
@@ -273,7 +279,8 @@
       "evalset": "Evaluation set",
       "profile": "Learning the document's rules",
       "tuning": "Tuning — a second embedding pass",
-      "evaluation": "Measuring — embedding the questions"
+      "evaluation": "Measuring — embedding the questions",
+      "transcription": "Transcription — Amazon reads the audio"
     },
     "profileTitle": "Rules",
     "profileReused": "Reusing the profile «{{slug}}», learned from {{learnedFrom}} (revision {{revisions}}).",
@@ -285,7 +292,23 @@
     "profileUseInherited": "Use the inherited rules",
     "profileLearnFresh": "Learn new rules (paid)",
     "profileUseDefaults": "Use the built-in defaults",
-    "profileCollisionHelp": "The fingerprint is structural, not topical, so two unrelated families with the same layout match exactly. A low overlap is the case to look at."
+    "profileCollisionHelp": "The fingerprint is structural, not topical, so two unrelated families with the same layout match exactly. A low overlap is the case to look at.",
+    "video": {
+      "title": "Approve this video",
+      "intro": "Nothing has been paid for yet. Transcription and correction start only when you approve.",
+      "video": "Video",
+      "duration": "Length",
+      "source": "Transcript",
+      "captions": {
+        "manual": "the video's own captions ({{language}}), written by a person — free",
+        "auto": "YouTube's automatic captions ({{language}}) — free, and unpunctuated"
+      },
+      "transcribe": "none published, so Amazon Transcribe will read the audio — this is what costs",
+      "noPreview": "There are no captions to read, so there is no text to preview until the transcription is paid for. The figures below are projected from the video's length through a speech rate that has not been measured yet, and the range is wide for that reason.",
+      "correctAuto": "Automatic captions arrive with no punctuation, which is what correction is good at repairing — so it starts on. It is also the stage that dominates the bill, and its value on a transcript has not been measured.",
+      "correctManual": "A person already wrote and punctuated these captions, so correction starts off: its value on a transcript has not been measured and it is the stage that dominates the bill.",
+      "correctTranscribe": "Amazon punctuates its own output, so correction starts off: its value on a transcript has not been measured and it is the stage that dominates the bill."
+    }
   },
   "ask": {
     "title": "Ask the library",
@@ -366,7 +389,8 @@
       "nota": "footnote",
       "tabla_fila": "table row",
       "tabla_resumen": "table summary",
-      "diapositiva": "slide"
+      "diapositiva": "slide",
+      "transcripcion": "transcript"
     }
   },
   "provider": {
@@ -540,7 +564,8 @@
       "evaluating": "measuring the index",
       "tuning": "tuning",
       "blocked": "withheld"
-    }
+    },
+    "kind": {}
   },
   "audit": {
     "unattributed": "no stage",

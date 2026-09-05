@@ -2022,6 +2022,31 @@ button.link.active {
   margin: 0;
 }
 
+/* The video panel's URL box. `align-items: flex-start` on `.dropzone` makes a
+   flex child shrink to its content, so this needs its own width or a textarea
+   renders at its `cols` default and a pasted link runs off the end of it. */
+.video-urls {
+  width: 100%;
+  align-self: stretch;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  resize: vertical;
+}
+
+/* A locator's URL is a control, not a paragraph, so a button carrying one has
+   to lose the button's own metrics and keep the locator's. It also has to break
+   anywhere: a watch link has no word boundary a browser recognises, and the
+   panel it sits in is narrow. */
+.locator button.link {
+  font: inherit;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
 /* -- measured retrieval quality, on a version row ---------------------------
  *
  * Five figures that only mean anything together. `recall@5` alone flatters the

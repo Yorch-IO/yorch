@@ -74,6 +74,18 @@ class IngestRequest:
     #: how `extract_text` once produced `'dict' object has no attribute
     #: 'source_path'` three frames from its cause.
     library_name: str = ""
+    #: What kind of run this is, when the default is wrong.
+    #:
+    #: `register_document` writes `reindex` or `index`, which is right for every
+    #: caller that stages a file. A video is neither, and `run.kind` is not
+    #: bookkeeping: it is how a client knows which gate shape to expect, because
+    #: `/runs/{id}/gate` returns a `GateReport` and `/runs/{id}/video-gate`
+    #: returns a `VideoGateReport`, and a video run listed as `index` would be
+    #: polled at the first and silently decoded into the wrong type.
+    #:
+    #: Empty means "decide from `reindex`", so every existing caller is
+    #: unchanged. Appended last, for the arity reason above.
+    run_kind: str = ""
 
 
 @dataclass
@@ -303,6 +315,20 @@ class Extraction:
     #: and this is the field that closes it — the engine now takes an explicit
     #: root, so a `chdir` no longer has to serve every organisation at once.
     tenant_id: str = LEGACY_TENANT_ID
+    #: Whether a paragraph of this text is a single unbroken line.
+    #:
+    #: True for a transcript, where a paragraph is one timed group of caption
+    #: cues and **its index is what carries its timestamp**. `correct_text`
+    #: collapses any blank line the model returns inside one before re-joining,
+    #: because `"\n\n".join` would otherwise turn one paragraph into two and
+    #: shift every timestamp after it — silently, because nothing downstream can
+    #: tell a shifted table from a good one.
+    #:
+    #: False for a document, and that is not laziness: a book's paragraph
+    #: legitimately contains single newlines — verse, numbered review-question
+    #: blocks — and collapsing those would damage the corpus this engine was
+    #: measured on. Appended last, for the arity reason above.
+    single_line_paragraphs: bool = False
 
 
 @dataclass
@@ -589,3 +615,199 @@ class IngestResult:
     #: surface showing 0.00 recall for a run that never evaluated would send
     #: somebody to fix an index that is fine.
     scores: Scores | None = None
+
+
+# --- video ------------------------------------------------------------------
+#
+# A video is not a file, and the two places that shows are the two dataclasses
+# that would otherwise be reused. It has no path to stage and no bytes to hash
+# before something has transcribed it, so `VideoRequest` carries a URL where
+# `IngestRequest` carries a path, and `VideoGateReport` can carry no `Preview`
+# on the path where the text does not exist yet. Everything downstream of the
+# transcript — `Correction`, `Chunked`, `Indexed` — is reused unchanged.
+
+
+@dataclass
+class VideoRequest:
+    """One video to index. The `IngestRequest` analogue, and deliberately not it.
+
+    `library_id` is a shelf of videos, chosen by the client exactly as it is for
+    a document, so `ensure_library` checks who owns it the same way.
+    """
+
+    library_id: str
+    url: str
+    title: str = ""
+    author: str | None = None
+    auto_approve: bool = False
+    reindex: bool = False
+    tenant_id: str = LEGACY_TENANT_ID
+    library_name: str = ""
+    #: Caption languages to prefer, best first. Empty means "the library's own
+    #: language, then whatever the video has".
+    languages: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CaptionTrack:
+    """One caption track a video offers."""
+
+    language: str
+    #: ``manual`` or ``auto``. The distinction is not cosmetic: an auto track is
+    #: a machine transcript with no punctuation and rolling duplicates, and it
+    #: is the only one `dedupe_rolling` may be applied to.
+    kind: str
+    ext: str
+    name: str = ""
+
+
+@dataclass
+class VideoProbe:
+    """Everything free that can be learned about a video, and its identity.
+
+    ``content_sha256`` is what `version_id` is derived from, and it is computed
+    here — *before* the gate — rather than from the finished transcript, because
+    that is what lets a re-import of an unchanged video short-circuit to
+    `link_duplicate` **without paying to transcribe it again**. Deriving it from
+    the transcript would mean discovering the duplicate only after the bill.
+
+    The cost is that on the Transcribe path it is a proxy rather than a content
+    hash: video id, duration, upload date, the chosen source, and the audio
+    format id. On the caption path the caption bytes are in hand for free, so
+    their digest goes in and it *is* a content hash. ``identity_basis`` carries
+    the exact string that was hashed, so the digest can be re-derived by hand
+    from the artifact rather than taken on trust.
+    """
+
+    video_id: str
+    canonical_url: str
+    source_key: str
+    title: str
+    channel: str
+    duration_s: int
+    upload_date: str
+    content_sha256: str
+    identity_basis: str
+    tracks: list[CaptionTrack] = field(default_factory=list)
+    #: The track that will be used, or None when Amazon Transcribe must run.
+    chosen: CaptionTrack | None = None
+    warnings: list[str] = field(default_factory=list)
+    #: What this activity wrote, by reference.
+    #:
+    #: Returned rather than re-derived by whatever reads them next. A reference
+    #: carries a sha256 and `ArtifactStore.read_bytes` verifies it, so a
+    #: *fabricated* one — a path with an empty hash — fails the check it exists
+    #: to pass. Probing runs before the `run` row exists and therefore cannot
+    #: **record** these, which is a different thing from being unable to return
+    #: them: they are a path, a hash and a size.
+    probe_ref: ArtifactRef | None = None
+    captions: ArtifactRef | None = None
+
+
+@dataclass
+class Transcribed:
+    """The transcript, grouped into timed paragraphs and ready to chunk.
+
+    ``text`` is the paragraph stream every `char_span` after this indexes;
+    ``cues`` is the paragraph-index-to-time table that makes a citation a
+    timestamp. They are a **matched pair** — a stale one of either is the drift
+    the whole design guards against — so both are written by one activity and
+    read back through their refs, whose hashes are verified.
+    """
+
+    text: ArtifactRef
+    cues: ArtifactRef
+    #: The evidence file, so `correct_text` gets a reference that verifies.
+    evidence: ArtifactRef
+    #: ``captions:es:manual`` or ``transcribe:es-ES``. On the wire so a reader
+    #: can tell a human transcript from a machine one without a second lookup.
+    source: str
+    paragraphs: int
+    characters: int
+    #: Where the transcript actually ends, which is not always the duration the
+    #: bill was quoted from. Reported rather than reconciled: a disagreement is
+    #: worth seeing, and charging twice to resolve it is not.
+    covered_s: float = 0.0
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AudioStaged:
+    """Audio in S3, where Amazon Transcribe can read it.
+
+    ``reused`` is what makes a retry cheap and the nightly host stop survivable:
+    the object is keyed on the version, so a second attempt finds it already
+    there and skips the download entirely.
+    """
+
+    s3_uri: str
+    media_format: str
+    bytes: int
+    seconds: int
+    reused: bool = False
+
+
+@dataclass
+class TranscriptionJob:
+    """One Amazon Transcribe batch job.
+
+    ``job_name`` is derived from the version id, never generated, so starting is
+    idempotent: a Temporal retry hits `ConflictException`, which means *already
+    started* and must not be charged a second time.
+    """
+
+    job_name: str
+    status: str
+    transcript_uri: str = ""
+    failure_reason: str = ""
+    language: str = ""
+
+
+@dataclass
+class VideoGateReport:
+    """What the approval screen needs for a video, and nothing that costs money.
+
+    Its own type rather than `GateReport`, for the reason `/runs/{id}/rebuild-gate`
+    already documents: querying through the wrong workflow's typed handle decodes
+    one report into the other and drops every field they do not share, without
+    failing. And `GateReport.preview` is a required `Preview` holding two
+    required `ArtifactRef`s — which on the Transcribe path do not exist yet.
+    Fabricating them to fit the type is precisely the lie a gate exists to
+    prevent, so `preview` is optional here and `None` says "there is no text to
+    preview until you approve this".
+    """
+
+    run_id: str
+    document_id: str
+    version_id: str
+    probe: VideoProbe
+    estimate: Estimate
+    preview: Preview | None = None
+    transcript: Transcribed | None = None
+    warnings: list[str] = field(default_factory=list)
+    #: What the product suggests for *this* video, for the gate to start from.
+    #:
+    #: A suggestion rather than a rule, and it exists because the three
+    #: transcript sources arrive in different shape: automatic captions carry no
+    #: punctuation and are worth correcting, while a manual track and Amazon's
+    #: own output are already punctuated. See `videosource.correction_default`.
+    #:
+    #: The approval still carries whatever the person ticked. This only decides
+    #: which boxes are ticked when they first look, and it is what
+    #: `auto_approve` uses when there is nobody to look at all.
+    recommended: StageOptions = field(default_factory=StageOptions)
+
+
+@dataclass
+class VideoResult:
+    run_id: str
+    document_id: str
+    version_id: str
+    state: str
+    indexed_chunks: int = 0
+    projected: dict[str, int] = field(default_factory=dict)
+    total_usd: float | None = None
+    detail: str = ""
+    #: Which half produced the text, so a reader of a finished run can tell
+    #: whether anything was paid to Amazon at all.
+    transcript_source: str = ""

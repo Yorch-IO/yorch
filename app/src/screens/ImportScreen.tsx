@@ -57,6 +57,14 @@ export function ImportScreen() {
    *  can enqueue while the fifth is refused for an unsupported format, and one
    *  red panel saying "it failed" would be wrong about the four. */
   const [refused, setRefused] = useState<{ path: string; message: string }[]>([]);
+  /** Video links, one per line, exactly as typed.
+   *
+   *  A text box here and none for files, which looks inconsistent and is not.
+   *  The file box was removed because a path typed by hand cannot work in
+   *  either plane — the app and the worker see two different namespaces, so the
+   *  string a person types is meaningless to the thing that would open it. A
+   *  URL is the same string everywhere. */
+  const [urls, setUrls] = useState("");
   const dropZone = useRef<HTMLDivElement>(null);
   /** Whether the pointer was last seen inside the drop zone. See the drop
    *  branch below for why this cannot be the `dragging` state. */
@@ -198,6 +206,43 @@ export function ImportScreen() {
     void refresh();
   }, [libraryId, paths, stages, refresh]);
 
+  /** Enqueue every link in the box, one run each.
+   *
+   *  The same shape as `start` above and for the same reason: enqueuing *is*
+   *  starting the workflow, the probe costs nothing, and each run parks at its
+   *  own gate. So a paste of five links is five imports, refused individually —
+   *  a playlist URL among them is one refusal, not a failed batch.
+   *
+   *  Stages are **not** passed. What a video should run depends on where its
+   *  transcript comes from, which is not known until the probe has looked; the
+   *  gate carries a `recommended` and opens with those boxes ticked. */
+  const startVideos = useCallback(async () => {
+    const links = urls
+      .split(/[\s,]+/)
+      .map((u) => u.trim())
+      .filter(Boolean);
+    if (!libraryId || links.length === 0) return;
+    setBusy(true);
+    setError(null);
+    setRefused([]);
+    const failures: { path: string; message: string }[] = [];
+    const enqueued = new Set<string>();
+    for (const url of links) {
+      try {
+        await api.videoStart({ libraryId, url });
+        enqueued.add(url);
+      } catch (e) {
+        failures.push({ path: url, message: errorMessage(e) });
+      }
+    }
+    // Only what got through leaves the box, so a refused link stays visible
+    // beside its reason and can be corrected rather than retyped.
+    setUrls(links.filter((u) => !enqueued.has(u)).join("\n"));
+    setRefused(failures);
+    setBusy(false);
+    void refresh();
+  }, [libraryId, urls, refresh]);
+
   /** Answer one item's gate. The queue is the source of truth, so this records
    *  nothing locally — it forgets the report and lets the next poll say what
    *  happened. */
@@ -258,6 +303,30 @@ export function ImportScreen() {
           {picking
             ? t("import.picking")
             : t(paths.length === 0 ? "import.choose" : "import.chooseMore")}
+        </button>
+      </div>
+
+      {/* Videos. Its own panel and its own button, because a video is not a
+          file: nothing is staged, no format is checked, and the stages below do
+          not apply — a video run has no profile, semantics, eval-set or tuning
+          stage at all, and the gate opens with what its own probe recommends. */}
+      <div className="dropzone" role="group" aria-label={t("import.videoTitle")}>
+        <p className="muted">{t("import.videoHint")}</p>
+        <textarea
+          className="video-urls"
+          rows={3}
+          value={urls}
+          spellCheck={false}
+          placeholder={t("import.videoPlaceholder")}
+          aria-label={t("import.videoTitle")}
+          onChange={(e) => setUrls(e.target.value)}
+        />
+        <button
+          type="button"
+          onClick={() => void startVideos()}
+          disabled={busy || urls.trim() === "" || !libraryId}
+        >
+          {busy ? t("import.working") : t("import.videoStart")}
         </button>
       </div>
 

@@ -303,6 +303,12 @@ pub struct RunListItem {
     pub title: Option<String>,
     #[serde(default)]
     pub library_id: Option<String>,
+    /// What the run knew about itself before it had a document: the URL for a
+    /// video, the picked file's basename for an import. `default` is
+    /// load-bearing rather than habit — a control plane older than the column
+    /// sends no key, and the queue must still decode.
+    #[serde(default)]
+    pub label: Option<String>,
     #[serde(default)]
     pub document_id: Option<String>,
     #[serde(default)]
@@ -415,6 +421,10 @@ pub struct AuditRun {
     pub title: Option<String>,
     #[serde(default)]
     pub library_id: Option<String>,
+    /// What the run knew about itself before it had a document. See
+    /// `RunListItem::label`.
+    #[serde(default)]
+    pub label: Option<String>,
     #[serde(default)]
     pub document_id: Option<String>,
     #[serde(default)]

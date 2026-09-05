@@ -345,6 +345,135 @@ TypeScript fork carries a live parity spec over 21 URL shapes.
 
 ---
 
+## YouTube refuses a datacentre, and only one call has to move
+
+Measured 2026-09-05, after a real user pasted a URL against the paid plane on
+EC2 and nothing appeared in the import queue at all. From the instance
+(`i-0c7302467d8a702cc`, egress `34.218.169.144`) and from a residential address,
+read-only:
+
+| | laptop (`181.32.19.72`) | EC2 |
+|---|---|---|
+| `yt-dlp extract_info` | 200, 2.6 s | **refused** — "Sign in to confirm you're not a bot" |
+| `youtube.com/watch` page | 200 | **200**, 1,170,129 bytes |
+| signed caption URL, auto en | 200, 369 B | **200, 369 B** |
+| signed caption URL, `yq6uVBsVkeQ` auto es | **429** ×6 over 25 min | **200, 582,176 B** |
+| signed caption URL, manual en | **429** | **200, 440 B** |
+| signed audio URL (`itag 140`) | 206 | **403** |
+
+**It is the player API that is bot-checked, not the network.** The watch page
+loads and every signed URL that is not IP-bound is served. So the split is one
+call wide:
+
+- **A caption URL carries `ip=0.0.0.0`** and an `expire` about seven hours out.
+  Any host may fetch it — the blocked one fetched *every* URL this laptop was
+  being throttled on. The caption download therefore **stays on the worker that
+  owns the workspace**, which is what keeps the artifact store single-host. It
+  also settles a question that would otherwise be open: a caption file measures
+  **582,176 bytes for 4,573 s**, about 7.6 KB per minute, so a four-hour talk is
+  ~1.8 MB and carrying captions in a Temporal payload was never going to work.
+- **A media URL carries `ip=<the address that resolved it>`** and answers 403
+  anywhere else. `fetch_audio` therefore cannot be split from the
+  `extract_info` that produced the URL — it runs beside it. That is free: it
+  writes no artifact, only a transient file it deletes in a `finally`, and
+  returns an S3 URI.
+
+So `resolve_video` was split out of `probe_video`, and `VideoRequest.fetch_queue`
+routes it and `fetch_audio` to a worker on an address YouTube will answer.
+Empty — the default — means "this queue", which is exactly the behaviour that
+predates the field, so nothing changes until a deployment sets
+`BRAIN_FETCH_TASK_QUEUE`.
+
+**The narrowing is not tidiness.** `resolve_video` returns a `VideoInfo`, not the
+info dict: on `yq6uVBsVkeQ` the raw dict is **1,656,277 bytes** of JSON, because
+the video offers 161 automatic caption languages. `VideoInfo` is a few kilobytes.
+
+**The queue name travels in the request, never read from settings inside the
+workflow.** A workflow may only decide on what its own history holds; reading an
+environment variable there would make replay depend on the machine replaying it.
+Both planes stamp it at the route, beside where the paid plane stamps
+`tenant_id`.
+
+**`FETCH_START_TIMEOUT` is what stops this trading one silence for another.** Ten
+minutes of schedule-to-start, which Temporal does not retry, so a queue nobody is
+serving fails the run instead of parking it for seven days. `failure_of` names it
+`fetch_worker_unavailable` rather than `activity_failed`, because the answer is
+that a process is not running and not that an activity is broken. Note the trap
+it walks past: `TimeoutType` is an `IntEnum`, so `str(cause.type)` is `"2"` and a
+name match silently never fires — the same shape as the `event_type` defect the
+raw-history panel already records.
+
+`worker/scripts/fetch_worker.py` is the process. Two activities, **no
+workflows**, no stores, and AWS credentials only for the Transcribe path. It
+reaches production Temporal through the SSM port-forward
+(`deploy-brain.sh tunnel 7333 7333`). The cost is stated in its docstring and is
+real: a video import only gets past `probing` while somebody is running it.
+
+## A run that fails in its first activity is now visible
+
+`POST /videos` answered 200, the URL box cleared, and **nothing ever appeared in
+the import queue**. The workflow had failed 2.8 s in. Three things had to be true
+at once for that to leave no trace:
+
+1. `register_document` is what INSERTs the `run` row, and it is the **second**
+   activity. `probe_video` runs before it.
+2. `Catalog.finish_run` was a bare `UPDATE … WHERE id = %s`. Zero rows affected
+   raises nothing, so `record_run_outcome` reported **Completed** having written
+   nothing — event 13 of that history.
+3. The import queue reads the catalog, by design, so that it answers with
+   Temporal down.
+
+`IngestWorkflow` has the same shape (`stage_source` before `register_document`),
+so a file import that dies in staging was equally invisible; it had simply never
+fired. Both workflows now call `open_run` first.
+
+**Opening the row early is only half of it, and the other half is easy to miss.**
+The import queue is **per-library**, and both planes filtered on `d.library_id`
+through the document join — so a run with no document yet would exist and be
+filtered straight back out of the screen that had just started it. `run` carries
+its own `library_id` now, and both planes read
+`COALESCE(d.library_id, r.library_id)`. It has no foreign key on purpose:
+`ensure_library` runs inside `register_document`, so at run-open time the library
+legitimately may not exist.
+
+`run.label` is the second column: what the run knew about itself before it had a
+document. For a video that is the URL somebody pasted; for an import, the file's
+basename. `title` stays the *document's* title, and the queue reads
+`title ?? label ?? workflow_id` — so a failed probe reads as a URL rather than as
+`video-1788624193136-4fa22984`.
+
+**`_open` is behind `workflow.patched`, the only patch in this codebase.**
+Inserting a command at the head of a workflow's sequence is a non-determinism
+error on replay, and an import parked at its gate for seven days is exactly the
+history that would hit it. `_pending` and `_flush_pending` therefore stay: they
+are still the live path for every execution that started before this shipped, and
+they are why the patch is safe. Deprecate it once nothing older than that deploy
+is open.
+
+`register_document`'s own `start_run` is untouched — `ON CONFLICT (id) DO
+NOTHING` makes it a no-op and `attach_version` fills in the ids immediately
+after. The `kind` both calls pass goes through one `run_kind_of`, because the
+first call is the one that survives the conflict and two copies of that
+expression would eventually disagree.
+
+## Two error kinds, because they call for opposite things
+
+`_extract_info` collapsed every yt-dlp `DownloadError` into `video_unavailable`.
+That is right for a private, deleted, age-gated or geo-blocked video — a decision
+that will not change on a second attempt — and wrong for the one that actually
+happened, where the video is fine and the caller is blocked.
+`_download_error_kind` splits `youtube_refused_this_host` out of it, both kinds
+still non-retryable, and the app renders `queue.errorKind.*` rather than printing
+the identifier.
+
+**And a 429 on captions must not quietly buy a transcription.**
+`_download_caption` made one attempt and returned `b""` on any failure — which
+sets `chosen = None`, which is the branch that pays Amazon. The measurement above
+is what makes that concrete: this endpoint refused one address six times across
+25 minutes while serving the same URLs elsewhere. Three attempts with backoff
+now, and the fallback stays, because the gate still shows the bill before anybody
+approves it.
+
 ## What a video does *not* get
 
 **Semantics, profile learning, the eval set and tuning have no stage at all** —
@@ -392,3 +521,50 @@ render, and clicks worked, but synthetic keystrokes do not reach the WebKit
 webview on this machine, so the typing-and-approving path is untested by
 anything but code. Playlists, channels, and any video longer than 19 seconds are
 also untried.
+
+**The split ran end to end on the local stack, 2026-09-05.** Image rebuilt with
+all three overlays, migration applied, the container reporting
+`schema 20260905180000_run_library_label`:
+
+```
+1. a run that fails in its first activity — the reported defect, reproduced
+   POST /videos  https://youtu.be/aaaaaaaaaaa   ->  200, workflow started
+   GET  /runs?library_id=lib_videos             ->  the row is there:
+       state=failed  stage=probing  library_id=lib_videos
+       label=https://youtu.be/aaaaaaaaaaa  title=null
+       error_kind=video_unavailable
+   run_event: (1, probing, -) (2, probing, failed)      <- previously: nothing
+
+2. the routing, proved by withholding a worker rather than by adding one
+   POST /videos  jNQXAC9IVRw  fetch_queue=brain-fetch, nobody serving it
+   -> after 20 s: state=running stage=probing, and *already in the queue*
+      with its label. The container worker has `resolve_video` registered on
+      `brain-ingest` and did not take it.
+   start scripts/fetch_worker.py on brain-fetch
+   -> awaiting_approval, title "Me at the zoo", usd null
+   reject the gate -> cancelled, error_kind=rejected, $0
+```
+
+`resolve_video`, `fetch_worker.py` and the two new `run` columns are also covered
+by 722 worker tests, 121 on the paid plane and 428 in the app — the routing by a
+test that *withholds* `resolve_video` from the main worker, so it cannot pass
+unless the workflow really routes it.
+
+**That second run fell back to Transcribe, which is the caption throttle
+appearing in the wild.** The probe recorded four advertised tracks, `chosen:
+null`, and `transcribe` in its identity basis: the manual `en` track would not
+download after three attempts. That is not a flaw in the design — it is this IP.
+The local container shares the developer's residential address, measured
+refusing that endpoint six times across 25 minutes, while EC2 fetched the same
+URLs at 200. In production the caption download sits on the host that *can*
+fetch them, which is exactly why it was left there. What the run does show is
+that the fallback is real and reachable, and that reaching it costs the whole
+Transcribe bill — so `CAPTION_ATTEMPTS` is a floor under a measured risk rather
+than a theoretical one.
+
+**What has still not run.** The fetcher has never run against **production**
+Temporal, no video has been indexed through the split all the way to an index
+(both runs above stopped before the bill, deliberately), and the migration has
+not been applied to the production catalog. Nor has any of it been driven from
+the desktop window — the queue row above was read from `GET /runs`, not looked
+at.

@@ -48,8 +48,10 @@ with workflow.unsafe.imports_passed_through():
         ProfileDecision,
         Spend,
         Registered,
+        RunOpen,
         StageOptions,
         Staged,
+        run_kind_of,
     )
 
 #: Free stages are fast and local; a long timeout here only delays the report of
@@ -119,6 +121,28 @@ _PAID_RETRY = RetryPolicy(maximum_attempts=2)
 GATE_TIMEOUT = timedelta(days=7)
 
 _RETRY = RetryPolicy(maximum_attempts=3)
+
+#: The one patch id in this codebase, shared by both ingest workflows.
+#:
+#: `workflow.patched` is how a new **first** activity is added to a workflow that
+#: already has executions in flight: inserting a command at the head of the
+#: sequence is a non-determinism error on replay, and a gate parked for seven
+#: days is exactly the history that would hit it. Both workflows use the same id
+#: because it is one change; patch ids are scoped per workflow type.
+_RUN_ROW_FIRST = "run-row-before-the-first-activity"
+
+
+def _basename(source_path: str) -> str:
+    """The last segment of a path, for the queue to show before there is a title.
+
+    Written with `rsplit` rather than `pathlib`, because this runs inside the
+    workflow sandbox and the answer must not depend on which OS the worker is on:
+    `PurePath` would split on `\\` on Windows and not on Linux, and a workflow
+    that replays on a different host must produce the same string.
+    """
+    for sep in ("/", "\\"):
+        source_path = source_path.rsplit(sep, 1)[-1]
+    return source_path
 
 
 @dataclass
@@ -236,6 +260,8 @@ class IngestWorkflow:
     async def _run(
         self, request: IngestRequest, options: StageOptions, run_id: str
     ) -> IngestResult:
+        await self._open(request, run_id)
+
         await self._enter(run_id, "staging")
         staged: Staged = await workflow.execute_activity(
             act.stage_source,
@@ -802,6 +828,47 @@ class IngestWorkflow:
             start_to_close_timeout=FREE_TIMEOUT,
             retry_policy=_RETRY,
         )
+
+    async def _open(self, request: IngestRequest, run_id: str) -> None:
+        """Open the run row before `stage_source` can fail against nothing.
+
+        A file that is missing, unreadable, or outside the tenant's own tree
+        fails in the **first** activity — and until this existed the `run` row
+        was INSERTed by the second one, so that failure was recorded nowhere:
+        `finish_run` is a bare UPDATE, zero rows affected raises nothing, and the
+        import queue reads the catalog. This half has never fired in production;
+        its twin in `VideoIngestWorkflow` did, on 2026-09-05, and produced a
+        workflow that failed in 2.8 s with no row, no error and no trace.
+
+        **Patched, because inserting a first activity changes the command
+        sequence.** A history recorded before this shipped carries no marker
+        here, so `patched` returns False on replay and that run finishes exactly
+        as it began — which is what stops an import parked at its gate for up to
+        seven days from failing on non-determinism the moment this deploys. It
+        is also why `_pending` and `_flush_pending` stay: they are still the live
+        path for every such run. Deprecate the patch once nothing older than this
+        deploy is open.
+        """
+        if not workflow.patched(_RUN_ROW_FIRST):
+            return
+        await workflow.execute_activity(
+            act.open_run,
+            RunOpen(
+                run_id=run_id,
+                workflow_id=workflow.info().workflow_id,
+                # Through `run_kind_of`, because `register_document` opens the
+                # same row again and `ON CONFLICT DO NOTHING` means this call's
+                # kind is the one that survives.
+                kind=run_kind_of(request),
+                tenant_id=request.tenant_id,
+                library_id=request.library_id,
+                label=_basename(request.source_path),
+            ),
+            start_to_close_timeout=WRITE_TIMEOUT,
+            retry_policy=_RETRY,
+        )
+        # The row exists, so every transition from here goes straight through.
+        self._registered = True
 
     async def _enter(
         self, run_id: str, stage: str, state: str = "running"

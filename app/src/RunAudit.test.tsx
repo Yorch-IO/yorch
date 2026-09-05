@@ -78,6 +78,7 @@ function audit(over: Partial<Audit> = {}): Audit {
       errorDetail: null,
       title: "Institución",
       libraryId: "lib_teologia",
+      label: null,
       documentId: "doc_1",
       versionId: "ver_1",
     },

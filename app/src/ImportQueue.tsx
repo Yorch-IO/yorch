@@ -155,7 +155,11 @@ function Row({
   const { run } = item;
   const live = unfinished(run);
   const state = item.state ?? run.state;
-  const name = run.title ?? run.workflowId;
+  // `title` is the *document's*, joined, and a run that failed before it
+  // registered one has none — which is now every run that dies in its first
+  // activity, since the row is opened before it. `label` is what the run knew
+  // about itself: the URL somebody pasted, or the file they picked.
+  const name = run.title ?? run.label ?? run.workflowId;
 
   return (
     <li className="queue-item">
@@ -218,9 +222,16 @@ function Row({
 
       {run.errorKind && (
         <p className="warn">
+          {/* The kind is translated, not printed raw. A person reading a red row
+              needs to know what to do, and `youtube_refused_this_host` and
+              `video_unavailable` call for opposite things — one is the video,
+              the other is this machine. `defaultValue` keeps every kind that has
+              no wording rendering as itself rather than as a bare key. */}
           {t("queue.ended", {
             state: t(`home.run.state.${run.state}`, { defaultValue: run.state }),
-            kind: run.errorKind,
+            kind: t(`queue.errorKind.${run.errorKind}`, {
+              defaultValue: run.errorKind,
+            }),
           })}
         </p>
       )}

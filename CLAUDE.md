@@ -1121,8 +1121,17 @@ the same reason `doc/CLAUDE.md` says structural diagnostics rather than recall
 are what detect a bad profile. See `doc/COMPANY_BRAIN.md`, "Profiles: learned,
 applied, and measured".
 
-**Video indexing is built and deployed, and three things about it have never
-run.** `doc/VIDEO.md` is the record; what belongs in *this* list is what is
+**Video indexing is built and deployed, and the production block is
+environmental.** YouTube refuses `yt-dlp extract_info` from the EC2 egress IP —
+measured 2026-09-05, along with the two facts that shape the fix: a caption URL
+carries `ip=0.0.0.0` and the blocked host fetches it at 200, while a media URL
+carries the resolving address and answers 403 anywhere else. So `resolve_video`
+and `fetch_audio` can be routed to a laptop-side worker
+(`worker/scripts/fetch_worker.py`, `BRAIN_FETCH_TASK_QUEUE`) and everything
+else — the caption download included — stays where the workspace is. **Nothing
+about that split has run outside the test suite.** `doc/VIDEO.md` has the table.
+
+**Three other things about it have never run.** `doc/VIDEO.md` is the record; what belongs in *this* list is what is
 missing. **Nobody has approved a video gate from the UI** — the panel and all
 three gate states were screenshotted in the real window and clicks navigate, but
 synthetic keystrokes do not reach the WebKit webview on this machine, so typing a
@@ -1461,11 +1470,27 @@ exactly one question about it: the aggregate.
 - **The write rides along with the one that sets `run.stage`**, in one
   connection. Two activities would let a retry land one without the other and
   leave the trail disagreeing with the cursor about the same moment.
-- **`staging` and `registering` precede the `run` row**, and `_insert_event`
-  derives its tenant from that row — so an event written before it is *silently
-  dropped*. The workflow buffers those two and flushes them once
-  `register_document` returns. Nothing else in the pipeline needs this, because
-  everything from `extracting` onward already depends on the catalog.
+- **`staging` and `registering` preceded the `run` row, and that is what made a
+  failed run invisible.** `_insert_event` derives its tenant from the run, so an
+  event written before it is *silently dropped* — which is why the workflow
+  buffered those two and flushed them once `register_document` returned. The
+  buffering covered the **events**; nothing covered the row itself, and
+  `Catalog.finish_run` is a bare `UPDATE … WHERE id = %s` that affects zero rows
+  and raises nothing. Measured in production 2026-09-05: a video refused by
+  YouTube failed 2.8 s in, `record_run_outcome` reported **Completed** having
+  written nothing, and the import queue showed no row at all.
+  Both workflows call `open_run` first now (`RunOpen`, modelled on
+  `asking.start_question_run`), and the row carries **`library_id` and `label`**
+  — the first because the queue is per-library and filtered through
+  `d.library_id`, so a run with no document was filtered out of the screen that
+  started it; the second because `title` is the *document's* and there is none
+  yet, so the queue reads `title ?? label ?? workflow_id`. Both planes read
+  `COALESCE(d.library_id, r.library_id)`.
+  `_open` is behind **`workflow.patched`, the only patch in this codebase** —
+  inserting a command at the head of a workflow breaks replay of anything in
+  flight, and a gate parked for seven days is exactly that. The buffering stays
+  for the same reason: it is still the live path for those runs. See
+  `doc/VIDEO.md`.
 - **Removals and activations get run rows now** (`brainworker/audit.py`), which
   needed `run_kind_check` widened exactly as `20260831160000_run_kind_ask` did
   for questions: `record_cost` derives its tenant from the run, so no run row

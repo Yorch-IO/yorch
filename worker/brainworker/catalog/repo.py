@@ -199,7 +199,21 @@ class RunSummary:
     #: per failed run.
     error_detail: str | None
     title: str | None
+    #: `COALESCE(d.library_id, r.library_id)`, not the join alone.
+    #:
+    #: A run opens its row before its first activity, so a run that failed in
+    #: `probe_video` or `stage_source` has no document to join to — and the
+    #: import queue is per-library. Reading only the join is what made a failed
+    #: video run invisible on 2026-09-05: the row existed and the screen that
+    #: asked for it filtered it out.
     library_id: str | None
+    #: What the run knew about itself before it had a document: the URL for a
+    #: video, the picked file's basename for an import.
+    #:
+    #: Beside `title` rather than folded into it, because `title` *is* the
+    #: document's title and a run with no document honestly has none. The UI
+    #: reads `title ?? label ?? workflow_id`.
+    label: str | None
     #: Both nullable and both `ON DELETE SET NULL`: cost and run history
     #: deliberately outlive the document they were spent on. A queue row whose
     #: document is gone still has a bill and an audit trail worth reading, and
@@ -511,7 +525,8 @@ class Catalog:
         sql = """
             SELECT r.id, r.workflow_id, r.kind, r.state, r.stage,
                    r.started_at, r.finished_at, r.error_kind, r.error_detail,
-                   d.title, d.library_id, r.document_id, r.version_id,
+                   d.title, COALESCE(d.library_id, r.library_id) AS library_id,
+                   r.label, r.document_id, r.version_id,
                    -- Cast in SQL, not in Python: `cost_entry.usd` is
                    -- `numeric(12, 6)`, so psycopg hands back a `Decimal` and the
                    -- annotation would be a lie the way `Cost.usd`'s already is —
@@ -534,7 +549,8 @@ class Catalog:
     _RUN_SUMMARY_COLUMNS = """
         r.id, r.workflow_id, r.kind, r.state, r.stage,
         r.started_at, r.finished_at, r.error_kind, r.error_detail,
-        d.title, d.library_id, r.document_id, r.version_id,
+        d.title, COALESCE(d.library_id, r.library_id) AS library_id, r.label,
+        r.document_id, r.version_id,
         (SELECT sum(ce.usd) FROM cost_entry ce
           WHERE ce.run_id = r.id)::float8 AS usd_so_far
     """
@@ -563,11 +579,13 @@ class Catalog:
         `started_at` defaults to `now()` and several runs enqueued from one
         multi-file drop can land in the same microsecond.
 
-        `library_id` filters through the document join, so a run whose document
-        has been removed is not reachable by it — `run.document_id` is
-        `ON DELETE SET NULL` because history outlives the document. That is the
-        right trade for a per-library queue, and the reason the unfiltered call
-        still returns those runs.
+        `library_id` filters on `COALESCE(d.library_id, r.library_id)`. The join
+        alone was not enough in **either** direction: a run whose document has
+        been removed keeps its own column and stays reachable, and a run that
+        failed before it registered a document — which is now every run that
+        dies in its first activity, since the row is opened before it — has no
+        document to join to at all. Reading only the join is what made a video
+        run refused by YouTube invisible in the queue that had just started it.
         """
         where = ["r.tenant_id = %s"]
         params: list[Any] = [tenant_id]
@@ -578,7 +596,12 @@ class Catalog:
             where.append("r.state = ANY(%s)")
             params.append(list(states))
         if library_id:
-            where.append("d.library_id = %s")
+            # `COALESCE`, never `d.library_id` alone. A run opens its row before
+            # its first activity now, so one that failed in `probe_video` or
+            # `stage_source` has no document to join to — and filtering it out
+            # here is precisely what kept a failed video run off the screen it
+            # was opened for.
+            where.append("COALESCE(d.library_id, r.library_id) = %s")
             params.append(library_id)
         if document_id:
             where.append("r.document_id = %s")
@@ -1057,16 +1080,35 @@ class Catalog:
         tenant_id: str,
         document_id: str | None = None,
         version_id: str | None = None,
+        library_id: str | None = None,
+        label: str | None = None,
     ) -> str:
+        """Open the row, idempotently. Called twice on the ingest paths, on
+        purpose.
+
+        `ON CONFLICT (id) DO NOTHING` is what lets a workflow open its row before
+        its first activity and `register_document` keep its own call unchanged:
+        the second one is a no-op, and `attach_version` fills in the document and
+        version immediately after. The alternative — a `DO UPDATE` — would let a
+        late caller overwrite `library_id` or `label` with the nulls it does not
+        know about.
+
+        `library_id` and `label` are what a run knows about itself before it has
+        a document. They are the reason a run that fails in `probe_video` or
+        `stage_source` is visible at all: the import queue is per-library and it
+        filters on `COALESCE(d.library_id, r.library_id)`.
+        """
         with self._conn() as conn:
             conn.execute(
                 """
                 INSERT INTO run
-                       (id, workflow_id, document_id, version_id, kind, tenant_id)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                       (id, workflow_id, document_id, version_id, kind,
+                        tenant_id, library_id, label)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO NOTHING
                 """,
-                (run_id, workflow_id, document_id, version_id, kind, tenant_id),
+                (run_id, workflow_id, document_id, version_id, kind, tenant_id,
+                 library_id or None, label or None),
             )
         return run_id
 
@@ -1171,23 +1213,32 @@ class Catalog:
         seq: int | None = None,
         at: datetime | None = None,
         stage: str | None = None,
-    ) -> None:
-        """Close the run, and close its last stage with it.
+    ) -> bool:
+        """Close the run, and close its last stage with it. False if there was
+        no row.
 
         The terminal event names the stage the run was *in* when it ended, not a
         stage of its own: "at 14:07, in `semantics`, this ended `failed`" is the
         sentence somebody reading a red row needs, and inventing a synthetic
         `finished` stage would push the real answer one row further away.
+
+        **The return value exists because a bare UPDATE cannot fail.** Zero rows
+        affected raises nothing, so `record_run_outcome` reported Completed
+        against a run row that did not exist — visible in the production history
+        of `video-1788624193136-4fa22984` as event 13, an activity that
+        succeeded at writing nothing. The row is opened before the first activity
+        now, so this should not happen again; if it does, the caller says so
+        rather than ticking.
         """
         with self._conn() as conn:
-            conn.execute(
+            updated = conn.execute(
                 """
                 UPDATE run SET state = %s, finished_at = now(),
                                error_kind = %s, error_detail = %s
                  WHERE id = %s
                 """,
                 (state, error_kind, error_detail, run_id),
-            )
+            ).rowcount
             if seq is not None and at is not None and stage is not None:
                 self._insert_event(
                     conn,
@@ -1198,6 +1249,7 @@ class Catalog:
                     outcome=state,
                     detail=error_kind,
                 )
+        return updated > 0
 
     def attach_version(self, run_id: str, document_id: str, version_id: str) -> None:
         with self._conn() as conn:

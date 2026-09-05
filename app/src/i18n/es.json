@@ -250,6 +250,14 @@
     "hideDetail": "ocultar",
     "gateComing": "Leyendo el documento — la estimación aparece aquí cuando esté lista.",
     "ended": "Terminó {{state}} · {{kind}}",
+    "errorKind": {
+      "audio_unavailable": "No se pudo descargar el audio, así que no hay nada que transcribir.",
+      "fetch_worker_unavailable": "Nadie recogió la tarea de descarga. El worker que habla con YouTube no está corriendo.",
+      "video_has_no_duration": "El vídeo no declara duración, así que no se puede estimar nada a partir de ella.",
+      "video_is_live": "Un directo no tiene duración ni final, así que todavía no hay nada que indexar.",
+      "video_unavailable": "YouTube no sirve este vídeo: puede ser privado, estar borrado o no estar disponible en este país.",
+      "youtube_refused_this_host": "YouTube rechazó a este servidor, no al vídeo. Le está pidiendo iniciar sesión a la máquina que descarga, normalmente porque esa dirección es de un centro de datos. El vídeo está bien."
+    },
     "activate": "Publicar este índice",
     "activateBusy": "Publicando…",
     "activateDone": "Publicado. {{count}} documento(s) responden ya desde esta versión.",

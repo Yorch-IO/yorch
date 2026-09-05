@@ -40,6 +40,8 @@ from ..pipeline import (
     ProfileRules,
     ProfileWarning,
     Registered,
+    RunOpen,
+    run_kind_of,
     StageEstimate,
     StageOptions,
     Staged,
@@ -541,12 +543,13 @@ async def register_document(
             tenant_id=request.tenant_id,
             run_id=run_id,
             workflow_id=workflow_id,
-            # 'reindex' has been in the CHECK constraint since the first
-            # migration and nothing had ever written it. `run_kind` is the
-            # override a caller that is not staging a file uses; empty keeps
-            # every existing caller on exactly this line's old behaviour.
-            kind=request.run_kind or ("reindex" if request.reindex else "index"),
+            # Through `run_kind_of`, which `IngestWorkflow.open_run` also uses:
+            # `start_run` is `ON CONFLICT DO NOTHING`, so the workflow's earlier
+            # call is the one whose kind survives and two copies of the
+            # expression would eventually disagree.
+            kind=run_kind_of(request),
             document_id=doc_id,
+            library_id=request.library_id,
         )
         version, created = catalog.register_version(
             tenant_id=request.tenant_id,
@@ -1467,6 +1470,48 @@ async def activate_version(
         proj.activate(graph, version)
 
 
+@activity.defn(name="open_run")
+async def open_run(opening: RunOpen) -> None:
+    """Open the catalog row before anything can fail against it.
+
+    Both ingest workflows call this first. Until they did, the row was created by
+    `register_document` — the *second* activity — so a failure in `probe_video`
+    or `stage_source` had nothing to be recorded against: `finish_run` is a bare
+    UPDATE, zero rows affected raises nothing, and the run vanished. Measured in
+    production on 2026-09-05, on a video YouTube refused from the EC2 egress IP:
+    the workflow failed in 2.8 s, `record_run_outcome` reported Completed, and
+    the import queue showed nothing at all.
+
+    The pattern is `asking.start_question_run`'s, which opens a question's row
+    before it asks for exactly the same reason and with the same caveat about
+    what a missing row costs downstream — `record_cost`, `record_artifact` and
+    `_insert_event` all derive their tenant from the run, so no row means no
+    bookkeeping of any kind.
+
+    **Best-effort, like every other write in this file.** An import that has not
+    spent anything must not fail because the catalog is blinking; a run that then
+    dies invisibly is no worse than what happened before this existed. Idempotent
+    at the database — `start_run` is `ON CONFLICT (id) DO NOTHING` — so a
+    Temporal retry writes nothing twice and `register_document`'s own call
+    remains a no-op that `attach_version` immediately completes.
+    """
+    settings = _settings()
+    try:
+        with Catalog(
+            settings.database_url, pooled=False, timeout=RECORD_TIMEOUT
+        ) as catalog:
+            catalog.start_run(
+                run_id=opening.run_id,
+                workflow_id=opening.workflow_id,
+                kind=opening.kind,
+                tenant_id=opening.tenant_id,
+                library_id=opening.library_id,
+                label=opening.label,
+            )
+    except Exception as e:  # noqa: BLE001 - bookkeeping never fails its stage
+        log.warning("could not open the run row for %s: %s", opening.run_id, e)
+
+
 @activity.defn(name="record_run_outcome")
 async def record_run_outcome(
     run_id: str,
@@ -1485,7 +1530,7 @@ async def record_run_outcome(
     """
     settings = _settings()
     with Catalog(settings.database_url) as catalog:
-        catalog.finish_run(
+        closed = catalog.finish_run(
             run_id,
             state,
             error_kind=error_kind,
@@ -1493,6 +1538,14 @@ async def record_run_outcome(
             seq=seq,
             at=at,
             stage=stage,
+        )
+    if not closed:
+        # An UPDATE that matched nothing. This is what a failure before the run
+        # row existed used to look like from here — Completed, having written
+        # nothing — and `open_run` is what removed the cause. Say so rather than
+        # ticking; the run is about to fail and the catalog will not know why.
+        log.warning(
+            "closed no run row for %s (%s): the row does not exist", run_id, state
         )
 
 

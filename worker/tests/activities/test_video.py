@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+from unittest import mock
 
 import pytest
 from docagent import transcript as dt
@@ -66,6 +67,97 @@ def vtt(n: int = 300) -> bytes:
 
 def _ts(s: float) -> str:
     return f"{int(s)//3600:02d}:{int(s)//60%60:02d}:{s%60:06.3f}"
+
+
+# --- who is being refused: the video, or us ----------------------------------
+
+
+def test_a_bot_check_is_not_the_video_being_unavailable():
+    """The production message, classified.
+
+    Every `DownloadError` used to collapse into `video_unavailable`, which is
+    right for a private, deleted or geo-blocked video and wrong for this one:
+    measured 2026-09-05, `yq6uVBsVkeQ` probes fine from a residential IP in
+    2.6 s and is refused from the EC2 egress IP `34.218.169.144`. The video is
+    available; the caller is blocked, and the remedy is nothing to do with the
+    video.
+
+    Plain strings, no yt-dlp — the classification is what is worth asserting.
+    """
+    production = (
+        "ERROR: [youtube] yq6uVBsVkeQ: Sign in to confirm you're not a bot. "
+        "Use --cookies-from-browser or --cookies for the authentication."
+    )
+    assert vid._download_error_kind(production) == "youtube_refused_this_host"
+    assert vid._download_error_kind(
+        "ERROR: [youtube] x: HTTP Error 429: Too Many Requests"
+    ) == "youtube_refused_this_host"
+
+
+def test_a_video_that_really_is_gone_keeps_its_own_kind():
+    """The distinction only pays if the other half still lands where it did."""
+    for message in (
+        "ERROR: [youtube] x: Video unavailable",
+        "ERROR: [youtube] x: This video is private",
+        "ERROR: [youtube] x: The uploader has not made this video available "
+        "in your country",
+    ):
+        assert vid._download_error_kind(message) == "video_unavailable", message
+
+
+def test_a_caption_track_is_asked_for_more_than_once_because_giving_up_costs_money():
+    """An empty return here sets `chosen = None`, and that is the branch that
+    pays Amazon.
+
+    Measured 2026-09-05: the `timedtext` endpoint refused one address on six
+    attempts across 25 minutes while serving the *same* URLs to another host at
+    200. One try and a shrug turns a transient throttle into a transcription
+    bill.
+    """
+    attempts = []
+
+    def flaky(url, timeout):  # noqa: ARG001 - matching urlopen's shape
+        attempts.append(url)
+        if len(attempts) < 3:
+            raise OSError("HTTP Error 429: Too Many Requests")
+        return _Body(b"WEBVTT\n")
+
+    import urllib.request
+
+    with mock.patch.object(urllib.request, "urlopen", flaky), \
+            mock.patch.object(vid, "CAPTION_BACKOFF", (0.0, 0.0)):
+        assert vid._download_caption("https://example.invalid/t", "es") == b"WEBVTT\n"
+    assert len(attempts) == 3
+
+
+def test_a_caption_track_that_never_answers_still_falls_back_rather_than_failing():
+    """Falling back is right — it is a run that has not spent anything, and the
+    gate still shows the bill before anybody approves it. Only the number of
+    tries changed."""
+    import urllib.request
+
+    def refused(url, timeout):  # noqa: ARG001
+        raise OSError("HTTP Error 429: Too Many Requests")
+
+    with mock.patch.object(urllib.request, "urlopen", refused), \
+            mock.patch.object(vid, "CAPTION_BACKOFF", (0.0, 0.0)):
+        assert vid._download_caption("https://example.invalid/t", "es") == b""
+
+
+class _Body:
+    """The two methods `urlopen`'s context manager needs."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self) -> bytes:
+        return self._data
 
 
 # --- grouping and chunking, the pair that carries the clock -------------------

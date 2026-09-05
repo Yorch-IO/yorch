@@ -17,12 +17,15 @@ import uuid
 import pytest
 from temporalio import activity
 from temporalio.client import Client, WorkflowFailureError
+from temporalio.exceptions import ActivityError, ApplicationError
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from brainworker.artifacts import ArtifactRef
 from brainworker.pipeline import (
     AudioStaged,
+    RunOpen,
     CaptionTrack,
     ChunkKindCount,
     Chunked,
@@ -39,11 +42,12 @@ from brainworker.pipeline import (
     Staged,
     Transcribed,
     TranscriptionJob,
+    VideoInfo,
     VideoProbe,
     VideoRequest,
 )
 from brainworker.workflows.ingest import Approval
-from brainworker.workflows.video import VideoIngestWorkflow
+from brainworker.workflows.video import VideoIngestWorkflow, failure_of
 
 TASK_QUEUE = "test-video"
 VID = "dQw4w9WgXcQ"
@@ -96,10 +100,40 @@ def probe(with_captions: bool = True, kind: str = "manual") -> VideoProbe:
 # -- typed doubles -----------------------------------------------------------
 
 
+def info_for(with_captions: bool = True, kind: str = "manual") -> VideoInfo:
+    track = CaptionTrack(language="es", kind=kind, ext="vtt")
+    return VideoInfo(
+        video_id=VID,
+        title="Charla sobre hermenéutica",
+        channel="Canal",
+        duration_s=1800,
+        upload_date="20260101",
+        format_id="140",
+        tracks=[track] if with_captions else [],
+        chosen=track if with_captions else None,
+        caption_url="https://www.youtube.com/api/timedtext?x=1" if with_captions else "",
+    )
+
+
+def resolver(with_captions: bool = True, kind: str = "manual"):
+    @activity.defn(name="resolve_video")
+    async def _resolve(req: VideoRequest) -> VideoInfo:
+        assert isinstance(req, VideoRequest), f"got {type(req).__name__}"
+        CALLED.append("resolve")
+        return info_for(with_captions, kind)
+
+    return _resolve
+
+
 def prober(with_captions: bool = True, kind: str = "manual"):
     @activity.defn(name="probe_video")
-    async def _probe(req: VideoRequest, run_id: str) -> VideoProbe:
+    async def _probe(
+        req: VideoRequest, run_id: str, info: VideoInfo
+    ) -> VideoProbe:
         assert isinstance(req, VideoRequest), f"got {type(req).__name__}"
+        # Typed, and asserted: the converter maps payloads by arity, so an
+        # untyped double would accept a call the real worker cannot make.
+        assert isinstance(info, VideoInfo), f"got {type(info).__name__}"
         CALLED.append("probe")
         return probe(with_captions, kind)
 
@@ -121,6 +155,16 @@ def register(already_indexed: bool = False):
         )
 
     return _register
+
+
+#: What the run row was opened with, so a test can assert it exists at all.
+OPENED: list[RunOpen] = []
+
+
+@activity.defn(name="open_run")
+async def open_run(opening: RunOpen) -> None:
+    OPENED.append(opening)
+    CALLED.append("open_run")
 
 
 @activity.defn(name="record_run_events")
@@ -316,6 +360,7 @@ async def activate_version(
 def activities(*, captions=True, already_indexed=False, statuses=None,
                kind="manual"):
     return [
+        open_run, resolver(captions, kind),
         prober(captions, kind), register(already_indexed), record_run_events,
         set_run_stage, record_run_outcome, link_duplicate, record_video_artifacts,
         group_transcript, preview_transcript, estimate_video, fetch_audio,
@@ -333,9 +378,9 @@ async def env():
 
 @pytest.fixture(autouse=True)
 def _clear():
-    SPENT.clear(); CALLED.clear(); POLLS.clear(); QUOTED.clear()
+    SPENT.clear(); CALLED.clear(); POLLS.clear(); QUOTED.clear(); OPENED.clear()
     yield
-    SPENT.clear(); CALLED.clear(); POLLS.clear(); QUOTED.clear()
+    SPENT.clear(); CALLED.clear(); POLLS.clear(); QUOTED.clear(); OPENED.clear()
 
 
 async def _start(env: WorkflowEnvironment, req: VideoRequest, opts: StageOptions):
@@ -505,6 +550,117 @@ async def test_auto_approve_skips_the_gate_without_skipping_the_estimate(env):
 
     assert result.state == "indexed"
     assert "stage:awaiting_approval" not in CALLED
+
+
+# -- where the two YouTube calls run -----------------------------------------
+
+
+FETCH_QUEUE = "test-video-fetch"
+
+
+async def test_the_two_youtube_calls_run_on_the_fetch_queue_when_one_is_named(env):
+    """The split, asserted by *withholding* the activity from the main worker.
+
+    This is the only shape that can prove routing. A test that registered
+    `resolve_video` on both queues would pass whether or not the workflow routes
+    it, because either worker could serve it. Here the main worker does not have
+    it: if `task_queue=` is dropped from the call, the activity is never claimed
+    on the main queue, the schedule-to-start timeout fires and the run fails.
+
+    Measured 2026-09-05, and the reason this exists: `yt-dlp extract_info` is
+    refused from the EC2 egress IP with "Sign in to confirm you're not a bot"
+    while succeeding from a residential one in 2.6 s. Everything else — the
+    caption download included, since a caption URL carries `ip=0.0.0.0` and was
+    served to that same host at 200 — stays where the workspace is.
+    """
+    main = [a for a in activities() if getattr(a, "__temporal_activity_definition", None)
+            and a.__temporal_activity_definition.name != "resolve_video"]
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow], activities=main), \
+            Worker(env.client, task_queue=FETCH_QUEUE, activities=[resolver()]):
+        handle = await _start(env, request(fetch_queue=FETCH_QUEUE), StageOptions())
+        report = await _wait_for_gate(handle)
+        assert report.probe.video_id == VID
+        await handle.signal(VideoIngestWorkflow.approve, Approval(approved=False))
+        await handle.result()
+
+    assert "resolve" in CALLED and "probe" in CALLED
+
+
+async def test_an_empty_fetch_queue_means_this_one_and_changes_nothing(env):
+    """The default. One worker, no second queue, exactly the old behaviour.
+
+    `fetch_queue` is empty for every existing caller, so the workflow falls back
+    to `workflow.info().task_queue` and the whole product is unchanged until
+    somebody deliberately sets it.
+    """
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow], activities=activities()):
+        handle = await _start(env, request(), StageOptions())
+        await _wait_for_gate(handle)
+        await handle.signal(VideoIngestWorkflow.approve, Approval(approved=False))
+        await handle.result()
+
+    assert CALLED.index("resolve") < CALLED.index("probe")
+
+
+def test_a_task_nobody_claimed_is_named_rather_than_called_a_failed_activity():
+    """"Nobody is running the fetcher" must not read as a broken activity.
+
+    Asserted on the pure classifier rather than through a real run, and that is
+    not a shortcut: a schedule-to-start timeout is ten minutes, and the
+    time-skipping environment does **not** skip it — an activity nobody claimed
+    still counts as one in flight, so the test hangs for the full wall clock.
+    The classification is the part worth asserting; `_record_failure` around it
+    is one `execute_activity` call.
+
+    The `TimeoutType` comparison is the reason this test exists at all.
+    `TimeoutType` is an `IntEnum`, so a name match on `str(cause.type)` reads
+    `"2"` and silently never fires — exactly the trap `event_type` set for the
+    raw-history translation.
+    """
+    from temporalio.exceptions import TimeoutType
+
+    unclaimed = ActivityError(
+        "activity error", scheduled_event_id=1, started_event_id=2,
+        identity="", activity_type="resolve_video", activity_id="1",
+        retry_state=None,
+    )
+    unclaimed.__cause__ = TemporalTimeoutError(
+        "activity timeout", type=TimeoutType.SCHEDULE_TO_START,
+        last_heartbeat_details=[],
+    )
+    kind, detail = failure_of(unclaimed)
+    assert kind == "fetch_worker_unavailable"
+    assert "worker de descarga" in detail
+
+    # A start-to-close timeout is an activity that ran and did not finish, which
+    # is a different thing and must not borrow the fetcher's message.
+    slow = ActivityError(
+        "activity error", scheduled_event_id=1, started_event_id=2,
+        identity="", activity_type="resolve_video", activity_id="1",
+        retry_state=None,
+    )
+    slow.__cause__ = TemporalTimeoutError(
+        "activity timeout", type=TimeoutType.START_TO_CLOSE,
+        last_heartbeat_details=[],
+    )
+    assert failure_of(slow)[0] == "activity_failed"
+
+
+def test_the_kind_an_activity_chose_survives_to_the_catalog():
+    """`youtube_refused_this_host` is not `video_unavailable`, and the queue's
+    guidance is keyed on the difference."""
+    refused = ActivityError(
+        "activity error", scheduled_event_id=1, started_event_id=2,
+        identity="", activity_type="resolve_video", activity_id="1",
+        retry_state=None,
+    )
+    refused.__cause__ = ApplicationError(
+        "Sign in to confirm you're not a bot.",
+        type="youtube_refused_this_host", non_retryable=True,
+    )
+    assert failure_of(refused)[0] == "youtube_refused_this_host"
 
 
 async def _wait_for_gate(handle):

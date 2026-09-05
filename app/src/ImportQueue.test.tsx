@@ -41,6 +41,7 @@ const run = (over: Partial<RunListItem> = {}): RunListItem => ({
   errorDetail: null,
   title: "Un libro",
   libraryId: "lib_1",
+  label: null,
   documentId: "d",
   versionId: "v",
   usdSoFar: 0.1255,
@@ -185,4 +186,68 @@ it("never offers to publish an index whose run did not finish building it", () =
 it("says why publishing is safe, beside the button that does it", () => {
   const { container } = draw([withheld()]);
   expect(container.textContent).toContain(t("queue.activateWhy"));
+});
+
+it("names a run that failed before it had a title", () => {
+  // The defect this whole change exists for. A video refused by YouTube fails
+  // in `probe_video`, which is *before* `register_document` — so there is no
+  // document and therefore no title, and the row used to have nothing to show
+  // but a workflow id. `label` is what the run knew about itself: the URL
+  // somebody pasted.
+  const { container } = draw([
+    item({
+      state: "failed",
+      run: {
+        kind: "video",
+        state: "failed",
+        stage: "probing",
+        finishedAt: "2026-09-05T16:03:16Z",
+        title: null,
+        label: "https://youtu.be/yq6uVBsVkeQ",
+        documentId: null,
+        versionId: null,
+        errorKind: "youtube_refused_this_host",
+      },
+    }),
+  ]);
+  expect(container.textContent).toContain("https://youtu.be/yq6uVBsVkeQ");
+  expect(container.textContent).not.toContain("r1");
+});
+
+it("explains an error kind rather than printing it", () => {
+  // `youtube_refused_this_host` and `video_unavailable` call for opposite
+  // things — one is this machine, the other is the video — and a reader who is
+  // shown the identifier has to already know which. The raw kind is what the
+  // row printed before.
+  const { container } = draw([
+    item({
+      state: "failed",
+      run: {
+        state: "failed",
+        finishedAt: "2026-09-05T16:03:16Z",
+        errorKind: "youtube_refused_this_host",
+      },
+    }),
+  ]);
+  expect(container.textContent).toContain(
+    t("queue.errorKind.youtube_refused_this_host"),
+  );
+  expect(container.textContent).not.toContain("youtube_refused_this_host");
+});
+
+it("still shows a kind nobody has written words for", () => {
+  // `defaultValue` keeps every other kind rendering as itself. Without it a new
+  // kind renders as a bare translation key, which is worse than the identifier.
+  const { container } = draw([
+    item({
+      state: "failed",
+      run: {
+        state: "failed",
+        finishedAt: "2026-09-05T16:03:16Z",
+        errorKind: "some_kind_with_no_wording",
+      },
+    }),
+  ]);
+  expect(container.textContent).toContain("some_kind_with_no_wording");
+  expect(container.textContent).not.toContain("queue.errorKind.");
 });

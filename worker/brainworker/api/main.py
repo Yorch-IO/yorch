@@ -14,7 +14,7 @@ import logging
 import pathlib
 import time
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -476,7 +476,14 @@ async def start_video(
     client = await temporal()
     handle = await client.start_workflow(
         VideoIngestWorkflow.run,
-        args=[request, options or StageOptions()],
+        # `fetch_queue` is decided here rather than inside the workflow, which
+        # may only decide on what its own history holds — reading an environment
+        # variable there would make replay depend on the machine replaying it.
+        # Empty unless this deployment's own egress is refused by YouTube, in
+        # which case it names the queue a worker on an acceptable address is
+        # serving. See `VideoRequest.fetch_queue`.
+        args=[replace(request, fetch_queue=s.fetch_task_queue or request.fetch_queue),
+              options or StageOptions()],
         id=f"video-{_ulid()}",
         task_queue=s.task_queue,
         memo=_OWNED_BY_LEGACY,

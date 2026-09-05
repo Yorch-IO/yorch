@@ -47,6 +47,7 @@ function row(over: Partial<RunListItem> = {}): RunListItem {
     errorDetail: null,
     title: "Institución",
     libraryId: "lib_1",
+    label: null,
     documentId: "doc_1",
     versionId: "ver_1",
     usdSoFar: null,

@@ -31,6 +31,8 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
+from temporalio.exceptions import TimeoutType
 
 with workflow.unsafe.imports_passed_through():
     from ..artifacts import ArtifactRef
@@ -46,12 +48,14 @@ with workflow.unsafe.imports_passed_through():
         Indexed,
         Preview,
         Registered,
+        RunOpen,
         Spend,
         Staged,
         StageOptions,
         Transcribed,
         TranscriptionJob,
         VideoGateReport,
+        VideoInfo,
         VideoProbe,
         VideoRequest,
         VideoResult,
@@ -66,6 +70,7 @@ with workflow.unsafe.imports_passed_through():
         Approval,
         _PAID_RETRY,
         _RETRY,
+        _RUN_ROW_FIRST,
         _total,
     )
 
@@ -88,6 +93,18 @@ TRANSCRIBE_DEADLINE = timedelta(days=3)
 #: nightly stop is picked up on the first tick after it comes back.
 FIRST_POLL = timedelta(seconds=30)
 MAX_POLL = timedelta(minutes=5)
+
+#: How long an activity routed to the fetch queue may sit unclaimed.
+#:
+#: It exists so that "nobody is running the fetcher" is a **failure** rather than
+#: a run that waits for ever. Without it the split trades one invisible outcome
+#: for another: the old bug was a run that vanished, and a run parked
+#: indefinitely on an empty queue is barely better. Minutes, because the fetcher
+#: is a process somebody starts by hand and a restart should not fail a run.
+#:
+#: Temporal does not retry a schedule-to-start timeout, which is what makes this
+#: fail fast rather than three times over.
+FETCH_START_TIMEOUT = timedelta(minutes=10)
 
 
 @workflow.defn(name="VideoIngestWorkflow")
@@ -149,10 +166,25 @@ class VideoIngestWorkflow:
     async def _run(
         self, request: VideoRequest, options: StageOptions, run_id: str
     ) -> VideoResult:
+        await self._open(request, run_id)
+
         await self._enter(run_id, "probing")
+        # Which worker asks YouTube. Empty means this one, which is what the
+        # product did before the field existed. Resolved once and read from the
+        # workflow's own history, never from settings — a workflow may only
+        # decide on what it can replay.
+        fetch_queue = request.fetch_queue or workflow.info().task_queue
+        info: VideoInfo = await workflow.execute_activity(
+            vid.resolve_video,
+            request,
+            task_queue=fetch_queue,
+            schedule_to_start_timeout=FETCH_START_TIMEOUT,
+            start_to_close_timeout=FREE_TIMEOUT,
+            retry_policy=_RETRY,
+        )
         probe: VideoProbe = await workflow.execute_activity(
             vid.probe_video,
-            args=[request, run_id],
+            args=[request, run_id, info],
             start_to_close_timeout=FREE_TIMEOUT,
             retry_policy=_RETRY,
         )
@@ -358,9 +390,17 @@ class VideoIngestWorkflow:
     ) -> Transcribed:
         """Audio to S3, a job at Amazon, then wait — on a timer, not in a call."""
         await self._enter(run_id, "fetching")
+        # Beside the resolution, not beside the workspace. A `googlevideo` URL
+        # carries the address that resolved it (`ip=…`) and answers 403 from
+        # anywhere else — measured — so the download cannot be split from the
+        # `extract_info` that produced the URL. It costs nothing to move: this
+        # activity writes no artifact, only a transient file it deletes in a
+        # `finally`, and returns an S3 URI.
         audio = await workflow.execute_activity(
             vid.fetch_audio,
             args=[run_id, probe, request.tenant_id, registered.version_id],
+            task_queue=request.fetch_queue or workflow.info().task_queue,
+            schedule_to_start_timeout=FETCH_START_TIMEOUT,
             start_to_close_timeout=AUDIO_TIMEOUT,
             heartbeat_timeout=AUDIO_HEARTBEAT_TIMEOUT,
             retry_policy=RetryPolicy(maximum_attempts=3),
@@ -446,6 +486,43 @@ class VideoIngestWorkflow:
 
     # -- bookkeeping, identical in shape to IngestWorkflow's ---------------
 
+    async def _open(self, request: VideoRequest, run_id: str) -> None:
+        """Open the run row before `probe_video` can fail against nothing.
+
+        **This is the one that fired.** On 2026-09-05 a user submitted a YouTube
+        URL against the paid plane on EC2, `POST /videos` answered 200, and
+        nothing ever appeared in the import queue — `probe_video` was refused by
+        YouTube from the datacenter egress IP 2.8 s in, and the `run` row was
+        INSERTed by `register_document`, the activity after it. `_record_failure`
+        then ran `finish_run`, a bare UPDATE, which affected zero rows and raised
+        nothing: the activity reported Completed and the failure was recorded
+        nowhere. `SELECT count(*) FROM run WHERE kind='video'` in production was
+        0 with one `VideoIngestWorkflow` in the namespace.
+
+        `label` is the URL, because that is genuinely all there is to say about a
+        video that failed before it was probed — the title comes out of the probe
+        that did not happen.
+
+        Patched for the reason `IngestWorkflow._open` gives; the same id, because
+        it is one change.
+        """
+        if not workflow.patched(_RUN_ROW_FIRST):
+            return
+        await workflow.execute_activity(
+            act.open_run,
+            RunOpen(
+                run_id=run_id,
+                workflow_id=workflow.info().workflow_id,
+                kind="video",
+                tenant_id=request.tenant_id,
+                library_id=request.library_id,
+                label=request.url,
+            ),
+            start_to_close_timeout=WRITE_TIMEOUT,
+            retry_policy=_RETRY,
+        )
+        self._registered = True
+
     async def _enter(self, run_id: str, stage: str, state: str = "running") -> None:
         self._stage = stage
         self._seq += 1
@@ -490,11 +567,7 @@ class VideoIngestWorkflow:
         )
 
     async def _record_failure(self, run_id: str, error: ActivityError) -> None:
-        cause = error.cause
-        kind = "activity_failed"
-        detail = str(cause or error)
-        if isinstance(cause, ApplicationError):
-            kind = cause.type or kind
+        kind, detail = failure_of(error)
         try:
             self._seq += 1
             await workflow.execute_activity(
@@ -509,6 +582,45 @@ class VideoIngestWorkflow:
 
 
 # --- pure helpers, so the workflow body reads as a sequence of stages --------
+
+
+def failure_of(error: ActivityError) -> tuple[str, str]:
+    """What kind of failure this was, and what to say about it.
+
+    Pure and at module level for the reason `radial.ts` and `auditversion.py`
+    are: the classification is the part worth asserting, and asserting it
+    through a real Temporal run would mean waiting out a ten-minute
+    schedule-to-start timeout that the time-skipping environment does not skip —
+    an activity nobody claimed still counts as an activity in flight.
+
+    Three cases, and the third is why this grew:
+
+    - An `ApplicationError` carries the kind an activity chose.
+    - A **schedule-to-start** timeout means nobody claimed the task, which on
+      this workflow means exactly one thing: `fetch_queue` names a queue no
+      fetcher is serving. `activity_failed` would send a reader looking for a
+      broken activity when the answer is that a process is not running.
+    - Anything else keeps `activity_failed`.
+
+    The timeout type is compared against the **enum member**, never against its
+    string. `TimeoutType` is an `IntEnum`, so `str(TimeoutType.SCHEDULE_TO_START)`
+    is `"2"` and a name match silently never fires — the same trap `event_type`
+    set for the raw-history translation, which read `"3"`, matched nothing in
+    the allowlist, and reported a run that did nothing.
+    """
+    cause = error.cause
+    if isinstance(cause, ApplicationError):
+        return cause.type or "activity_failed", str(cause)
+    if (
+        isinstance(cause, TemporalTimeoutError)
+        and cause.type == TimeoutType.SCHEDULE_TO_START
+    ):
+        return "fetch_worker_unavailable", (
+            "nadie recogió la tarea en la cola de descarga en "
+            f"{FETCH_START_TIMEOUT.seconds // 60} minutos: "
+            "¿está corriendo el worker de descarga?"
+        )
+    return "activity_failed", str(cause or error)
 
 
 def _as_ingest_request(request: VideoRequest, probe: VideoProbe) -> IngestRequest:

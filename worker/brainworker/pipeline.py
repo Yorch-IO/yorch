@@ -627,6 +627,56 @@ class IngestResult:
 # transcript — `Correction`, `Chunked`, `Indexed` — is reused unchanged.
 
 
+def run_kind_of(request: "IngestRequest") -> str:
+    """What `run.kind` a document import files itself under.
+
+    One function because two callers must agree. `IngestWorkflow` opens the run
+    row before its first activity and `register_document` opens it again on the
+    way past; `start_run` is `ON CONFLICT (id) DO NOTHING`, so the **first** call
+    is the one whose `kind` survives. Two copies of this expression would
+    eventually disagree, and the symptom would be a run filed under a kind the
+    client uses to decide which gate shape to expect.
+
+    `run_kind` is the override a caller that is not staging a file uses;
+    'reindex' has been in the CHECK constraint since the first migration.
+    """
+    return request.run_kind or ("reindex" if request.reindex else "index")
+
+
+@dataclass
+class RunOpen:
+    """What a workflow knows about its run before its first activity has run.
+
+    **The reason this exists is a run that failed and left no trace.** The `run`
+    row was INSERTed by `register_document`, which is the *second* activity on
+    both ingest paths — so a video refused by YouTube in `probe_video`, or a file
+    import that dies in `stage_source`, failed against a row that did not exist.
+    `finish_run` is a bare UPDATE, which affects zero rows and raises nothing, so
+    the failure was recorded nowhere and the import queue — which reads the
+    catalog — had nothing to show. Measured in production on 2026-09-05: one
+    `VideoIngestWorkflow` had ever run there and
+    `SELECT count(*) FROM run WHERE kind='video'` returned 0.
+
+    One payload rather than six positional arguments, deliberately. Temporal maps
+    payloads onto parameters **by arity**, and this repository has already paid
+    for that once: `evaluate_index` grew a sixth parameter with a default and the
+    five-argument call site died on `'builtin_function_or_method' object has no
+    attribute 'path'`, because the converter gave up and passed raw dicts.
+
+    `library_id` and `label` are the two things the queue needs and the join
+    cannot give it before there is a document: the queue is per-library, and it
+    renders `title ?? label ?? workflow_id`.
+    """
+
+    run_id: str
+    workflow_id: str
+    kind: str
+    tenant_id: str
+    library_id: str
+    #: The URL for a video, the picked file's basename for an import.
+    label: str = ""
+
+
 @dataclass
 class VideoRequest:
     """One video to index. The `IngestRequest` analogue, and deliberately not it.
@@ -646,6 +696,24 @@ class VideoRequest:
     #: Caption languages to prefer, best first. Empty means "the library's own
     #: language, then whatever the video has".
     languages: list[str] = field(default_factory=list)
+    #: Which task queue runs the two activities that talk to YouTube.
+    #:
+    #: Empty means "the queue this workflow is on", which is exactly what the
+    #: product did before this field existed — so every existing caller, every
+    #: test and the whole local stack are unchanged until somebody sets it.
+    #:
+    #: It is set when the worker's own egress is refused. Measured 2026-09-05:
+    #: `yt-dlp extract_info` succeeds from a residential IP in 2.6 s and is
+    #: refused from the EC2 egress IP with "Sign in to confirm you're not a
+    #: bot", while the *same* host fetches every signed caption URL at 200. So
+    #: the split is narrow on purpose: only `resolve_video` and — because a
+    #: media URL is bound to the address that resolved it — `fetch_audio`.
+    #:
+    #: It travels in the request rather than being read from settings inside the
+    #: workflow, because a workflow may only decide on what its own history
+    #: holds. Reading an environment variable there would make replay depend on
+    #: the machine replaying it.
+    fetch_queue: str = ""
 
 
 @dataclass
@@ -659,6 +727,43 @@ class CaptionTrack:
     kind: str
     ext: str
     name: str = ""
+
+
+@dataclass
+class VideoInfo:
+    """What one `yt-dlp extract_info` learned, narrowed to what may cross.
+
+    **The narrowing is the point.** The raw info dict for a real video is
+    1,656,277 bytes of JSON — measured on `yq6uVBsVkeQ`, which offers 161
+    automatic caption languages — so forwarding `info` would put a megabyte and a
+    half into a Temporal payload on every video run. This is the handful of
+    fields anything downstream actually reads.
+
+    It exists because `extract_info` is the one call YouTube refuses from a
+    datacenter IP, and it is therefore the one step that has to run somewhere
+    else. `resolve_video` returns this from whatever worker can make the call;
+    `probe_video` does everything else on the host that owns the workspace.
+
+    `caption_url` travels and `audio` deliberately does not: measured
+    2026-09-05, a caption URL carries `ip=0.0.0.0` and was served to a second
+    host at 200, while a `googlevideo` media URL carries the resolving address
+    (`ip=181.32.19.72`) and answers **403** anywhere else. So captions can be
+    fetched wherever, and audio cannot — which is why `fetch_audio` runs beside
+    the resolution rather than taking a URL from it.
+    """
+
+    video_id: str
+    title: str
+    channel: str
+    duration_s: int
+    upload_date: str
+    #: Only ever read into `identity_basis`, and only when there are no captions.
+    format_id: str = ""
+    tracks: list[CaptionTrack] = field(default_factory=list)
+    #: The track that will be read, or None when Amazon Transcribe must run.
+    chosen: CaptionTrack | None = None
+    #: The signed URL for `chosen`. Empty when there is no chosen track.
+    caption_url: str = ""
 
 
 @dataclass

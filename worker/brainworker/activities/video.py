@@ -55,6 +55,7 @@ from ..pipeline import (
     StageOptions,
     Transcribed,
     TranscriptionJob,
+    VideoInfo,
     VideoProbe,
     VideoRequest,
 )
@@ -114,19 +115,28 @@ def _fail(kind: str, message: str) -> ApplicationError:
 # --- probing -----------------------------------------------------------------
 
 
-@activity.defn(name="probe_video")
-async def probe_video(request: VideoRequest, run_id: str) -> VideoProbe:
-    """Everything free that can be learned about a video, plus its identity.
+@activity.defn(name="resolve_video")
+async def resolve_video(request: VideoRequest) -> VideoInfo:
+    """Ask YouTube what this video is. **The one call that has to run elsewhere.**
 
-    Runs *before* the run row exists, like `stage_source` does, so the artifacts
-    it writes are recorded by `record_video_artifacts` once there is a run to
-    hang them on — `_record` derives its tenant from that row and silently drops
-    a write with no row to find.
+    Split out of `probe_video` for one measured reason: on 2026-09-05 this call
+    succeeded from a residential IP in 2.6 s and was refused from the EC2 egress
+    IP `34.218.169.144` — "Sign in to confirm you're not a bot" — while the same
+    host fetched every signed caption URL at 200 and served the `youtube.com`
+    watch page at 200. It is the player API that is bot-checked, not the network.
+    So this is what `VideoRequest.fetch_queue` routes to a worker on an address
+    YouTube will answer, and everything else stays where the workspace is.
+
+    It writes nothing and returns a **narrowed** record. The raw info dict is
+    1,656,277 bytes on a real video; `VideoInfo` is a few kilobytes, which is the
+    difference between a payload and a rule broken.
+
+    The URL allowlist lives here because this is where yt-dlp is called — the
+    SSRF guard belongs against the ~1800 extractors, not against a dataclass.
+    The route checks it too, for the reason `retrieve.search` doubles up on
+    `tenant_id`.
     """
     vid = _video_id_or_fail(request.url)
-    settings = _settings()
-    store = ArtifactStore(settings.workspace, run_id)
-
     info = await asyncio.to_thread(_extract_info, videosource.watch_url(vid))
 
     if info.get("is_live") or info.get("live_status") in {
@@ -139,12 +149,58 @@ async def probe_video(request: VideoRequest, run_id: str) -> VideoProbe:
 
     tracks = _tracks(info)
     chosen = _choose_track(tracks, request.languages)
+    return VideoInfo(
+        video_id=vid,
+        title=str(info.get("title") or ""),
+        channel=str(info.get("uploader") or info.get("channel") or ""),
+        duration_s=duration,
+        upload_date=str(info.get("upload_date") or ""),
+        format_id=str(info.get("format_id") or ""),
+        tracks=tracks,
+        chosen=chosen,
+        caption_url=_caption_url(info, chosen) if chosen else "",
+    )
+
+
+@activity.defn(name="probe_video")
+async def probe_video(
+    request: VideoRequest, run_id: str, info: VideoInfo
+) -> VideoProbe:
+    """The identity, the caption bytes and the artifacts — on the host that keeps
+    them.
+
+    Takes what `resolve_video` learned rather than asking YouTube itself, which
+    is what lets the two run on different workers. The caption download stays
+    here on purpose and it is measured, not assumed: a caption URL carries
+    `ip=0.0.0.0` and the EC2 host fetched every one of them at 200, including
+    two that were being 429'd from the developer's own address. So no caption
+    bytes ever cross a payload — the 4,573-second video in the report measures
+    **582,176 bytes** of VTT, which is a fifth of Temporal's ceiling on one
+    video and over it on a four-hour one.
+
+    Its artifacts are still recorded by `record_video_artifacts` after
+    `register_document`, and that is deliberate rather than left over. The run
+    row does exist by now — `open_run` writes it before the first activity — but
+    that write is **best-effort**, because bookkeeping must never fail a stage
+    that has not spent anything. `_record` derives its tenant from the run and
+    silently drops a write with no row to find, so recording after registration
+    is the path that does not depend on a best-effort write having landed.
+    """
+    vid = info.video_id
+    settings = _settings()
+    store = ArtifactStore(settings.workspace, run_id)
+
+    duration = info.duration_s
+    tracks = info.tracks
+    chosen = info.chosen
     captions_ref: ArtifactRef | None = None
     caption_digest = ""
     warnings: list[str] = []
 
     if chosen is not None:
-        data = await asyncio.to_thread(_download_caption, info, chosen)
+        data = await asyncio.to_thread(
+            _download_caption, info.caption_url, chosen.language
+        )
         if data:
             captions_ref = store.write_bytes("captions", data)
             caption_digest = captions_ref.sha256
@@ -167,18 +223,18 @@ async def probe_video(request: VideoRequest, run_id: str) -> VideoProbe:
     # proxy over the facts that were free to learn — see `VideoProbe`.
     source = f"captions:{chosen.language}:{chosen.kind}" if chosen else "transcribe"
     basis = "\n".join([
-        "youtube", vid, str(duration), str(info.get("upload_date") or ""),
-        source, caption_digest or str(info.get("format_id") or ""),
+        "youtube", vid, str(duration), info.upload_date,
+        source, caption_digest or info.format_id,
     ])
 
     probe = VideoProbe(
         video_id=vid,
         canonical_url=videosource.watch_url(vid),
         source_key=videosource.source_key(vid),
-        title=(request.title or info.get("title") or f"YouTube {vid}").strip(),
-        channel=str(info.get("uploader") or info.get("channel") or ""),
+        title=(request.title or info.title or f"YouTube {vid}").strip(),
+        channel=info.channel,
         duration_s=duration,
-        upload_date=str(info.get("upload_date") or ""),
+        upload_date=info.upload_date,
         content_sha256=hashlib.sha256(basis.encode("utf-8")).hexdigest(),
         identity_basis=basis,
         tracks=tracks,
@@ -217,6 +273,42 @@ def _ydl(**extra):
     return YoutubeDL(opts)
 
 
+#: Phrases YouTube uses when it is refusing *this caller* rather than the video.
+#:
+#: Lowercase, matched against a lowercased message. Kept as data beside the
+#: function so the classification can be tested without yt-dlp installed, which
+#: is the same split the rest of this module makes.
+_REFUSAL_MARKERS = (
+    "confirm you're not a bot",
+    "confirm you are not a bot",
+    "sign in to confirm",
+    "too many requests",
+    "http error 429",
+)
+
+
+def _download_error_kind(message: str) -> str:
+    """`video_unavailable` is a fact about the video; this may be about us.
+
+    Every `DownloadError` used to collapse into `video_unavailable`, which is
+    right for a private, deleted, age-gated or geo-blocked video — a decision
+    that will not change on the second attempt — and wrong for the one that
+    actually happened. Measured 2026-09-05: `yq6uVBsVkeQ` probes fine from a
+    residential IP in 2.6 s and is refused from the EC2 egress IP
+    `34.218.169.144` with "Sign in to confirm you're not a bot". The video is
+    available; the caller is blocked. Different cause, different remedy, and the
+    guidance a person reads is keyed on the kind.
+
+    Still non-retryable. `_RETRY` is three attempts seconds apart and an IP block
+    does not clear in three seconds; a policy shaped for a 429 — minutes of
+    backoff — is a separate decision and would want measuring first.
+    """
+    low = message.lower()
+    if any(marker in low for marker in _REFUSAL_MARKERS):
+        return "youtube_refused_this_host"
+    return "video_unavailable"
+
+
 def _extract_info(url: str) -> dict:
     from yt_dlp.utils import DownloadError
 
@@ -224,7 +316,7 @@ def _extract_info(url: str) -> dict:
         with _ydl(skip_download=True, writesubtitles=False) as ydl:
             return ydl.extract_info(url, download=False) or {}
     except DownloadError as e:
-        raise _fail("video_unavailable", str(e)) from e
+        raise _fail(_download_error_kind(str(e)), str(e)) from e
 
 
 def _tracks(info: dict) -> list[CaptionTrack]:
@@ -262,26 +354,63 @@ def _choose_track(
     return None
 
 
-def _download_caption(info: dict, track: CaptionTrack) -> bytes:
+#: How many times to ask for a caption track before giving up on it.
+#:
+#: **Not politeness — money.** An empty return here sets `chosen = None`, and
+#: `chosen = None` is the branch that pays Amazon to transcribe the audio. So a
+#: single transient 429 on a free text file silently buys a transcription.
+#: Measured 2026-09-05: the `timedtext` endpoint refused this developer's
+#: residential IP on six attempts across 25 minutes while serving the *same*
+#: URLs to the EC2 host at 200 — so the throttle is per-IP, real, and lasts long
+#: enough to matter.
+CAPTION_ATTEMPTS = 3
+
+#: Seconds before each retry, so three attempts span about half a minute. A 429
+#: on this endpoint is not cleared by an immediate retry.
+CAPTION_BACKOFF = (5.0, 20.0)
+
+
+def _download_caption(url: str, language: str = "") -> bytes:
     """Fetch one caption track's bytes, or b"" if it cannot be had.
 
     Empty rather than raising: a track the listing advertised and the server
     will not serve is a reason to fall back to Transcribe, not a reason to fail
-    a run that has not spent anything yet.
+    a run that has not spent anything yet. But falling back is not free — it is
+    the whole Transcribe bill — so this asks more than once first.
+
+    Takes the URL rather than the info dict. The dict is 1.66 MB on a real video
+    (measured on `yq6uVBsVkeQ`, which offers 161 automatic caption languages),
+    and it does not cross a Temporal payload; the URL does. Caption URLs carry
+    `ip=0.0.0.0` and are **not** bound to the address that resolved them, which
+    is why this can run on a different host from `resolve_video` — measured, not
+    assumed, and the opposite of a media URL.
     """
+    import time
     import urllib.request
 
+    if not url:
+        return b""
+    for attempt in range(1, CAPTION_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as r:
+                return r.read()
+        except Exception as e:  # noqa: BLE001 - any failure means "try again"
+            log.warning(
+                "caption download failed for %s (attempt %d/%d): %s",
+                language or "?", attempt, CAPTION_ATTEMPTS, e,
+            )
+            if attempt < CAPTION_ATTEMPTS:
+                time.sleep(CAPTION_BACKOFF[min(attempt - 1, len(CAPTION_BACKOFF) - 1)])
+    return b""
+
+
+def _caption_url(info: dict, track: CaptionTrack) -> str:
+    """The signed URL for one track, out of the listing yt-dlp returned."""
     key = "subtitles" if track.kind == "manual" else "automatic_captions"
     for fmt in info.get(key, {}).get(track.language, []):
-        if fmt.get("ext") != track.ext or not fmt.get("url"):
-            continue
-        try:
-            with urllib.request.urlopen(fmt["url"], timeout=60) as r:
-                return r.read()
-        except Exception as e:  # noqa: BLE001 - any failure means "fall back"
-            log.warning("caption download failed for %s: %s", track.language, e)
-            return b""
-    return b""
+        if fmt.get("ext") == track.ext and fmt.get("url"):
+            return str(fmt["url"])
+    return ""
 
 
 @activity.defn(name="record_video_artifacts")
@@ -630,7 +759,15 @@ def _download_audio(
             info = ydl.extract_info(url, download=True)
             return pathlib.Path(ydl.prepare_filename(info))
     except DownloadError as e:
-        raise _fail("audio_unavailable", str(e)) from e
+        # The same distinction as `_extract_info`, and it matters more here:
+        # a media URL is bound to the IP that resolved it (measured — the
+        # signed URL carries `ip=<resolver>` and answers 403 anywhere else), so
+        # "refused" is a plausible outcome for reasons that have nothing to do
+        # with the video.
+        kind = _download_error_kind(str(e))
+        raise _fail(
+            "audio_unavailable" if kind == "video_unavailable" else kind, str(e)
+        ) from e
 
 
 def _client(settings, service: str):

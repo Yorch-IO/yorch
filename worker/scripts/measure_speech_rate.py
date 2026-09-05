@@ -46,7 +46,7 @@ def rate(info: dict, prefer: list[str]) -> tuple[float, int, int, str] | None:
     chosen = vid._choose_track(tracks, prefer)
     if chosen is None:
         return None
-    data = vid._download_caption(info, chosen)
+    data = vid._download_caption(vid._caption_url(info, chosen), chosen.language)
     if not data:
         return None
     cues = dt.parse_vtt(data)

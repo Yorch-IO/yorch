@@ -336,6 +336,13 @@ class Settings:
     secrets_file: pathlib.Path
     gemini: "Gemini" = field(default_factory=lambda: Gemini())
     aws: "Aws" = field(default_factory=lambda: Aws())
+    #: The queue that serves the two activities which talk to YouTube, when this
+    #: deployment cannot. Empty means "the same queue as everything else".
+    #:
+    #: Read here and put into `VideoRequest.fetch_queue` by the route that starts
+    #: the workflow — never read inside the workflow, which may only decide on
+    #: what its own history holds.
+    fetch_task_queue: str = ""
     api_host: str = "127.0.0.1"
     api_port: int = 8000
     secrets: dict[str, str] = field(default_factory=dict, repr=False)
@@ -412,6 +419,7 @@ def load() -> Settings:
         temporal_target=_env("BRAIN_TEMPORAL_TARGET", "127.0.0.1:7233"),
         temporal_namespace=_env("BRAIN_TEMPORAL_NAMESPACE", "default"),
         task_queue=_env("BRAIN_TASK_QUEUE", "brain-ingest"),
+        fetch_task_queue=_env("BRAIN_FETCH_TASK_QUEUE", ""),
         qdrant_url=_env("BRAIN_QDRANT_URL", "http://127.0.0.1:6333"),
         qdrant_collection=_env("BRAIN_QDRANT_COLLECTION", "brain"),
         # Bolt, not HTTP: Memgraph speaks the Bolt protocol and the driver

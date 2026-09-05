@@ -448,6 +448,11 @@ export interface RunListItem {
   errorDetail: string | null;
   title: string | null;
   libraryId: string | null;
+  /** What the run knew about itself before it had a document: the URL for a
+   *  video, the picked file's basename for an import. `title` is the
+   *  *document's* title and a run that failed before registering one has none,
+   *  so the queue reads `title ?? label ?? workflowId`. */
+  label: string | null;
   documentId: string | null;
   versionId: string | null;
   usdSoFar: number | null;
@@ -519,6 +524,11 @@ export interface AuditRun {
   errorDetail: string | null;
   title: string | null;
   libraryId: string | null;
+  /** What the run knew about itself before it had a document: the URL for a
+   *  video, the picked file's basename for an import. `title` is the
+   *  *document's* title and a run that failed before registering one has none,
+   *  so the queue reads `title ?? label ?? workflowId`. */
+  label: string | null;
   documentId: string | null;
   versionId: string | null;
 }

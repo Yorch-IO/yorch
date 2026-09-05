@@ -33,6 +33,7 @@ from brainworker.pipeline import (
     ProfileRules,
     ProfileWarning,
     Registered,
+    RunOpen,
     Scores,
     ProfileRules,
     Semantics,
@@ -357,9 +358,25 @@ async def set_run_stage(
     return None
 
 
+#: What the run row was opened with. The row exists from the first activity now,
+#: which is what makes a failure in `stage_source` visible at all.
+OPENED: list[RunOpen] = []
+
+
+@activity.defn(name="open_run")
+async def open_run(opening: RunOpen) -> None:
+    OPENED.append(opening)
+    return None
+
+
 @activity.defn(name="record_run_events")
 async def record_run_events(run_id: str, events: list[dict]) -> None:
-    """The buffered pair: `staging` and `registering`, which precede the run row."""
+    """The buffered pair, kept for a history recorded before `open_run` existed.
+
+    `IngestWorkflow._open` is behind `workflow.patched`, so a run already in
+    flight when that shipped still takes this path — which is the whole reason
+    the buffering was not deleted along with the reason it existed.
+    """
     for e in events:
         EVENTS.append((int(e["seq"]), str(e["stage"]), None))
     return None
@@ -377,6 +394,7 @@ def activities(**kw):
         kw.get("project_structure", project_structure),
         link_duplicate,
         activate_version,
+        open_run,
         record_run_outcome,
         set_run_stage,
         record_run_events,
@@ -543,7 +561,7 @@ async def test_identical_content_stops_before_extraction(env: WorkflowEnvironmen
         stage_source, register(created=False, already_indexed=True), counting_extract,
         preview(), estimate_cost, resolver(), learn_profile, project_structure,
         link_duplicate, activate_version, record_run_outcome, set_run_stage,
-        record_run_events,
+        record_run_events, open_run,
         correct_text, chunk_final, embed_and_index, extract_semantics,
     ]
     async with Worker(
@@ -581,7 +599,7 @@ async def test_reindex_deliberately_walks_past_the_duplicate_guard(
         stage_source, register(created=False, already_indexed=True), counting_extract,
         preview(), estimate_cost, resolver(), learn_profile, project_structure,
         link_duplicate, activate_version, record_run_outcome, set_run_stage,
-        record_run_events,
+        record_run_events, open_run,
         correct_text, chunk_final, embed_and_index, extract_semantics,
     ]
     async with Worker(
@@ -628,10 +646,30 @@ async def test_a_profile_collision_reaches_the_gate(env: WorkflowEnvironment):
 async def test_a_failing_activity_records_the_run_before_failing(
     env: WorkflowEnvironment,
 ):
+    """A file that is not there fails in the **first** activity, and is visible.
+
+    `record_run_outcome` being called was never the property worth asserting —
+    it always was. What was missing is a row for it to write to: the `run` row
+    used to be INSERTed by `register_document`, the activity *after* this one, so
+    `finish_run` was a bare UPDATE that matched nothing, raised nothing, and
+    reported Completed. The catalog knew nothing and the import queue, which
+    reads the catalog, showed nothing.
+
+    So this asserts the ordering as well as the outcome: the row is opened
+    before the activity that fails, and it carries the two things the queue needs
+    before there is a document — the library it filters on, and a name to show.
+    """
     recorded: list[tuple] = []
+    order: list[str] = []
+
+    @activity.defn(name="open_run")
+    async def opening(opening: RunOpen) -> None:
+        order.append("open")
+        OPENED.append(opening)
 
     @activity.defn(name="stage_source")
     async def missing_file(_: IngestRequest) -> Staged:
+        order.append("stage")
         raise FileNotFoundError("no such file: /workspace/inbox/calvino.pdf")
 
     @activity.defn(name="record_run_outcome")
@@ -647,6 +685,7 @@ async def test_a_failing_activity_records_the_run_before_failing(
         recorded.append((state, kind, detail))
 
     acts = [
+        opening,
         missing_file, register(), extract_text, preview(), estimate_cost,
         resolver(), learn_profile, project_structure, link_duplicate,
         activate_version, capture, set_run_stage, record_run_events,
@@ -662,6 +701,17 @@ async def test_a_failing_activity_records_the_run_before_failing(
 
     assert recorded and recorded[0][0] == "failed"
     assert "no such file" in (recorded[0][2] or "")
+
+    # The row was there to be closed. Without the `open_run` call this starts at
+    # `"stage"`, and the failure above is recorded against nothing. `stage`
+    # appears three times because `_RETRY` is three attempts; `open` must appear
+    # once and first.
+    assert order[0] == "open", order
+    assert order.count("open") == 1, order
+    assert OPENED and OPENED[-1].library_id == "lib_1", OPENED
+    # The queue renders `title ?? label ?? workflow_id`, and a run that failed in
+    # staging has no document and therefore no title.
+    assert OPENED[-1].label == "calvino.pdf", OPENED[-1].label
 
 
 async def _wait_for_gate(handle):

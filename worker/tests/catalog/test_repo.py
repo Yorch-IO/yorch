@@ -746,6 +746,83 @@ def test_only_the_last_event_carries_an_outcome(catalog: Catalog):
     assert (events[-1].at - events[0].at).total_seconds() == 9 * 60
 
 
+def test_a_run_that_never_registered_a_document_is_still_in_its_librarys_queue(
+    catalog: Catalog,
+):
+    """The half of the fix that is easy to miss, and the half that was measured.
+
+    Opening the `run` row before the first activity is not enough on its own:
+    the import queue is **per-library** and it used to filter on `d.library_id`,
+    through a LEFT JOIN on the document. A run that failed in `probe_video` or
+    `stage_source` has no document to join to, so the row would exist and the
+    one screen that asked for it would filter it straight back out — which is
+    exactly what happened to `video-1788624193136-4fa22984` on 2026-09-05.
+
+    So the filter is `COALESCE(d.library_id, r.library_id)`. Delete the
+    `library_id=` argument from `start_run` below, or put `d.library_id` back in
+    `Catalog.runs`, and this goes red.
+    """
+    catalog.start_run(
+        tenant_id=LEGACY_TENANT_ID,
+        run_id="video-1",
+        workflow_id="video-1",
+        kind="video",
+        library_id="lib_videos",
+        label="https://youtu.be/yq6uVBsVkeQ",
+    )
+    catalog.finish_run(
+        "video-1", "failed", error_kind="youtube_refused_this_host",
+        error_detail="Sign in to confirm you're not a bot.",
+    )
+
+    rows = catalog.runs(tenant_id=LEGACY_TENANT_ID, library_id="lib_videos")
+    assert [r.workflow_id for r in rows] == ["video-1"]
+    assert rows[0].document_id is None
+    assert rows[0].library_id == "lib_videos"
+    # `title` is the document's and there is none; the queue falls back to this.
+    assert rows[0].title is None
+    assert rows[0].label == "https://youtu.be/yq6uVBsVkeQ"
+    assert rows[0].error_kind == "youtube_refused_this_host"
+
+    # And it stays out of another shelf's queue.
+    assert catalog.runs(tenant_id=LEGACY_TENANT_ID, library_id="lib_otra") == []
+
+
+def test_closing_a_run_that_does_not_exist_says_so(catalog: Catalog):
+    """A bare UPDATE cannot fail, which is how a run vanished without a trace.
+
+    `finish_run` matched zero rows, raised nothing, and `record_run_outcome`
+    reported Completed — event 13 of a production history, an activity that
+    succeeded at writing nothing. The boolean is what lets the caller warn.
+    """
+    assert catalog.finish_run("run_ghost", "failed") is False
+    catalog.start_run(
+        tenant_id=LEGACY_TENANT_ID, run_id="run_1", workflow_id="wf-1", kind="index"
+    )
+    assert catalog.finish_run("run_1", "succeeded") is True
+
+
+def test_opening_a_run_twice_keeps_what_the_first_call_knew(catalog: Catalog):
+    """`register_document` opens the same row the workflow already opened.
+
+    `ON CONFLICT (id) DO NOTHING`, so the second call is a no-op — which is what
+    lets the workflow's earlier call carry `library_id` and `label` that
+    `register_document` does not know about, and why `run_kind_of` exists so the
+    two agree about `kind`.
+    """
+    catalog.start_run(
+        tenant_id=LEGACY_TENANT_ID, run_id="run_1", workflow_id="wf-1", kind="video",
+        library_id="lib_videos", label="https://youtu.be/x",
+    )
+    catalog.start_run(
+        tenant_id=LEGACY_TENANT_ID, run_id="run_1", workflow_id="wf-1", kind="video",
+    )
+    rows = catalog.runs(tenant_id=LEGACY_TENANT_ID, library_id="lib_videos")
+    assert [(r.label, r.library_id) for r in rows] == [
+        ("https://youtu.be/x", "lib_videos")
+    ]
+
+
 def test_an_event_for_a_run_that_does_not_exist_is_dropped(catalog: Catalog):
     """Which is why the workflow buffers the transitions that precede the row.
 

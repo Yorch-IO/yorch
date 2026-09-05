@@ -34,7 +34,7 @@ def _run(**kw) -> RunSummary:
     base = dict(
         id=RUN, workflow_id=RUN, kind="index", state="succeeded", stage="done",
         started_at=T0, finished_at=_at(600), error_kind=None, error_detail=None,
-        title="Institución", library_id="lib_teologia",
+        title="Institución", library_id="lib_teologia", label=None,
         document_id="doc_1", version_id="ver_1", usd_so_far=0.05,
     )
     base.update(kw)

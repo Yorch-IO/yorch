@@ -250,6 +250,14 @@
     "hideDetail": "hide",
     "gateComing": "Reading the document — the estimate appears here when it is ready.",
     "ended": "Ended {{state}} · {{kind}}",
+    "errorKind": {
+      "audio_unavailable": "The audio could not be downloaded, so there is nothing to transcribe.",
+      "fetch_worker_unavailable": "Nobody picked the download task up. The worker that talks to YouTube is not running.",
+      "video_has_no_duration": "The video does not declare a duration, so nothing can be estimated from it.",
+      "video_is_live": "A live stream has no duration and no end, so there is nothing to index yet.",
+      "video_unavailable": "YouTube will not serve this video: it may be private, deleted, or unavailable in this country.",
+      "youtube_refused_this_host": "YouTube refused this server, not the video. It is asking the machine that downloads to sign in — usually because that address is a datacentre. The video itself is fine."
+    },
     "activate": "Publish this index",
     "activateBusy": "Publishing…",
     "activateDone": "Published. {{count}} document(s) now answer from this version.",

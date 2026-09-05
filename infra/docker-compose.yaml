@@ -230,6 +230,23 @@ services:
       BRAIN_MEMGRAPH_URL: bolt://memgraph:7687
       BRAIN_DATABASE_URL: postgresql://${BRAIN_PG_USER:-brain}:${BRAIN_PG_PASSWORD:-brain}@postgres:5432/brain
       BRAIN_TASK_QUEUE: brain-ingest
+      # Which queue serves the two activities that talk to YouTube. Empty means
+      # "the same one as everything else", which is what every workstation
+      # wants — a residential address is not the one YouTube refuses.
+      #
+      # **Declared here because `.env` is not container environment.** A value
+      # in `.env` is available to *compose* for `${...}` interpolation and
+      # reaches no container by itself; that is exactly how the first
+      # production deploy shipped a worker that could not name its own
+      # Transcribe bucket while the value sat correctly in `.env`, with nothing
+      # failing. See doc/VIDEO.md.
+      #
+      # It is deliberately **not** in `Stack::write_env`: that writer rewrites
+      # the whole file from a fixed list on every launch, so anything it does
+      # not know is erased — and a workstation has no reason to set this. It
+      # belongs to a hosted deployment, whose `.env` is rendered by
+      # `apply.sh` in the yorch-aws-platform checkout.
+      BRAIN_FETCH_TASK_QUEUE: ${BRAIN_FETCH_TASK_QUEUE:-}
       BRAIN_LOG_LEVEL: ${BRAIN_LOG_LEVEL:-INFO}
       # The Vertex AI billing project. **Not a credential**: a workflow carries
       # only a project id and a model name, and both are safe in a payload that
@@ -338,6 +355,8 @@ services:
       BRAIN_TEMPORAL_TARGET: temporal:7233
       BRAIN_TEMPORAL_NAMESPACE: default
       BRAIN_TASK_QUEUE: brain-ingest
+      # See the note on this variable in the worker's block above.
+      BRAIN_FETCH_TASK_QUEUE: ${BRAIN_FETCH_TASK_QUEUE:-}
       BRAIN_QDRANT_URL: http://qdrant:6333
       BRAIN_MEMGRAPH_URL: bolt://memgraph:7687
       BRAIN_DATABASE_URL: postgresql://${BRAIN_PG_USER:-brain}:${BRAIN_PG_PASSWORD:-brain}@postgres:5432/brain

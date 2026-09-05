@@ -403,6 +403,22 @@ it walks past: `TimeoutType` is an `IntEnum`, so `str(cause.type)` is `"2"` and 
 name match silently never fires — the same shape as the `event_type` defect the
 raw-history panel already records.
 
+**And `BRAIN_FETCH_TASK_QUEUE` is declared in three `environment:` blocks,
+because `.env` is not container environment.** A value in `.env` is available to
+*compose* for `${...}` interpolation and reaches no container by itself — the
+same rule the Transcribe settings already record, arrived at the same way: the
+first production deploy shipped a worker that could not name its own bucket
+while the value sat correctly in `.env` two directories away, and nothing
+failed. `api`, `worker` and `backend` all carry it now, empty by default.
+
+It is deliberately **not** in `Stack::write_env`. That writer rewrites
+`infra/.env` from a fixed list on every app launch, so anything it does not know
+is erased — and a workstation has no reason to set this at all, since a
+residential address is not the one YouTube refuses. It belongs to a hosted
+deployment, whose `.env` is rendered by `apply.sh` in the `yorch-aws-platform`
+checkout; **that file does not carry it yet**, so turning the split on in
+production is one line there.
+
 `worker/scripts/fetch_worker.py` is the process. Two activities, **no
 workflows**, no stores, and AWS credentials only for the Transcribe path. It
 reaches production Temporal through the SSM port-forward

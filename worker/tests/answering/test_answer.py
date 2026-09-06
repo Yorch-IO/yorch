@@ -25,6 +25,9 @@ class FakeProvider:
         self.payload = payload
         self.prompts: list[str] = []
         self.budgets: list[int | None] = []
+        self.ceilings: list[int | None] = []
+        #: What the model would report as its reason for stopping.
+        self.finish_reason: str | None = None
 
         # Typed like the real `Gemini`, not trimmed to what today's assertions
         # touch. `compose` reads both of these to decide whether a per-question
@@ -37,11 +40,13 @@ class FakeProvider:
             thinking_budget: int | None = None
 
         self.settings = _S()
+        self.usage = Usage(500, 120, 40, 1)
 
     def generate(self, prompt, *, system=None, temperature=0.0,
                  max_output_tokens=None, response_schema=None, stage=None,
                  thinking_budget=None):
         self.prompts.append(prompt)
+        self.ceilings.append(max_output_tokens)
         # Recorded as "what the provider was actually handed", including the
         # absence of a budget — `None` here means the adapter forwarded nothing
         # and `thinking_for(stage)` decides, which is a different outcome from
@@ -51,7 +56,9 @@ class FakeProvider:
             self.payload if isinstance(self.payload, str)
             else json.dumps(self.payload, ensure_ascii=False)
         )
-        return Generation(text=text, usage=Usage(500, 120, 40, 1))
+        return Generation(
+            text=text, usage=self.usage, finish_reason=self.finish_reason
+        )
 
 
 def evidence(n: int = 2, *, locator: bool = True) -> list[Evidence]:
@@ -543,3 +550,70 @@ def test_the_draft_may_contain_a_chunk_id_the_finished_answer_does_not():
     assert cited in shown
     assert cited not in answer.text
     assert answer.state == "answered"
+
+
+# -- a call that thought until it ran out of room ----------------------------
+#
+# Measured on the real corpus 2026-09-06: one `standard` chat turn's answering
+# call billed **65,521 output tokens and $0.497373** over 6m42s and produced not
+# one character of prose. 65,521 is `gemini-3.6-flash`'s own 65,536-token
+# ceiling. Nothing failed anywhere: the run is `succeeded`, and the turn read
+# "Evidencia insuficiente" — a claim about the corpus this run had no basis for,
+# which sends the reader to look at their library instead of at the bill.
+
+
+def _truncated() -> FakeProvider:
+    p = FakeProvider('{"suficiente": true, "respuesta": "El corpus indica q')
+    p.finish_reason = "MAX_TOKENS"
+    p.usage = Usage(3977, 65521, 65500, 1)
+    return p
+
+
+def test_a_truncated_answer_says_the_model_ran_out_of_room():
+    got = mod.compose(_truncated(), question(), evidence())
+    assert got.state == "insufficient_evidence"
+    # The number is what makes it legible as a bill rather than as a corpus.
+    assert "65521" in got.reason
+    assert "agotó su límite de salida" in got.reason
+
+
+def test_a_truncation_does_not_read_as_a_gap_in_the_library():
+    """The wrong sentence is the whole harm here. Both refusals ask for the same
+    action — ask again — so this stayed `insufficient_evidence` rather than
+    earning a state of its own; what had to change is what it says."""
+    got = mod.compose(_truncated(), question(), evidence())
+    assert "fragmentos no contienen" not in got.reason
+    # Nor the generic branch's wording, which names an exception class and
+    # nothing a reader can act on. Asserted because dropping the truncation
+    # branch leaves that sentence behind, and it passes the two negatives above
+    # while saying nothing true.
+    assert "no pudo componer" not in got.reason
+
+
+def test_a_truncated_call_still_reports_what_it_spent():
+    """It billed 65,521 output tokens. A refusal that reported no spend would
+    hide the one number that explains the incident."""
+    got = mod.compose(_truncated(), question(), evidence())
+    assert got.spend and got.spend[0].output_tokens == 65521
+
+
+def test_an_envelope_that_is_merely_malformed_keeps_its_own_wording():
+    """The generic branch still exists and still names the exception, because a
+    schema violation is a different thing to chase."""
+    p = FakeProvider("no soy json en absoluto")
+    got = mod.compose(p, question(), evidence())
+    assert got.state == "insufficient_evidence"
+    assert "no pudo componer" in got.reason
+
+
+def test_every_answering_call_carries_the_output_ceiling():
+    """Unbounded is what let one call bill $0.497 for nothing. The number is
+    4.5x the widest output ever measured here (`thorough` at 3,582 tokens), so
+    it bounds the runaway and no answer this product has produced comes near
+    it — and it caps the *bill*, not the reasoning: every effort level still
+    names no `thinking_budget`, which a measured A/B chose over 8192.
+    """
+    p = FakeProvider({"suficiente": False, "motivo": "nada"})
+    mod.compose(p, question(), evidence())
+    assert p.ceilings == [mod.MAX_OUTPUT_TOKENS]
+    assert p.budgets == [None], "a level named a reasoning budget"

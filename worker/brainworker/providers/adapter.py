@@ -23,9 +23,61 @@ import pathlib
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from .gemini import RETRIEVAL_DOCUMENT, RETRIEVAL_QUERY, Embedding, Provider, Usage
+from .gemini import (
+    MAX_TOKENS,
+    RETRIEVAL_DOCUMENT,
+    RETRIEVAL_QUERY,
+    Embedding,
+    Generation,
+    Provider,
+    Usage,
+)
 
 log = logging.getLogger(__name__)
+
+
+class TruncatedResponse(ValueError):
+    """The model ran out of output room before it closed its envelope.
+
+    A `ValueError` subclass on purpose: every caller of `generate_json` today
+    handles the unparseable case as a `ValueError`, and none of them has to
+    learn about this to keep behaving as it did. What the subclass buys is that
+    a caller who *can* say something better is able to — and the one that can is
+    `answering.answer.compose`, where the alternative is telling somebody their
+    library has no answer when in fact the model spent its whole ceiling
+    thinking. Those have opposite remedies.
+
+    `output_tokens` is carried because it is the number that makes the cause
+    legible: the measured incident billed 65,521 of them and wrote nothing, and
+    65,536 is `gemini-3.6-flash`'s ceiling.
+    """
+
+    def __init__(self, message: str, *, output_tokens: int = 0) -> None:
+        super().__init__(message)
+        self.output_tokens = output_tokens
+
+
+def _parse(result: Generation, stage: str) -> Any:
+    """The envelope, or the best available account of why there isn't one.
+
+    Shared by both JSON paths so a streamed call and a whole one classify a
+    failure the same way — the same reason `compose` has one set of branches
+    below its call.
+    """
+    try:
+        return json.loads(result.text)
+    except json.JSONDecodeError as e:
+        if result.finish_reason == MAX_TOKENS:
+            raise TruncatedResponse(
+                f"{stage} hit the model's output ceiling before closing its "
+                f"envelope: {result.usage.output_tokens} output tokens "
+                f"({result.usage.thinking_tokens} of them reasoning), "
+                f"{len(result.text)} characters of text",
+                output_tokens=result.usage.output_tokens,
+            ) from e
+        raise ValueError(
+            f"model returned invalid JSON despite a response schema: {e}"
+        ) from e
 
 
 class VertexAdapter:
@@ -54,6 +106,47 @@ class VertexAdapter:
         history: Sequence[tuple[str, str]] | None = None,
         thinking_budget: int | None = None,
     ) -> str:
+        """The text alone, which is what `docagent.vertex.Vertex` returns.
+
+        **The parameter list is spelled out here rather than forwarded as
+        `**kw`, and a test is why.** This class exists to duck-type the engine's
+        `Vertex.generate`, and
+        `test_it_presents_the_signature_the_engine_calls` compares the two
+        signatures by *name* so that a move in the engine fails here instead of
+        mid-correction. A `**kw` passthrough satisfies the caller and empties
+        that test of content, which is the worse trade: nine repeated lines
+        against a guard that has a measured reason to exist.
+
+        The body lives in `_generate`, which returns the whole `Generation` —
+        the JSON paths need its `finish_reason` to tell a truncation from a
+        malformed envelope, and correction must keep seeing exactly the
+        `str`-returning method it was written against.
+        """
+        return self._generate(
+            prompt,
+            system=system,
+            stage=stage,
+            temperature=temperature,
+            json_schema=json_schema,
+            image_png=image_png,
+            max_output_tokens=max_output_tokens,
+            history=history,
+            thinking_budget=thinking_budget,
+        ).text
+
+    def _generate(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        stage: str = "generate",
+        temperature: float = 0.2,
+        json_schema: dict | None = None,
+        image_png: bytes | None = None,
+        max_output_tokens: int | None = None,
+        history: Sequence[tuple[str, str]] | None = None,
+        thinking_budget: int | None = None,
+    ) -> Generation:
         if image_png is not None:
             # OCR is the only caller that passes an image, and it is a paid
             # stage the plan gates behind an explicit confirmation of its own.
@@ -87,7 +180,7 @@ class VertexAdapter:
             "%s: %d in / %d out tokens",
             stage, result.usage.input_tokens, result.usage.output_tokens,
         )
-        return result.text
+        return result
 
     def generate_json(
         self,
@@ -98,6 +191,7 @@ class VertexAdapter:
         stage: str = "generate",
         history: Sequence[tuple[str, str]] | None = None,
         thinking_budget: int | None = None,
+        max_output_tokens: int | None = None,
     ) -> Any:
         """Structured output, parsed.
 
@@ -105,16 +199,12 @@ class VertexAdapter:
         than as a parse failure in a later stage with no indication of which
         input produced it.
         """
-        raw = self.generate(
+        result = self._generate(
             prompt, system=system, temperature=0.0, json_schema=schema, stage=stage,
             history=history, thinking_budget=thinking_budget,
+            max_output_tokens=max_output_tokens,
         )
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"model returned invalid JSON despite a response schema: {e}"
-            ) from e
+        return _parse(result, stage)
 
     def generate_json_stream(
         self,
@@ -126,6 +216,7 @@ class VertexAdapter:
         stage: str = "generate",
         history: Sequence[tuple[str, str]] | None = None,
         thinking_budget: int | None = None,
+        max_output_tokens: int | None = None,
     ) -> Any:
         """`generate_json`, with the raw envelope handed to `on_delta` as it arrives.
 
@@ -149,6 +240,7 @@ class VertexAdapter:
             temperature=0.0,
             response_schema=schema,
             stage=stage,
+            max_output_tokens=max_output_tokens,
             **({"history": history} if history else {}),
             **({"thinking_budget": thinking_budget} if thinking_budget is not None else {}),
         )
@@ -157,12 +249,7 @@ class VertexAdapter:
             "%s (streamed): %d in / %d out tokens",
             stage, result.usage.input_tokens, result.usage.output_tokens,
         )
-        try:
-            return json.loads(result.text)
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"model returned invalid JSON despite a response schema: {e}"
-            ) from e
+        return _parse(result, stage)
 
 
 class CachedEmbedder:

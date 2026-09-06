@@ -33,6 +33,7 @@ from ..pipeline import (
     Staged,
 )
 from .ingest import _settings
+from .paid import _charge
 
 log = logging.getLogger(__name__)
 
@@ -199,6 +200,24 @@ async def replay_semantics(
         proj.project_claims(graph, payload.get("claims", []), tenant=registered.tenant_id)
         written = proj.project_semantic_edges(graph, edges)
 
+        # Same `MERGE`, same problem, and a rebuild is the case where it is
+        # easiest to miss: replaying the artifact a version already holds is a
+        # no-op here, so the prune costs two reads and does nothing — while
+        # replaying an *older* one is precisely the act of republishing that
+        # artifact as the version's semantics, and leaving the newer run's
+        # claims beside it would make the graph agree with neither.
+        pruned = proj.prune_semantics(
+            graph,
+            registered.version_id,
+            claims=payload.get("claims", []),
+            edges=edges,
+        )
+        if pruned.claims or pruned.mentions:
+            log.info(
+                "replay pruned %d stale claim(s) and %d stale MENTIONS from %s",
+                pruned.claims, pruned.mentions, registered.version_id,
+            )
+
     replayed = payload.get("claims", [])
     return Semantics(
         concepts=len(payload.get("concepts", [])),
@@ -208,7 +227,16 @@ async def replay_semantics(
         # whole point of the field.
         claims_verified=sum(1 for c in replayed if c.get("quote")),
         edges=written,
-        # Free: this is a file read and a graph write. Reporting a zero-token
-        # spend rather than none keeps the stage visible in the run's ledger.
-        spend=Spend(stage="semantics-replay", model="", usd=0.0),
+        # Free, and *recorded* as free. This stage is a file read and a graph
+        # write: no provider call, no tokens, nothing to price. The comment here
+        # used to claim the zero-token `Spend` "keeps the stage visible in the
+        # run's ledger" and nothing ever wrote it — the ledger had no
+        # `semantics-replay` row at all, so a rebuild's audit view rendered the
+        # stage with an empty cost cell, which reads as "not measured" rather
+        # than as "free". Those are different facts, the same distinction the
+        # cached query embedding books a zero-token row for: a stage that ran
+        # for nothing and a stage that did not run must not look alike.
+        spend=_charge(
+            run_id, Spend(stage="semantics-replay", model="", usd=0.0)
+        ),
     )

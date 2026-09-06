@@ -22,6 +22,7 @@ from collections.abc import Callable
 
 from ..pipeline import Spend
 from ..providers import Provider, VertexAdapter
+from ..providers.adapter import TruncatedResponse
 from .effort import budget_for, compose_system
 from .jsonstream import FieldStreamer
 from .types import Answer, Citation, Evidence, Plan, Question
@@ -53,6 +54,31 @@ Reglas, en orden de importancia:
    es el peor error que puedes cometer aquí. `sin_estado` significa que no se
    sabe, no que lo afirme.
 6. Respondes en el idioma de la pregunta, con la terminología del documento."""
+
+#: A ceiling on what one answering call may bill, reasoning included.
+#:
+#: `_prepare` warns against setting this — "a budget that looks generous for the
+#: answer can be consumed entirely by reasoning" — and that warning is about a
+#: number near the answer's length. This is four times the widest figure ever
+#: measured here, and it exists because the unbounded direction turned out to
+#: have its own failure: measured 2026-09-06 on the real corpus, one `standard`
+#: turn spent **65,521 output tokens and $0.497373** over 6m42s and produced not
+#: one character of prose. 65,521 is `gemini-3.6-flash`'s own 65,536-token
+#: ceiling, so the only thing bounding that call was the model's.
+#:
+#: The numbers it is set against, all measured: a normal `standard` turn is
+#: 1,772-2,414 output tokens; the widest recorded is `thorough` at 3,582 with no
+#: reasoning budget named. 16,384 is 4.5x that, so no answer this product has
+#: ever produced comes close — and a call that does reach it is the runaway, not
+#: a long answer.
+#:
+#: **It caps the bill, not the reasoning.** Every effort level deliberately
+#: names no `thinking_budget`, on a measured A/B where `None` beat 8192 on four
+#: questions, and this does not touch that: the model still chooses how hard to
+#: think, up to a total the product can afford to throw away. A call that hits
+#: it now says so — see `TruncatedResponse` — instead of arriving as a verdict
+#: on the corpus.
+MAX_OUTPUT_TOKENS = 16384
 
 SCHEMA = {
     "type": "object",
@@ -140,12 +166,41 @@ def compose(
         schema=SCHEMA,
         stage="answering",
         thinking_budget=_thinking_override(provider, question),
+        max_output_tokens=MAX_OUTPUT_TOKENS,
     )
     try:
         if on_delta is None:
             raw = adapter.generate_json(prompt, **call)
         else:
             raw = _streamed(adapter, prompt, call, on_delta)
+    except TruncatedResponse as e:
+        # Told apart from every other failure because the remedy is different and
+        # the wrong one is actively misleading. This is not the corpus coming up
+        # short: it is the model spending its whole output allowance reasoning
+        # and never writing the answer. Reporting it as "not enough evidence"
+        # sends somebody to look at their library, where there is nothing to
+        # find, instead of at a call that billed for nothing.
+        #
+        # It stays `insufficient_evidence` rather than becoming a state of its
+        # own: `off_corpus` earned a state because a *reader* acts on it
+        # differently, while the action here is the same one either refusal
+        # asks for — ask again. What had to change is the sentence, and the
+        # sentence now reaches both clients, because `_settle` carries a
+        # refusal's `reason` into `error.message`.
+        log.warning("answer generation truncated: %s", e)
+        return Answer(
+            state="insufficient_evidence",
+            reason=(
+                "el modelo agotó su límite de salida razonando y no llegó a "
+                f"escribir la respuesta ({e.output_tokens} tokens de salida, "
+                "ningún texto): vuelve a preguntar, o formula la pregunta de "
+                "forma más concreta"
+            ),
+            evidence=evidence,
+            plan=plan,
+            spend=[_spend(provider, adapter)],
+            effort=question.effort,
+        )
     except Exception as e:
         log.warning("answer generation failed: %s", e)
         return Answer(

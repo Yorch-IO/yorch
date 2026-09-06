@@ -18,6 +18,7 @@ from brainworker.graph.projection import (
     project_concepts,
     project_semantic_edges,
     project_structure,
+    prune_semantics,
     read_concept_descriptions,
     set_concept_descriptions,
 )
@@ -509,3 +510,194 @@ def test_a_claim_relates_two_concepts_and_the_traversal_finds_it_either_way(
                     {"id": _claim_id(source, text)})
         graph.write("MATCH (k:Concept) WHERE k.id IN $ids DETACH DELETE k",
                     {"ids": [concept_id(fe, LEGACY_TENANT_ID), concept_id(obras, LEGACY_TENANT_ID)]})
+
+
+# -- re-projecting a version's semantics -------------------------------------
+#
+# Every projection above is a `MERGE`, so a re-index *adds*. The vector side has
+# pruned since `QdrantWriter.prune_tail`; nothing pruned the graph. Measured
+# 2026-09-01 on `ver_0b71d21eeb3228f54437d9cf`, re-indexed with a corrected
+# profile that took it from 600 chunks to 631: 5,001 claims where the run
+# extracted 3,055, and 4,057 of 7,554 `MENTIONS` stale.
+#
+# Not inert debris, which is the reason this is here rather than in a backlog:
+# `claim_id` is `f(chunk_id, text)` and `chunk_id` is `f(version_id, index)`, so
+# re-chunking keeps every id *alive* while the text underneath changes. A stale
+# claim stays attached to a chunk that no longer contains the quote it carries
+# and is indistinguishable from a good one at read time.
+
+
+def _claims_of(graph: Graph, version: VersionNode) -> set[str]:
+    rows = graph.write(
+        """
+        MATCH (cl:Claim)-[:DERIVED_FROM]->(:Chunk)<-[:HAS_CHUNK]-
+              (:DocumentVersion {id: $v})
+        RETURN cl.text AS text
+        """,
+        {"v": version.version},
+    )
+    return {r["text"] for r in rows}
+
+
+def _mentions_of(graph: Graph, version: VersionNode) -> set[tuple[str, str]]:
+    rows = graph.write(
+        """
+        MATCH (:DocumentVersion {id: $v})-[:HAS_CHUNK]->(c:Chunk)
+              -[:MENTIONS]->(k:Concept)
+        RETURN c.id AS chunk, k.name AS concept
+        """,
+        {"v": version.version},
+    )
+    return {(r["chunk"], r["concept"]) for r in rows}
+
+
+def _semantics(version: VersionNode, index: int, concept: str, text: str):
+    """One chunk's worth of extraction, in the shape the activity projects."""
+    chunk = chunk_id(version.version, index)
+    claims = [{"source_chunk_id": chunk, "text": text, "confidence": 0.9}]
+    edges = [
+        SemanticEdge(
+            type="MENTIONS",
+            source_id=chunk,
+            target_id=concept_id(concept, LEGACY_TENANT_ID),
+            confidence=0.9,
+            extractor_model="gemini-3.6-flash",
+            source_chunk_id=chunk,
+        )
+    ]
+    return claims, edges
+
+
+def test_a_second_extraction_replaces_the_first_instead_of_unioning_with_it(
+    graph: Graph, version: VersionNode
+):
+    """The defect, made executable. Both runs are the same version and the same
+    chunk; only what the model said changed."""
+    project_structure(graph, version)
+
+    first_claims, first_edges = _semantics(version, 0, "Providencia", "Dios sostiene el mundo.")
+    project_concepts(graph, [{"name": "Providencia"}])
+    project_claims(graph, first_claims)
+    project_semantic_edges(graph, first_edges)
+    prune_semantics(graph, version.version, claims=first_claims, edges=first_edges)
+    assert _claims_of(graph, version) == {"Dios sostiene el mundo."}
+
+    second_claims, second_edges = _semantics(version, 0, "Gracia", "La gracia precede a la fe.")
+    project_concepts(graph, [{"name": "Gracia"}])
+    project_claims(graph, second_claims)
+    project_semantic_edges(graph, second_edges)
+    pruned = prune_semantics(graph, version.version, claims=second_claims, edges=second_edges)
+
+    assert _claims_of(graph, version) == {"La gracia precede a la fe."}
+    assert pruned.claims == 1
+    # The chunk kept its id across the re-extraction, so its `MENTIONS` edge to
+    # a concept the new reading never named survived on its own. This is the
+    # half `DETACH DELETE` on the claims cannot reach.
+    assert pruned.mentions == 1
+    assert _mentions_of(graph, version) == {
+        (chunk_id(version.version, 0), "Gracia")
+    }
+
+
+def test_pruning_the_same_extraction_twice_changes_nothing(
+    graph: Graph, version: VersionNode
+):
+    """Temporal retries the stage, and every attempt re-projects before it
+    prunes. Projection is a `MERGE` and this is a set difference against the
+    same set, so the two converge — which is also the fix for the recorded case
+    where two attempts at one document *unioned*, leaving 5,001 claims where
+    `semantics.json` recorded 2,965. Paying twice must not produce the document
+    twice."""
+    project_structure(graph, version)
+    claims, edges = _semantics(version, 1, "Fe", "La fe es certeza.")
+    project_concepts(graph, [{"name": "Fe"}])
+    project_claims(graph, claims)
+    project_semantic_edges(graph, edges)
+
+    first = prune_semantics(graph, version.version, claims=claims, edges=edges)
+    second = prune_semantics(graph, version.version, claims=claims, edges=edges)
+    assert first == second == type(first)()
+    assert _claims_of(graph, version) == {"La fe es certeza."}
+
+
+def test_a_chunk_the_new_run_said_nothing_about_loses_what_the_old_one_said(
+    graph: Graph, version: VersionNode
+):
+    """The shape the per-chunk statements cannot see on their own: a chunk that
+    contributes no row at all, which is what a re-chunking that merges two into
+    one leaves behind."""
+    project_structure(graph, version)
+    claims, edges = _semantics(version, 2, "Ley", "La ley acusa.")
+    project_concepts(graph, [{"name": "Ley"}])
+    project_claims(graph, claims)
+    project_semantic_edges(graph, edges)
+    prune_semantics(graph, version.version, claims=claims, edges=edges)
+    assert _claims_of(graph, version)
+
+    # A second run that produced nothing for that chunk — or for any.
+    pruned = prune_semantics(graph, version.version, claims=[], edges=[])
+    assert pruned.claims == 1 and pruned.mentions == 1
+    assert _claims_of(graph, version) == set()
+    assert _mentions_of(graph, version) == set()
+
+
+def test_a_concept_left_supporting_nothing_is_collected_and_a_shared_one_is_not(
+    graph: Graph, version: VersionNode
+):
+    """Exactly `remove_version`'s rule, and for its reason: `Concept` is the one
+    label deliberately shared, so it is never deleted for belonging to this
+    version — only swept where the prune left it supporting nothing."""
+    import secrets
+
+    lonely = f"Concepto {secrets.token_hex(6)}"
+    shared = f"Concepto {secrets.token_hex(6)}"
+    shared_id = concept_id(shared, LEGACY_TENANT_ID)
+    try:
+        project_structure(graph, version)
+        claims, edges = _semantics(version, 0, lonely, "Algo.")
+        _, shared_edges = _semantics(version, 1, shared, "Otra cosa.")
+        project_concepts(graph, [{"name": lonely}, {"name": shared}])
+        project_claims(graph, claims)
+        project_semantic_edges(graph, edges + shared_edges)
+
+        # Another document reaches the shared one, which is what makes it shared.
+        graph.write(
+            "MATCH (k:Concept {id: $id}) MERGE (o:Chunk {id: 'chk_otro'}) "
+            "MERGE (o)-[:MENTIONS]->(k)",
+            {"id": shared_id},
+        )
+
+        pruned = prune_semantics(graph, version.version, claims=[], edges=[])
+        assert pruned.concepts_collected == 1, "the shared concept was swept too"
+        assert graph.write(
+            "MATCH (k:Concept {id: $id}) RETURN count(k) AS n", {"id": shared_id}
+        )[0]["n"] == 1
+    finally:
+        graph.write("MATCH (o:Chunk {id: 'chk_otro'}) DETACH DELETE o", {})
+        graph.write("MATCH (k:Concept {id: $id}) DETACH DELETE k", {"id": shared_id})
+
+
+def test_the_descriptions_read_is_a_mapping_the_caller_can_use_get_on(
+    graph: Graph, version: VersionNode
+):
+    """It is annotated `list[dict]` and returned `list[Row]`, which defines
+    `data` and `__getitem__` and no `.get`.
+
+    So `_condense_descriptions`, reading the declared type, called `row.get` and
+    would have raised `AttributeError` the first time it ran — after every
+    per-chunk extraction in the document had already been paid for. There is no
+    type checker on this side to catch it, and the activity's own tests
+    monkeypatch this function to return the dicts it promised.
+    """
+    import secrets
+
+    name = f"Concepto {secrets.token_hex(6)}"
+    cid = concept_id(name, LEGACY_TENANT_ID)
+    try:
+        project_concepts(graph, [{"name": name, "descriptions": ["Una lectura."]}])
+        [row] = read_concept_descriptions(graph, [cid])
+        assert row.get("raw") == ["Una lectura."]
+        assert row.get("description") is None
+        assert row.get("no existe") is None
+    finally:
+        graph.write("MATCH (k:Concept {id: $id}) DETACH DELETE k", {"id": cid})

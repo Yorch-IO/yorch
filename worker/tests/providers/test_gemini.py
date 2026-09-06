@@ -501,3 +501,68 @@ def test_streaming_and_whole_calls_are_configured_identically(monkeypatch):
     assert whole[1].system_instruction == streamed[1].system_instruction
     assert whole[1].response_mime_type == streamed[1].response_mime_type == "application/json"
     assert whole[2] == streamed[2]
+
+
+# -- why the model stopped ---------------------------------------------------
+
+
+class _Candidate:
+    def __init__(self, finish_reason):
+        self.finish_reason = finish_reason
+
+
+class _Response:
+    def __init__(self, finish_reason=None, candidates=None):
+        self.candidates = (
+            candidates if candidates is not None
+            else ([_Candidate(finish_reason)] if finish_reason is not None else [])
+        )
+
+
+def test_the_finish_reason_is_read_by_name_and_never_by_str():
+    """`types.FinishReason` is a *str-valued* `enum.Enum`, so `str(reason)` is
+    `"FinishReason.MAX_TOKENS"` and matches nothing.
+
+    Exactly the `HistoryEvent.event_type` trap already recorded in this
+    repository, where `getattr(t, "name", str(t))` read as careful and silently
+    yielded `"3"` — filtering a whole Temporal history to nothing and reporting
+    a run that did nothing. Asserted against the SDK's own enum rather than a
+    string, because a hand-built double would agree with the assumption.
+    """
+    from google.genai import types
+
+    assert g._finish_of(_Response(types.FinishReason.MAX_TOKENS)) == g.MAX_TOKENS
+    assert g._finish_of(_Response(types.FinishReason.STOP)) == "STOP"
+
+
+def test_a_plain_string_finish_reason_survives_the_same_reader():
+    """An SDK version that hands back the bare string instead of the enum: a
+    `str` has no `.name`, so it falls through to itself."""
+    assert g._finish_of(_Response("MAX_TOKENS")) == g.MAX_TOKENS
+
+
+def test_a_response_with_no_candidates_reports_nothing_rather_than_guessing():
+    assert g._finish_of(_Response()) is None
+    assert g._finish_of(_Response(candidates=None)) is None
+
+
+def test_a_streamed_call_reports_the_last_finish_reason_it_saw(monkeypatch):
+    """The same rule as the usage, and for the same reason: a truncated stream
+    ends with a chunk that carries a `finish_reason` and no text at all, so
+    reading the first would report `None` for every call."""
+    from google.genai import types
+
+    class _FinishingChunk(FakeChunk):
+        def __init__(self, text=None, usage=None, finish=None):
+            super().__init__(text, usage)
+            self.candidates = [_Candidate(finish)] if finish else []
+
+    models = FakeStreamModels([
+        _FinishingChunk("Según el corpus"),
+        _FinishingChunk(None, finish=types.FinishReason.MAX_TOKENS),
+    ])
+    result = stream_provider(monkeypatch, models).generate_stream(
+        "q", on_delta=lambda _: None
+    )
+    assert result.finish_reason == g.MAX_TOKENS
+    assert result.text == "Según el corpus"

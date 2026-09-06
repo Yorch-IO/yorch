@@ -415,6 +415,13 @@ async def test_every_semantic_edge_is_attributed_to_the_chunk_that_produced_it(
         def __enter__(self): return self
         def __exit__(self, *a): return None
         def ensure_schema(self): pass
+        # Graph-shaped rather than stubbed away: `prune_semantics` runs for
+        # real against this and takes its early return, so an arity or a name
+        # it got wrong still fails here. Stubbing the function out instead is
+        # how `_condense_descriptions` kept four green tests over a call that
+        # would have raised the first time it ran.
+        def write(self, *a, **k): return []
+        def write_many(self, *a, **k): return None
 
     monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
     monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c, **k: captured.setdefault("concepts", c) and 0 or len(c))
@@ -485,6 +492,13 @@ async def test_extraction_leaves_the_event_loop_free_to_heartbeat(
         def __enter__(self): return self
         def __exit__(self, *a): return None
         def ensure_schema(self): pass
+        # Graph-shaped rather than stubbed away: `prune_semantics` runs for
+        # real against this and takes its early return, so an arity or a name
+        # it got wrong still fails here. Stubbing the function out instead is
+        # how `_condense_descriptions` kept four green tests over a call that
+        # would have raised the first time it ran.
+        def write(self, *a, **k): return []
+        def write_many(self, *a, **k): return None
 
     monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
     monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c, **k: len(c))
@@ -531,6 +545,13 @@ async def test_one_unparseable_chunk_does_not_lose_the_whole_document(
         def __enter__(self): return self
         def __exit__(self, *a): return None
         def ensure_schema(self): pass
+        # Graph-shaped rather than stubbed away: `prune_semantics` runs for
+        # real against this and takes its early return, so an arity or a name
+        # it got wrong still fails here. Stubbing the function out instead is
+        # how `_condense_descriptions` kept four green tests over a call that
+        # would have raised the first time it ran.
+        def write(self, *a, **k): return []
+        def write_many(self, *a, **k): return None
 
     monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
     monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c, **k: len(c))
@@ -552,6 +573,13 @@ def _fake_graph(monkeypatch: pytest.MonkeyPatch) -> dict:
         def __enter__(self): return self
         def __exit__(self, *a): return None
         def ensure_schema(self): pass
+        # Graph-shaped rather than stubbed away: `prune_semantics` runs for
+        # real against this and takes its early return, so an arity or a name
+        # it got wrong still fails here. Stubbing the function out instead is
+        # how `_condense_descriptions` kept four green tests over a call that
+        # would have raised the first time it ran.
+        def write(self, *a, **k): return []
+        def write_many(self, *a, **k): return None
 
     monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
     monkeypatch.setattr(paid.proj, "project_concepts",
@@ -1539,3 +1567,56 @@ async def test_building_the_eval_set_leaves_the_event_loop_free(
     assert ticks >= 2, (
         f"the event loop got {ticks} turn(s) while generating questions"
     )
+
+
+async def test_extraction_prunes_what_a_previous_run_of_this_version_left(
+    workspace, monkeypatch: pytest.MonkeyPatch
+):
+    """The wiring, which is a separate fact from the pruning working.
+
+    `project_*` are all `MERGE`s, so a re-index adds rather than replaces —
+    measured once at 4,988 stale claims out of 8,043 on a version re-chunked
+    from 600 to 631. What this pins is that the stage calls the prune at all,
+    for *its own* version, and with exactly what it just projected: a keep-set
+    assembled from anything else could delete what the run had produced.
+    """
+    import json
+
+    fake = FakeProvider(semantics=json.dumps({
+        "conceptos": [{"nombre": "Providencia", "tipo": "doctrina", "confianza": 0.9}],
+        "afirmaciones": [
+            {"texto": "Dios sostiene el mundo.", "concepto": "Providencia",
+             "confianza": 0.8}
+        ],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    class FakeGraph:
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+        def ensure_schema(self): pass
+        def write(self, *a, **k): return []
+        def write_many(self, *a, **k): return None
+
+    monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
+    projected: dict = {}
+    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c, **k: len(c))
+    monkeypatch.setattr(paid.proj, "project_claims",
+                        lambda g, c, **k: projected.setdefault("claims", c) and 0 or len(c))
+    monkeypatch.setattr(paid.proj, "project_semantic_edges",
+                        lambda g, e: projected.setdefault("edges", e) and 0 or len(e))
+
+    pruned: dict = {}
+
+    def _prune(g, version, *, claims, edges):
+        pruned.update(version=version, claims=claims, edges=edges)
+        return paid.proj.Pruned()
+
+    monkeypatch.setattr(paid.proj, "prune_semantics", _prune)
+
+    registered, _ = _ids()
+    await paid.extract_semantics("run_prune", registered, _chunked(workspace, "run_prune", 2))
+
+    assert pruned["version"] == registered.version_id, "another version's semantics"
+    assert pruned["claims"] is projected["claims"]
+    assert pruned["edges"] is projected["edges"]

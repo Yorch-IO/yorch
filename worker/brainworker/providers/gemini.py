@@ -111,6 +111,19 @@ class Usage:
 class Generation:
     text: str
     usage: Usage
+    #: Why the model stopped: `STOP` normally, `MAX_TOKENS` for a truncation,
+    #: `SAFETY` and friends otherwise. `None` when the response carried none.
+    #:
+    #: Threaded out because a truncation and a considered refusal are different
+    #: facts with different remedies and were indistinguishable from here.
+    #: Measured on the real corpus 2026-09-06: one answering call spent its
+    #: whole 65,521-token output ceiling on reasoning, wrote nothing, billed
+    #: $0.497 — twenty times a normal turn — and the envelope it never closed
+    #: surfaced as a `JSONDecodeError`, which the product reported as "not
+    #: enough evidence". That is a claim about the corpus the run had no basis
+    #: for, and it sends the reader to look at their library instead of at the
+    #: bill. Defaulted so nothing that ignores it has to change.
+    finish_reason: str | None = None
 
 
 @dataclass
@@ -368,7 +381,11 @@ class Provider:
             )
 
         response = self._call("generate", run)
-        return Generation(text=response.text or "", usage=_usage_of(response))
+        return Generation(
+            text=response.text or "",
+            usage=_usage_of(response),
+            finish_reason=_finish_of(response),
+        )
 
     def generate_stream(
         self, prompt: str, *, on_delta: Callable[[str], None], **kw: Any
@@ -410,15 +427,23 @@ class Provider:
 
         parts: list[str] = []
         usage = Usage(calls=1)
+        finish: str | None = None
 
         def take(chunk: Any) -> None:
-            nonlocal usage
+            nonlocal usage, finish
             piece = _chunk_text(chunk)
             if piece:
                 parts.append(piece)
                 on_delta(piece)
             if getattr(chunk, "usage_metadata", None) is not None:
                 usage = _usage_of(chunk)
+            # Same rule as the usage: the *last* chunk carrying one is the one
+            # that counts. A truncated stream ends with a chunk that has a
+            # `finish_reason` and no text — which `_chunk_text` already
+            # tolerates — so this is read separately rather than beside the text.
+            reason = _finish_of(chunk)
+            if reason is not None:
+                finish = reason
 
         try:
             if first is not None:
@@ -437,7 +462,9 @@ class Provider:
                 kind="provider_unavailable",
             ) from e
 
-        return Generation(text="".join(parts), usage=usage)
+        return Generation(
+            text="".join(parts), usage=usage, finish_reason=finish
+        )
 
     # -- embeddings --------------------------------------------------------
 
@@ -533,6 +560,31 @@ def _chunk_text(chunk: Any) -> str:
         return chunk.text or ""
     except Exception:
         return ""
+
+
+#: The finish reason that means "the model ran out of room", which for a call
+#: with reasoning on can be spent entirely on thinking.
+MAX_TOKENS = "MAX_TOKENS"
+
+
+def _finish_of(response: Any) -> str | None:
+    """Why the model stopped, as a plain string, or nothing.
+
+    **`.name`, never `str()`.** `types.FinishReason` is a str-valued
+    `enum.Enum`, so `str(reason)` is `"FinishReason.MAX_TOKENS"` and would match
+    nothing — the same shape as the `HistoryEvent.event_type` trap already
+    recorded here, where `getattr(t, "name", str(t))` read as careful and
+    silently yielded `"3"`. The fallback covers an SDK version that hands back
+    the bare string instead of the enum: a plain `str` has no `.name`, so it
+    falls through to itself.
+    """
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return None
+    reason = getattr(candidates[0], "finish_reason", None)
+    if reason is None:
+        return None
+    return getattr(reason, "name", None) or str(reason)
 
 
 def _usage_of(response: Any) -> Usage:

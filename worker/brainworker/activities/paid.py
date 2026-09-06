@@ -1641,6 +1641,24 @@ async def extract_semantics(
         proj.project_claims(graph, claims, tenant=tenant)
         written = proj.project_semantic_edges(graph, edges)
 
+        # And delete what a *previous* extraction of this version left. All
+        # three projections above are `MERGE`s, so a re-index adds rather than
+        # replaces — and a stale claim is not inert debris: `claim_id` keys on
+        # the chunk and the text, and `chunk_id` keys on the version and the
+        # index, so re-chunking keeps every id alive while the text underneath
+        # changes. Measured once at 4,988 claims left behind out of 8,043.
+        # After the projection, never before: see `prune_semantics`.
+        pruned = proj.prune_semantics(
+            graph, registered.version_id, claims=claims, edges=edges
+        )
+        if pruned.claims or pruned.mentions:
+            log.info(
+                "pruned %d stale claim(s) and %d stale MENTIONS from %s, "
+                "collecting %d orphan concept(s)",
+                pruned.claims, pruned.mentions, registered.version_id,
+                pruned.concepts_collected,
+            )
+
         # After projection, so the descriptions being condensed include this
         # run's. Its own adapter, so its tokens land in their own ledger row
         # rather than inflating the per-chunk extraction they are not part of.

@@ -32,6 +32,13 @@ def _fake_graph(monkeypatch: pytest.MonkeyPatch) -> dict:
         def __enter__(self): return self
         def __exit__(self, *a): return None
         def ensure_schema(self): pass
+        # Graph-shaped rather than stubbed away: `prune_semantics` runs for
+        # real against this and takes its early return, so an arity or a name
+        # it got wrong still fails here. Stubbing the function out instead is
+        # how `_condense_descriptions` kept four green tests over a call that
+        # would have raised the first time it ran.
+        def write(self, *a, **k): return []
+        def write_many(self, *a, **k): return None
 
     monkeypatch.setattr(rebuild, "Graph", lambda url: FakeGraph())
     monkeypatch.setattr(rebuild.proj, "project_concepts",
@@ -193,3 +200,42 @@ async def test_a_rebuild_replays_into_the_organisation_the_document_belongs_to(
     # And the run is filed against the same organisation, not whoever pressed
     # the button.
     assert catalog.started["tenant_id"] == ACME
+
+
+# -- the ledger's account of a free stage ------------------------------------
+
+
+async def test_the_replay_books_a_row_saying_the_stage_cost_nothing(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A stage that ran for nothing and a stage that did not run are different
+    facts, and until now they rendered identically.
+
+    `replay_semantics` built a zero-token `Spend` under a comment claiming it
+    "keeps the stage visible in the run's ledger" and never wrote it, so a
+    rebuild's audit view showed `replaying semantics` with an empty cost cell —
+    which reads as "not measured", not as "free". It really is free: a file read
+    and a graph write, no provider call and nothing to price. Saying so is the
+    fix, and it is the same rule the cached query embedding already books a
+    zero row for.
+    """
+    _fake_graph(monkeypatch)
+    charged: list = []
+    monkeypatch.setattr(rebuild, "_charge", lambda run_id, spend: charged.append((run_id, spend)) or spend)
+
+    ref = _artifact(workspace, "run_free", {
+        "extractor_model": "gemini-3.6-flash",
+        "concepts": [{"name": "Gracia"}],
+        "claims": [],
+        "edges": [],
+    })
+    await rebuild.replay_semantics(
+        "run_free",
+        Registered(document_id="doc_1", version_id="ver_1", created=True,
+                   already_indexed=False),
+        ref,
+    )
+    assert [run for run, _ in charged] == ["run_free"]
+    spend = charged[0][1]
+    assert spend.stage == "semantics-replay"
+    assert spend.usd == 0.0 and spend.input_tokens == 0 and spend.output_tokens == 0

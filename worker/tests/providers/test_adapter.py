@@ -7,21 +7,31 @@ import json
 import pytest
 
 from brainworker.providers import VertexAdapter
+from brainworker.providers.adapter import TruncatedResponse
 from brainworker.providers.gemini import Generation, Usage
 
 
 class FakeProvider:
-    def __init__(self, text: str = "{}") -> None:
+    def __init__(
+        self,
+        text: str = "{}",
+        finish_reason: str | None = None,
+        usage: Usage | None = None,
+    ) -> None:
         self.text = text
+        self.finish_reason = finish_reason
+        self.usage = usage or Usage(10, 5, 0, 1)
         self.calls: list[dict] = []
 
     def generate(self, prompt, *, system=None, temperature=0.0,
                  max_output_tokens=None, response_schema=None, stage=None):
         self.calls.append(
             {"prompt": prompt, "system": system, "temperature": temperature,
-             "schema": response_schema}
+             "schema": response_schema, "max_output_tokens": max_output_tokens}
         )
-        return Generation(text=self.text, usage=Usage(10, 5, 0, 1))
+        return Generation(
+            text=self.text, usage=self.usage, finish_reason=self.finish_reason
+        )
 
 
 def test_it_presents_the_signature_the_engine_calls():
@@ -197,3 +207,58 @@ def test_a_query_and_a_passage_do_not_share_a_cache_entry(tmp_path):
     _embedder(p, tmp_path).embed_many(["texto"], task_type=RETRIEVAL_QUERY)
     _embedder(p, tmp_path).embed_many(["texto"], task_type=RETRIEVAL_DOCUMENT)
     assert len(p.calls) == 2, "one task's vector was served for the other"
+
+
+# -- a truncation is not a malformed envelope --------------------------------
+#
+# Measured on the real corpus 2026-09-06: one `standard` chat turn's answering
+# call billed 65,521 output tokens and $0.497373 over 6m42s and wrote nothing.
+# 65,521 is `gemini-3.6-flash`'s own 65,536-token ceiling, so the model hit
+# `MAX_TOKENS` while thinking, the envelope never closed, `json.loads` raised —
+# and the product reported "not enough evidence", which is a claim about the
+# corpus the run had no basis for.
+
+
+def test_a_truncated_envelope_says_so_rather_than_reading_as_bad_json():
+    provider = FakeProvider(
+        text='{"suficiente": true, "respuesta": "El corpus indica q',
+        finish_reason="MAX_TOKENS",
+        usage=Usage(3977, 65521, 65500, 1),
+    )
+    adapter = VertexAdapter(provider)
+    with pytest.raises(TruncatedResponse) as caught:
+        adapter.generate_json("p", system="s", schema={}, stage="answering")
+    # The number is what makes the cause legible to whoever reads the log.
+    assert caught.value.output_tokens == 65521
+    assert "65521" in str(caught.value)
+
+
+def test_an_envelope_that_is_merely_malformed_stays_a_plain_value_error():
+    """The distinction is the point: a `TruncatedResponse` is also a
+    `ValueError`, so every caller that handled the unparseable case keeps
+    behaving as it did — but a caller that can say something better is able to
+    tell the two apart, and the remedies are opposite."""
+    provider = FakeProvider(text="not json at all", finish_reason="STOP")
+    adapter = VertexAdapter(provider)
+    with pytest.raises(ValueError) as caught:
+        adapter.generate_json("p", system="s", schema={}, stage="answering")
+    assert not isinstance(caught.value, TruncatedResponse)
+
+
+def test_a_truncation_that_still_parsed_is_not_an_error_at_all():
+    """`MAX_TOKENS` on a response whose JSON happens to be complete is the
+    model stopping at the boundary, not a failure. Raising here would refuse an
+    answer that is entirely usable."""
+    provider = FakeProvider(text='{"suficiente": false}', finish_reason="MAX_TOKENS")
+    adapter = VertexAdapter(provider)
+    assert adapter.generate_json("p", system="s", schema={}) == {"suficiente": False}
+
+
+def test_the_output_ceiling_reaches_the_provider():
+    """It is `answer.compose` that names the number; what this pins is that the
+    adapter forwards it, since a cap that stops at this layer bounds nothing."""
+    provider = FakeProvider()
+    VertexAdapter(provider).generate_json(
+        "p", system="s", schema={}, max_output_tokens=16384
+    )
+    assert provider.calls[0]["max_output_tokens"] == 16384

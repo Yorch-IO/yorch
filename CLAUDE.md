@@ -278,6 +278,16 @@ driver, so there is one owner of the schema and one set of models.
   path-hashed `doc_id_for()`. That is what makes re-indexing converge and a
   duplicate file add nothing — and what makes the activity idempotent under
   Temporal retries.
+- **The graph converges only because something prunes it; `MERGE` alone does
+  not.** The ids make a re-index *overwrite* on both sides — a point id is
+  `point_id(version_id, chunk_index)`, a `claim_id` is `f(chunk_id, text)` — and
+  that is exactly why a re-index leaves debris rather than dropping it: the
+  document's ids survive while what they point at changes. Qdrant has
+  `QdrantWriter.prune_tail`; the graph has `projection.prune_semantics`, called
+  by `extract_semantics` and `replay_semantics` **after** they project, never
+  before. Anything new that projects a version's semantics has to call it too,
+  and the reason is not tidiness: a stale claim is attached to a chunk that no
+  longer contains its quote and reads exactly like a good one.
 - **Semantic extraction is one chunk per call.** Batching is cheaper and wrong:
   every relation must carry the `source_chunk_id` a person can check, and a model
   given ten chunks attributes claims to the wrong one.
@@ -804,6 +814,19 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
   `BRAIN_THINKING_ANSWERING` **and** a global `BRAIN_THINKING_BUDGET` both
   outrank a level, the second because `answering` is deliberately absent from
   the stage map so a global reaches it.
+- **The answering call has an output ceiling and no reasoning budget, and those
+  are two different decisions.** `answer.MAX_OUTPUT_TOKENS` is 16,384 — 4.5x the
+  widest output ever measured here — and it bounds the *bill*, because a call
+  with dynamic thinking can spend the model's whole 65,536-token ceiling
+  reasoning and return no text at all: measured once at $0.497373 for nothing.
+  The reasoning budget stays unset at every effort level, because a fixed one
+  was measured *worse*. A ceiling four times the widest real answer cannot
+  reduce a real answer; a budget named in `ThinkingConfig` caps a value the
+  model would otherwise choose. `_prepare`'s warning against setting
+  `max_output_tokens` is about a number near the answer's length, and stands.
+  When it is hit the call raises `TruncatedResponse` and the turn says the model
+  ran out of room — never "not enough evidence", which is a claim about the
+  corpus.
 - **The approval gate is bounded and its timeout is a rejection.** Seven days,
   because a user may close the lid on Friday; not unbounded, because a workflow
   that never reports an outcome accumulates in the namespace. A timeout costs
@@ -2213,33 +2236,6 @@ that are missing. Each was found by running the thing, and each is recorded
 rather than fixed because the fix is somebody's decision or sits in another
 session's files.
 
-- **An answering call can spend its entire output ceiling on reasoning, return
-  no text, and be reported as "not enough evidence".** Measured on the real
-  corpus 2026-09-06, a `standard` chat turn over `preprod`/`lib_teologia`: the
-  answering call billed **65,521 output tokens and $0.497373** — 20x the $0.0233
-  a normal turn of the same shape cost forty minutes later — took **6 m 42 s**,
-  and produced not one character of prose. 65,521 is `gemini-3.6-flash`'s
-  65,536-token output ceiling, so the model hit `MAX_TOKENS` while thinking; the
-  envelope never closed, `json.loads` raised, and `answer.compose`'s exception
-  branch returned `insufficient_evidence`. **Nothing failed anywhere.** The run
-  is `succeeded`, the turn reads "Evidencia insuficiente", and that is a claim
-  about the corpus this run has no basis for — it sends the reader to look at
-  their library instead of at the bill.
-  CLAUDE.md already records the neighbouring half — "`max_output_tokens` is
-  measured against reasoning too, and a small budget returns `MAX_TOKENS` with
-  no text" — and the unbounded direction is the same failure from the other end:
-  every effort level deliberately names **no** reasoning budget, on a measured
-  A/B where `None` beat 8192 on four questions, and none of those four ever ran
-  away. So the fix is a decision, not a typo: capping `max_output_tokens` or
-  naming a budget would reverse a measurement, and the alternative — detecting
-  `finish_reason == MAX_TOKENS` and reporting a truncation rather than a
-  refusal — needs the finish reason threaded out of `generate_stream`, which
-  today returns only text and usage.
-  What *was* fixed the same day is that the reason is no longer thrown away, so
-  the turn at least reads "el modelo no pudo componer una respuesta
-  (JSONDecodeError)" instead of a verdict on the corpus. One occurrence in
-  roughly a dozen paid turns.
-
 - **`DocumentGraph` shows a label where it means a count.** `DocumentGraph.tsx:671`
   renders `t("graph.shared", { count: item.sharedConcepts })` under every outer
   document card. `graph.shared` is `"Concepts in"` / `"Conceptos en"` and carries
@@ -2322,17 +2318,6 @@ session's files.
   document leaves citations naming it until something re-projects. Re-projection
   does now correct it — the citation prune replaces the stale node rather than
   adding to it — so a rebuild is the workaround.
-- **A rebuild's semantics stage is visibly free, and it should not be.**
-  `activities/rebuild.py:213` builds a `Spend(stage="semantics-replay", …)` on
-  the returned `Semantics` and **never calls `_charge`**, so no `cost_entry` row
-  is written — despite the comment claiming it "keeps the stage visible in the
-  run's ledger". Invisible until 2026-09-01, when the audit ledger started
-  rendering a per-stage cost and a rebuild's `replaying semantics` row came back
-  empty. The mapping is already in `stages.COST_STAGES`, so the fix is one
-  `_charge` call; recorded rather than done because a replay's real cost is a
-  question about whether re-projecting an artifact spends at all, and nobody has
-  measured it.
-
 - **A 30-second retrieval turned out to be the query embedding, and the
   latency has nothing to do with the cost.** Found on 2026-09-06 by the stage
   events on their second live turn — which is the point of them — and settled
@@ -2499,43 +2484,6 @@ session's files.
   warning read "Solapamiento temático: 0%" for two books by the same author in
   the same series — a figure nobody could act on, printed at the moment somebody
   decides whether to spend $4.12.
-
-- **A re-index leaves the previous run's semantics in the graph, and they now
-  name chunks whose text has moved.** The vector side prunes — `QdrantWriter.
-  prune_tail` runs on every index — and `project_structure` prunes the citations
-  of the chunks it just projected. Nothing prunes `Claim` nodes or `MENTIONS`
-  edges: `project_claims` and `project_semantic_edges` MERGE, so a second
-  extraction over a different cutting *adds*. Measured 2026-09-01 on
-  `ver_0b71d21eeb3228f54437d9cf`, re-indexed with a corrected profile that took
-  it from 600 chunks to 631: the graph held 5,001 claims, the run extracted
-  3,055, and the total came to **8,043 — 13 converged and 4,988 (62%) were left
-  behind**. `MENTIONS` the same way: 4,057 of 7,554 (53.7%) stale.
-  This is not inert debris like the 214 orphan claims recorded above. `claim_id`
-  is `f(chunk_id, text)` and `chunk_id` is `f(version_id, index)`, so re-chunking
-  keeps every id *alive* while the text underneath it changes — the stale claims
-  are attached to chunks that no longer contain the quote they carry, and they
-  are indistinguishable from good ones at read time. That is precisely the state
-  `Semantics.claims_verified` exists to keep visible, arrived at from a direction
-  it does not cover: the quote was verified, against a chunk that has since been
-  re-cut.
-  **A rebuild has the same shape** — `replay_semantics` replays an artifact into
-  the same MERGE — and is worth checking. The fix mirrors `remove_version`
-  exactly and is four statements: take `_CANDIDATE_CONCEPTS` *before* deleting,
-  delete the claims and `MENTIONS` this run did not produce, then
-  `_COLLECT_ORPHAN_CONCEPTS` over the candidates. The set is computable with no
-  guesswork, because the run's own `semantics.json` names exactly what it
-  produced.
-  **That measurement no longer reproduces, and the mechanism is untouched.**
-  Re-measured 2026-09-02 on the same version by two independent routes — the
-  `DERIVED_FROM` traversal and a property match on `source_chunk_id` — the graph
-  holds **3,055 claims against the 3,055 the re-index produced, 0 left behind**,
-  and 3,497 `MENTIONS` against 3,497. The 4,988 were deleted; **what deleted them
-  is recorded nowhere**, and nothing in `projection.py` changed: the module's only
-  claim `DELETE` is still `_DELETE_VERSION`, which removes a whole version. So the
-  defect stands and its figure is historical — the next re-index of any version
-  will rebuild it. Two `semantics.json` still sit side by side in that version's
-  run directories (2,965 from the failed attempt, 3,055 from the re-index), which
-  is what makes the arithmetic checkable at all.
 
 - **A profile's `retrieval` block is measured, persisted, and never read by the
   thing it describes.** `answering/retrieve.py` uses module constants —
@@ -2744,18 +2692,6 @@ session's files.
   candidate in this workspace's seven `tuning.json` files reads
   `"accepted": null`, and no version's chunk count has ever shrunk.
 
-- **`_condense_descriptions` would die the first time it ran, after the money
-  was spent.** `paid.py:1175,1182` call `row.get("raw")` and
-  `row.get("description")` on the `list[Row]` that `Graph.write` returns, and
-  `Row` (`graph/client.py:66`) defines `data` and `__getitem__` and **no
-  `.get`** — so the call raises `AttributeError` inside `extract_semantics`,
-  after every per-chunk extraction in the document has already been paid for.
-  Its four tests pass because `tests/activities/test_paid.py` monkeypatches
-  `read_concept_descriptions` to return plain dicts. This is not a
-  silent-degradation defect — it raises, loudly — and it is dormant only because
-  `condense_descriptions` is off. Recorded here because the stage it aborts is
-  the most expensive one in the pipeline.
-
 - **The engine's ledger has no per-document attribution inside one invocation.**
   `costo.json` is a history of runs since 2026-09-03 rather than a single
   overwritten run, and each record names the paths it was given — but `Ledger`
@@ -2765,9 +2701,120 @@ session's files.
   snapshot between documents gives the delta. Not done, because the ask was that
   the file stop overwriting itself and this is the next question, not that one.
 
-## Eight defects that were recorded here and are now fixed
+## Defects that were recorded here and are now fixed
 
-Kept because each fix carries a rule worth not relearning.
+Kept because each fix carries a rule worth not relearning. The heading used to
+count them and the count was already wrong — nine entries under "Eight" — which
+is a small demonstration of the rule this file keeps applying to code: a number
+maintained by hand drifts, and one that has drifted is worse than none.
+
+- **An answering call spent its entire output ceiling on reasoning, returned no
+  text, and was reported as "not enough evidence".** Measured on the real corpus
+  2026-09-06, a `standard` chat turn over `preprod`/`lib_teologia`: the answering
+  call billed **65,521 output tokens and $0.497373** — 20x the $0.0233 a normal
+  turn of the same shape cost forty minutes later — took **6 m 42 s**, and
+  produced not one character of prose. 65,521 is `gemini-3.6-flash`'s
+  65,536-token output ceiling, so the model hit `MAX_TOKENS` while thinking; the
+  envelope never closed, `json.loads` raised, and `answer.compose`'s exception
+  branch returned `insufficient_evidence`. **Nothing failed anywhere** — the run
+  is `succeeded` — and the turn read "Evidencia insuficiente", which is a claim
+  about the corpus the run had no basis for.
+  Two halves, and it is worth seeing why neither alone was enough. The reporting
+  half threads `finish_reason` out of `generate` and `generate_stream` — read
+  with **`.name`, never `str()`**, because `types.FinishReason` is a str-valued
+  `enum.Enum` and `str()` yields `"FinishReason.MAX_TOKENS"`, the same trap
+  `HistoryEvent.event_type` already records — and the JSON paths raise
+  `TruncatedResponse` instead of a bare `ValueError` when the envelope failed to
+  parse *and* the model had run out of room. It subclasses `ValueError` so every
+  caller that handled the unparseable case is untouched; the one caller that can
+  say something better does. The spending half is
+  `answer.MAX_OUTPUT_TOKENS = 16384`, which is **4.5x the widest output ever
+  measured here** (`thorough` at 3,582 tokens with no reasoning budget named) and
+  turns a $0.50 loss into cents. Note what it deliberately does *not* do: it caps
+  the bill, not the reasoning. Every effort level still names no
+  `thinking_budget`, which the recorded A/B chose over 8192, and `_prepare`'s
+  warning against a ceiling stands — it is about a number near the *answer's*
+  length, which this is four times over.
+  The truncation stayed `insufficient_evidence` rather than earning a state of
+  its own, and the reason is the same one that gave `off_corpus` a state: what
+  distinguishes a state is that a *reader* acts on it differently. Both refusals
+  ask for the same thing — ask again. What had to change was the sentence, and
+  the sentence reaches both clients for free, because `_settle` now carries a
+  refusal's `reason` into `error.message`.
+
+- **A re-index left the previous run's semantics in the graph, attached to
+  chunks whose text had moved.** Every projection is a `MERGE`, so re-extracting
+  a version *added*. The vector side has pruned since `QdrantWriter.prune_tail`;
+  nothing pruned the graph. Measured 2026-09-01 on
+  `ver_0b71d21eeb3228f54437d9cf`, re-indexed with a corrected profile that took
+  it from 600 chunks to 631: **5,001 claims where the run extracted 3,055 —
+  4,988 (62%) left behind**, and 4,057 of 7,554 `MENTIONS` (53.7%) likewise.
+  Not inert debris, which is what made it worth fixing rather than sweeping:
+  `claim_id` is `f(chunk_id, text)` and `chunk_id` is `f(version_id, index)`, so
+  re-chunking keeps every id *alive* while the text underneath changes. A stale
+  claim stays attached to a chunk that no longer contains the quote it carries
+  and is indistinguishable from a good one at read time — the state
+  `Semantics.claims_verified` exists to keep visible, reached from the one
+  direction it does not cover: the quote *was* verified, against a chunk since
+  re-cut.
+  `projection.prune_semantics` is the fix and it mirrors `remove_version`
+  exactly: candidates through all three routes in `_CANDIDATE_CONCEPTS` taken
+  **before** the delete, the claims and `MENTIONS` this run did not produce
+  deleted, then `_COLLECT_ORPHAN_CONCEPTS` over the candidates. `ABOUT` and
+  `INVOLVES` need no equivalent — they hang off a `Claim` and `DETACH DELETE`
+  takes them — but `MENTIONS` does, because it survives independently: a chunk
+  keeps its id across a re-chunking while its text changes, so an edge naming a
+  concept the new text never mentions stays perfectly well-formed.
+  Three things about it that are decisions rather than details. **It runs after
+  projecting, never before**: after, the keep-set is exactly what is now in the
+  graph and the version is never observable without its semantics; before, there
+  is a window holding neither. **The keep-set is derived inside**, from the same
+  `claim_id` and the same `MENTIONS` edges the projection wrote, so it cannot
+  drift from what was projected. And **a retry converges** — projection is a
+  `MERGE` and this is a set difference against the same set — which incidentally
+  fixes the recorded case where two attempts at one document *unioned*, leaving
+  5,001 claims where `semantics.json` recorded 2,965. Paying twice no longer
+  produces the document twice.
+  One measurement, because the obvious worry was wrong: the whole-version
+  membership test that counts what is stale runs in **0.01 s** against the
+  biggest version this installation holds (3,055 claims, 3,497 `MENTIONS`). The
+  per-chunk shape of the *deletes* is kept because a chunk is what a keep-set is
+  naturally a set of, not because the alternative was measured slow.
+  `replay_semantics` calls it too: replaying the artifact a version already
+  holds is a no-op costing two reads, and replaying an *older* one is precisely
+  the act of republishing it, where leaving the newer claims beside it would
+  make the graph agree with neither.
+
+- **A rebuild's semantics stage was visibly free, and it was invisible
+  instead.** `replay_semantics` built a zero-token `Spend(stage=
+  "semantics-replay", …)` under a comment claiming it "keeps the stage visible
+  in the run's ledger" and **never called `_charge`**, so no `cost_entry` row was
+  written. Invisible until 2026-09-01, when the audit ledger started rendering a
+  per-stage cost and the row came back empty. The open question recorded beside
+  it — "whether re-projecting an artifact spends at all" — is answerable by
+  reading the stage: it is a file read and a graph write, no provider call and
+  nothing to price. So it books a zero row, and that is the point. **A stage
+  that ran for nothing and a stage that did not run are different facts**, the
+  same distinction the cached query embedding already books a zero row for, and
+  an empty cost cell reads as the second.
+
+- **`_condense_descriptions` would have died the first time it ran, after the
+  money was spent.** It called `row.get("raw")` on what
+  `read_concept_descriptions` is *annotated* to return — `list[dict]` — while
+  the function returned `graph.write(...)`, which is `list[Row]`, and `Row`
+  defines `data` and `__getitem__` and no `.get`. The call would have raised
+  `AttributeError` inside `extract_semantics`, **after every per-chunk
+  extraction in the document had already been paid for**, which is the most
+  expensive stage in the pipeline. Dormant only because
+  `condense_descriptions` is off.
+  Nothing could catch it: there is no type checker on the Python side, so the
+  annotation was decoration — and the four tests over that function
+  monkeypatched `read_concept_descriptions` to return the dicts it promised,
+  which is the exact shape of a double that agrees with the assumption under
+  test. The fix is to return dicts for real, making the annotation true, and it
+  is also the shape `set_concept_descriptions` next door already takes. The
+  test doubles for `Graph` in the activity suites are graph-shaped now rather
+  than stubbed away, for the same reason.
 
 - **A question spent money and nothing recorded it.** `SELECT count(*) FROM
   cost_entry WHERE run_id LIKE 'ask-%'` was **0** across the whole catalog while

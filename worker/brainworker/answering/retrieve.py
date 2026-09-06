@@ -108,13 +108,65 @@ def search(
     # RETRIEVAL_QUERY, not RETRIEVAL_DOCUMENT. The model embeds questions and
     # passages asymmetrically on purpose (invariant #5) and using one task for
     # both measurably degrades retrieval.
-    embedded = provider.embed([question.text], task=RETRIEVAL_QUERY)[0]
+    #
+    # **Cached, and the reason is latency rather than money.** This one call is
+    # the whole of `search` that can be slow: measured 2026-09-06 inside the
+    # worker, everything else in this function — the dense probe, the hybrid
+    # search, every graph read in `_expand` — totals **9 ms**, while ten
+    # consecutive embeddings of one question took 0.4 s to **18.8 s**, one of
+    # them logging a `provider_quota` retry and the slowest logging nothing at
+    # all. The quota is a *per-minute* bucket, so a burst of questions makes
+    # each one wait on the ones before it.
+    #
+    # The charge is four orders of magnitude under the answering call, which is
+    # exactly why nothing had bothered: `ask-embedding` costs about $0.000004
+    # and is nonetheless the dominant latency risk in retrieval. Cost said
+    # nothing about that; a stage event did.
+    #
+    # `CachedEmbedder` rather than a second cache of its own — it is the same
+    # class indexing uses, over the same `docagent.embedcache` keyed on
+    # (model, width, task, text), reading the same directory. A question's
+    # vector is content-addressed exactly like a chunk's, and asking the same
+    # question twice should not roll the same dice twice.
+    #
+    # One consequence, stated because it is not nothing: the cache stores
+    # float32, so a repeat question searches with a rounded vector where a first
+    # ask searches with whatever the API returned. Qdrant stores and compares
+    # float32 regardless, so the document side has always been rounded and the
+    # ranking cannot move measurably — but the two asks are not bit-identical,
+    # and anything comparing scores across them should know that.
+    from ..providers import CachedEmbedder
+
+    embedder = CachedEmbedder(
+        provider,
+        settings.paths.embed_cache,
+        model=provider.settings.embedding_model,
+        dimensions=provider.settings.embedding_dimensions,
+        # One text, so concurrency has nothing to do here. `Provider.embed`
+        # sends one request per text regardless — batching silently drops
+        # (invariant on the collection), which is why throughput comes from
+        # concurrency at all — and a pool for a single item is a thread nobody
+        # needs.
+        workers=1,
+    )
+    embedded = embedder.embed_many([question.text], task_type=RETRIEVAL_QUERY)[0]
     vector = embedded.values
     if spend is not None:
         from ..activities.ingest import price_for
         from ..pipeline import Spend
 
-        tokens = embedded.usage.input_tokens
+        # **From the embedder, not from the returned vector.** A cache hit hands
+        # back an `Embedding` carrying the token count the *original* call cost,
+        # which is the right thing for reporting what a vector was worth and the
+        # wrong thing to bill: reading it here would book a charge on every
+        # repeat question for tokens nobody spent, and the ledger would claim
+        # money that was never taken. `embedder.usage` accumulates misses only,
+        # so it is zero on a hit.
+        tokens = embedder.usage.input_tokens
+        # The row is written either way. A stage that ran for nothing and a
+        # stage that did not run are different facts, and `cache_hits` exists on
+        # the embedder for the same reason — "cheap because cached" and "cheap
+        # because small" are not the same thing.
         spend.append(
             Spend(
                 stage="ask-embedding",

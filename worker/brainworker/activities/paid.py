@@ -106,14 +106,13 @@ def _provider() -> Provider:
 
 
 def _embed_cache_dir(settings) -> "pathlib.Path":
-    """Where embeddings already paid for live.
+    """Where embeddings already paid for live. See `Paths.embed_cache`.
 
-    At the volume root rather than under a tenant, for the reason the correction
-    cache is: an entry is keyed by the model, the width, the task and the text,
-    so reading one requires already holding that text. That is a saving, not a
-    channel.
+    Kept as a name here because eight call sites read it, and moved to `Paths`
+    because the answering path needs the same directory — two definitions would
+    be a cache that never hits.
     """
-    return settings.paths.cache / "embed"
+    return settings.paths.embed_cache
 
 
 def _charge(run_id: str, spend: Spend, provider: str = "vertex") -> Spend:

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
+from brainworker import config
 from brainworker.graph.schema import LEGACY_TENANT_ID
 
 from brainworker.answering.retrieve import OffCorpus, search
 from brainworker.answering.types import Plan, Question
+from .conftest import QDRANT
 
 
 def question(library: str, text: str = "¿Qué hace feliz a la gente?", **kw) -> Question:
@@ -332,3 +336,45 @@ def test_the_row_limit_and_the_per_chunk_cap_are_the_same_number():
 
     [(_, params)] = graph.calls
     assert params["limit"] == len(evidence) * wide
+
+
+def test_a_repeated_question_books_no_embedding_charge(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, library: str, on_topic
+):
+    """The query embedding is cached, and a hit must not be billed.
+
+    `search` fronts it with `CachedEmbedder` for latency rather than money —
+    measured 2026-09-06, everything else in that function totals 9 ms while the
+    one embedding ranged 0.4 s to 18.8 s against a per-minute quota. The hazard
+    the cache introduces is in the ledger: a hit hands back an `Embedding`
+    carrying the token count the *original* call cost, so reading that for the
+    charge would bill every repeat question for tokens nobody spent. The count
+    has to come from the embedder, which accumulates misses only.
+
+    A workspace of its own, so the cache starts empty and the first ask is a
+    miss whatever else has run on this machine.
+    """
+    monkeypatch.setenv("BRAIN_WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setenv("BRAIN_QDRANT_URL", QDRANT)
+    monkeypatch.setenv("BRAIN_GEMINI_PROJECT_ID", "proj-test")
+    monkeypatch.setenv(
+        "BRAIN_MEMGRAPH_URL",
+        os.environ.get("BRAIN_MEMGRAPH_URL", "bolt://127.0.0.1:7788"),
+    )
+    s = config.load()
+    question = Question(library_id=library, text="una pregunta repetida")
+    plan = Plan(intent="x", template_id=None, params={}, concepts=[],
+                rationale="", spend=None)
+
+    first: list = []
+    search(s, on_topic, question, plan, first)
+    (charge,) = [x for x in first if x.stage == "ask-embedding"]
+    assert charge.input_tokens > 0, "the first ask should have been a miss"
+
+    second: list = []
+    search(s, on_topic, question, plan, second)
+    (again,) = [x for x in second if x.stage == "ask-embedding"]
+    # The row is still written — a stage that ran for nothing and a stage that
+    # did not run are different facts — but it carries nothing.
+    assert again.input_tokens == 0, "a cached query embedding was billed again"
+    assert again.usd in (0, 0.0, None)

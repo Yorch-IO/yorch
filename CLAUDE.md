@@ -63,9 +63,11 @@ uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # 637 passed, 150 skipped
-# That is with the stack **down**, which is when graph/ and catalog/ skip. With
-# it up they run instead: 711 passed, 78 skipped, measured 2026-09-05.
+cd worker && uv sync && uv run pytest -q           # stack up: 843 passed, 78 skipped
+# Measured 2026-09-06 with the stack **up**. With it down, graph/ and catalog/
+# skip instead — 637 passed / 150 skipped the last time that was actually run
+# (2026-09-05, before conversations added 20 more catalog tests). The
+# stack-down figure has not been re-measured since; do not trust it to the digit.
 # The Bolt port must come from `docker`, not
 # `infra/.env`: BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789. Do **not** point that
 # run at a disposable BRAIN_QDRANT_COLLECTION to be safe — tests/answering read
@@ -91,7 +93,7 @@ uv run python scripts/measure_speech_rate.py --queries "predicación" -n 12
 
 # Desktop app
 cd app && npm install
-npm run typecheck && npx vitest run && npm run build   # 425 passed
+npm run typecheck && npx vitest run && npm run build   # 471 passed
 npx vitest run -t "define no key"                  # single test by name
 COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch npm run tauri dev
 
@@ -105,7 +107,7 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch \
 # and PKG_CONFIG_PATH set, or the `soup3-sys` build script fails first. No
 # `--release`: the tuned dev profile runs this gate in 60s at 412% CPU.
 export PKG_CONFIG_PATH=~/.local/tauri-sysroot/prefix/usr/lib/x86_64-linux-gnu/pkgconfig
-cd app/src-tauri && cargo test                     # 102 passed
+cd app/src-tauri && cargo test                     # 118 passed
 
 # Rebuild the image the API and worker actually run. **All three overlays.**
 # Without `dev` the `--build` recreates the containers and changes nothing;
@@ -454,15 +456,23 @@ driver, so there is one owner of the schema and one set of models.
   cost a pre-deletion snapshot on 2026-08-21, 24 minutes after it was taken.
   `infra/docker-compose.yaml` raises the count; a backup must never be the thing
   that removes the state you would want to go back to.
-- **The worker waits for the API, because the API owns the migrations.**
-  `api`'s lifespan applies the catalog migrations before it serves, which is what
-  keeps the schema and the code reading it from ever disagreeing. The worker
-  writes artifacts and costs to that catalog and migrates nothing, so
-  `infra/docker-compose.yaml` makes `worker` depend on `api` being *healthy* —
-  otherwise a cold start races a worker against an unmigrated schema. The
+- **The worker waits for the API, and the schema belongs to Prisma.**
+  `infra/docker-compose.yaml` makes `worker` depend on `api` being *healthy*, so
+  a cold start cannot race a worker against a schema that is not there. The
   coupling is startup-only on purpose: bookkeeping writes are best-effort, so an
   API that dies later must not stop the worker, and `depends_on` says nothing
   about that case.
+  **This paragraph used to say the API's lifespan applied the migrations, and it
+  had been wrong since the paid plane arrived** — corrected 2026-09-06.
+  Ownership moved to `../yorch-tauri-backend/prisma/migrations/`, applied by the
+  `migrate` compose service; `catalog/migrations.py` now *verifies* and says so
+  in its own docstring, applying nothing in production and reading the Prisma
+  files only for the Python tests. `require_schema` is a membership test rather
+  than a `>=`, because a database migrated ahead of the code is the ordinary
+  state during a rollout. Adding a table therefore means a Prisma migration, a
+  `schema.prisma` model, a bump to `REQUIRED_MIGRATION`, **and** an edit to the
+  literal list in `worker/tests/catalog/test_migrations.py` — which is spelled
+  out rather than derived precisely so an unintended migration fails the suite.
 - **Asking is two calls: hand the question over, then collect it.** `POST /ask`
   returns a `question_id` and `GET /ask/{id}` brings the answer, because the
   single synchronous call lost one. A real question against the church-history
@@ -474,6 +484,103 @@ driver, so there is one owner of the schema and one set of models.
   process's own memory, bounded and reaped, and is safe **only because uvicorn
   runs a single worker** (`entrypoint.py`) — passing `workers=N` there would
   send a poll to a process that never saw the question.
+### Conversations, and the rules that are not visible from any one file
+
+Added 2026-09-06. Multi-turn asking over the *same* retrieval path a one-shot
+question uses — `POST /chat`, `POST /chat/{id}/turn`, and an SSE stream per
+turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
+`activities/chatting.py`, `src/chat/` on the paid side, `ChatScreen.tsx` and
+`lib/chatSession.ts` in the app.
+
+- **A follow-up is rewritten into a standalone question, and that is the whole
+  mechanism.** `retrieve.search` embeds the text it is given and has no memory,
+  so "¿y su muerte?" would retrieve on the pronoun. `chat/rewrite.py` resolves
+  the referents against a bounded window and hands the result to
+  `answering.service.ask` unchanged — which is what lets every figure measured
+  against the one-shot path keep holding. A first turn makes **no call and no
+  charge**; only follow-ups pay. A failed rewrite degrades to the raw message
+  rather than failing the turn, the same shape as `service._style`.
+  Measured live: `resume eso en una frase` → *"¿Cómo se puede resumir en una
+  frase la doctrina de la justificación por la fe?"*, so it converts an
+  instruction and not only a pronoun.
+- **What streams is a draft; the `done` event is authoritative and replaces it.**
+  `citas` is the *last* field in `answer.SCHEMA`, so `_verify` cannot run until
+  the envelope closes — a turn can stream fluent, cited-looking prose and still
+  come back `insufficient_evidence` because the model cited chunks it was never
+  shown. `chatSession`'s reducer replaces rather than merges, and a refused
+  turn's empty answer wins over whatever was on screen. Appending would have
+  created the one thing this product must not do: unverified text under a
+  heading that says it was checked.
+- **Temporal owns the session; the catalog owns the record.** `ChatWorkflow`
+  carries only a bounded window (`WINDOW_TURNS`) and `continue_as_new` keeps even
+  that from growing, because a transcript in workflow state is bulk data in the
+  one place this codebase has a standing rule against — and would die with the
+  retention that already makes `ask.service.ts` answer `question_not_found`.
+  Going quiet ends the session *normally*; the next turn reseeds a new one from
+  `conversation_turn`. Note the consequence a client must handle: after a
+  `continue_as_new` the `turn` query answers `running` for a turn the previous
+  run answered, for ever. The settled turn is in the catalog and that is where
+  the collect path reads it.
+- **The stream relay is a table because it replays.** An activity cannot stream
+  to an HTTP response, and the two obvious channels were rejected on their own
+  terms — heartbeats are throttled to progress rather than tokens, and a
+  notification nobody heard is gone. `?since=N` is what makes a reader who
+  reloads resume where they were, which is the `/ask` two-call lesson arriving
+  from the streaming direction. Rows are flushed every 40 characters or 250 ms
+  and deleted on settle.
+- **Streamed prose is about 8% of the wait, which is why stages exist.**
+  Measured 2026-09-06 before they were built: on `brief` a turn was **10.0 s**
+  end to end and the relay filled in **0.8 s** at the very end; a `standard`
+  turn on the same library took **75 s**. The cause is in the token counts — a
+  297-character answer cost **1247 output tokens**, so most were reasoning, and
+  `answering` has thinking on deliberately, so the model emits no visible text
+  until it has finished thinking and then flushes almost at once. The reader had
+  one unchanging line over four things that can each take seconds, and a slow
+  stage looked exactly like a hung one.
+  Stage events were built the same day, and the timeline of a real `brief` turn
+  is now the argument for them:
+
+  | at | event | |
+  |---|---|---|
+  | 0.20 s | `planning` | |
+  | 3.01 s | `retrieving` | the planning call took 2.8 s |
+  | 3.42 s | `evidence` | `chunks=4 dense=2` |
+  | 3.42 s | `generating` | |
+  | 13.48 s | first token | **the model reasoned for 10.1 s** |
+  | 13.89 s | last of 5 tokens | 436 characters in 0.41 s |
+  | 15.29 s | `done` | |
+
+  So the dominant cost of a turn is reasoning before the first visible token,
+  and nothing could see that before. `evidence` reports the dense-floor count
+  `search` was already computing and discarding, so it costs no tokens and no
+  round trip.
+- **A stage travels as one event type carrying a name, never one type per
+  stage.** Both planes map the relay row's `kind` onto `type: "stage"` and pass
+  the payload through, and every client already ignores an event type it does
+  not know — so a stage added in the worker reaches an older window as a `stage`
+  it can render or ignore, and needs no change in TypeScript, Rust or the paid
+  plane. The client falls back to the generic line for a name it has no label
+  for, which is the failure the sidebar's raw `nav.chat` demonstrated.
+- **`text` on a relay row means prose the reader sees, and nothing else.** A
+  stage's payload goes in `detail`. Squeezing a stage name into `text` would
+  have it concatenated into the middle of an answer by any client that appends
+  deltas without checking the kind — and three tests, one per layer, exist to
+  say so.
+- **An unmeasured count is not a zero.** `dense` absent means the probe never
+  ran; `dense: 0` is a real fact about the corpus and worth printing. The two
+  render differently, which is `/project-summary`'s `available` rule applied to
+  a figure rather than to a leg.
+- **`ChatTurn.tenant_id` is required, unlike `Question.tenant_id`.** A tenant
+  default on a *field* is what put a paying organisation's graph into the legacy
+  tenant with nothing failing anywhere; `Question` carries that default because
+  it predates the rule. A dataclass added afterwards does not get the excuse, and
+  `chat.parity.spec.ts` asserts Python still refuses to supply one.
+- **`open_turn` is one statement that is the ownership predicate, the tenant
+  derivation and the sequence assignment at once.** Splitting any of the three
+  out would make an id authorization, which the free plane's `/reindex` already
+  records as a silent cross-tenant write. The primary key settles the race two
+  concurrent turns can lose.
+
 - **`off_corpus` and `insufficient_evidence` are different states.** The first
   means nothing cleared `topicality_gate`'s dense floor, the second means the
   corpus was searched and came up short. They have different fixes.
@@ -1133,15 +1240,36 @@ about that split has run outside the test suite.** `doc/VIDEO.md` has the table.
 
 **Three other things about it have never run.** `doc/VIDEO.md` is the record; what belongs in *this* list is what is
 missing. **Nobody has approved a video gate from the UI** — the panel and all
-three gate states were screenshotted in the real window and clicks navigate, but
-synthetic keystrokes do not reach the WebKit webview on this machine, so typing a
-URL and pressing Approve is untested by anything but code. **No video has been
+three gate states were screenshotted in the real window and clicks navigate, and
+typing a URL and pressing Approve is still untested by anything but code.
+**The reason recorded here was wrong, though, and it was the blocker: synthetic
+keystrokes *do* reach this webview.** `xdotool type --window` does not — that is
+`XSendEvent`, which WebKitGTK ignores — but plain `xdotool type`, which goes
+through **XTEST**, works. Measured 2026-09-06 by typing six questions into the
+Conversation screen's composer in the real window and sending them with `Return`.
+So this verification is unblocked and merely undone; the recipe is
+`GDK_BACKEND=x11` (so the window is an XWayland client `xdotool` and `import` can
+see at all), `xdotool search --name "Company Brain"`, `mousemove --window` to
+focus a field, then `xdotool type` with **no** `--window`. **No video has been
 indexed on the paid plane**: production serves `POST /videos` (verified — it
 answers 401 where an unknown route answers 404) and no run has ever started
 there. And **nothing longer than 19 seconds has been indexed at all**, on either
 plane, so the grouping constants meet a real hour-long talk for the first time
 whenever somebody tries one. Playlists and channels are refused by design, not
 missing.
+
+**Conversations are built and exercised; three things about them have not run.**
+Six real turns went through the real window against the live free plane on
+2026-09-06 — 3 answered, 1 `insufficient_evidence`, 2 `off_corpus`, $0.1044
+total — and both `chat.parity.spec.ts` and the routes were verified on the paid
+plane, which answers 401 on every chat path where an unknown route answers 404.
+Stage events were added the same day and are verified live — see the timeline in
+*Conversations* above. What has not happened: **no conversation has ever been
+held on the paid plane** (that needs a Cognito JWT and would spend on
+`preprod`'s 73 books); and **nobody has watched the draft→settled replacement
+happen**, because the only turn that could have shown it refused *before*
+`compose` was reached. The replacement is covered by tests at three layers and
+by nothing in a window.
 
 **Folder watching does not exist.** `source_folder` and its repository methods
 are there; there is no scan workflow, no add/change/delete detection, and
@@ -2069,6 +2197,92 @@ session's files.
   `_charge` call; recorded rather than done because a replay's real cost is a
   question about whether re-projecting an artifact spends at all, and nobody has
   measured it.
+
+- **A 30-second retrieval turned out to be the query embedding, and the
+  latency has nothing to do with the cost.** Found on 2026-09-06 by the stage
+  events on their second live turn — which is the point of them — and settled
+  the same day by timing each phase inside the worker container:
+
+  | phase | |
+  |---|---|
+  | `provider.embed` | **0.36 s – 18.8 s**, one call |
+  | Qdrant dense probe | 0.004 s |
+  | Qdrant hybrid search | 0.003 s |
+  | `_expand`, every graph read | 0.002 s |
+
+  So the whole of `search` outside the embedding is **9 ms**, and the one
+  network call in it swings by fifty times. Ten calls in a row produced 3.6,
+  1.0, 9.2, 3.1, 1.1, 3.9, 0.8, 0.4, **18.8** and 0.4 seconds, one of them
+  logging `embed failed (provider_quota), retrying in 2.1s [1/6]` — and the
+  18.8-second call logged nothing at all, so raw latency reaches that on its own
+  without the retry policy being involved. The quota is the recorded
+  per-minute bucket (`online_prediction_requests_per_base_model`, measured at
+  ~6 embeddings a minute sustained), and `RATE_LIMIT_ATTEMPTS` waits 2/8/32/60
+  honouring `Retry-After`, so a turn that meets it twice spends forty seconds
+  inside one call.
+  **The useful part is the asymmetry.** `ask-embedding` costs about
+  **$0.000004** — four orders of magnitude under the answering call, which is
+  why it was invisible in the ledger for so long — and it is nonetheless the
+  dominant latency risk in retrieval. Cost told nobody anything about it; a
+  stage event did, immediately. Anything that reasons about where a turn's time
+  goes has to measure, because the cheap call is the slow one.
+  **The query embedding is cached since 2026-09-06, and the measurement is what
+  prompted it.** `retrieve.search` fronts it with the same `CachedEmbedder`
+  indexing uses, over the same `docagent.embedcache` keyed on
+  (model, width, task, text), reading `Paths.embed_cache` — moved onto `Paths`
+  precisely so the two callers cannot disagree about the directory, which would
+  be a cache that silently never hits. Measured on the same question asked
+  twice: `retrieving` → `evidence` went **0.40 s → 0.00 s**, and the charge went
+  **12 tokens → 0**.
+  Two things it introduced that are easy to get wrong. **A cache hit must not be
+  billed**: the returned `Embedding` carries the token count the *original* call
+  cost — right for saying what a vector was worth, wrong for billing — so the
+  charge is read from `embedder.usage`, which accumulates misses only. Reading
+  the other one books money nobody spent on every repeat question, and
+  `test_a_repeated_question_books_no_embedding_charge` fails with exactly that
+  message when it is. The row is still written on a hit, carrying zero, because
+  a stage that ran for nothing and a stage that did not run are different facts.
+  And **a cached vector is float32** where a fresh one is whatever the API
+  returned, so two asks of one question are not bit-identical. Qdrant stores and
+  compares float32 either way, so the ranking cannot move measurably — but
+  anything comparing scores across asks should know.
+
+- **The i18n dead-key scan is blind to a *read with no key*, and a dynamic key
+  hides a whole family of them.** The scan reports a key nothing reads; it cannot
+  report a `t()` call with nothing behind it. The sidebar renders
+  ``t(`nav.${name}`)``, so the scan's dynamic-key fallback marks every `nav.*` as
+  used — and an eighth tab added on 2026-09-06 rendered the literal string
+  `nav.chat` in the real window, having passed the whole suite. Closed for the
+  nav specifically by `i18n.test.ts::names every tab in the sidebar`, which reads
+  `TABS` out of `App.tsx` and requires a label in both bundles. **Every other
+  dynamic key in the app still has the hole**, and the general fix — asserting
+  that each `t()` call site resolves — is not built.
+
+- **A `useEffect` that persists state runs on mount, with the state empty.**
+  `ChatScreen` saved the selected conversation on every change and restored it
+  from `localStorage` on mount. Both effects run after mount; the save is
+  synchronous and the restore awaits a fetch, so the save wrote `null` first and
+  deleted the id before the restore could read it. **The feature never worked
+  once**, and nothing in the suite could see it because no test remounted the
+  screen with a populated `localStorage`. Fixed by persisting only a non-null
+  selection and clearing explicitly in the one gesture that means "no
+  conversation" rather than "not yet". Worth checking wherever else this shape
+  appears: `askSession`'s `saveSession` is safe only because an empty session is
+  the same thing as no session.
+
+- **`control.rs`'s `Answer` struct drops `effort` and `style_effort`.** It
+  declares only `state, text, citations, evidence, reason, spend`, and serde
+  discards unknown fields on the way through — so both have never reached the
+  webview, even though `api.ts` declares `effort` and the Python `Answer` carries
+  them. A second, different hop from the `asdict` failure already recorded for
+  `style_effort`. The conversation path is unaffected: `ConversationTurn`
+  declares both and renders `styleEffort`.
+
+- **An `ol` marker aligns to the *last* line of an inline-block child.** Every
+  citation in `ol.citations` is a `button.link`, so a claim wrapping to four
+  lines put its own number beside the fourth. Fixed 2026-09-06 with
+  `vertical-align: top` after seeing it in the real window; the Ask screen shares
+  the rule and had the same defect, hidden by shorter claims.
 
 - **The i18n dead-key scan matches on a prefix, so one key can hide another.**
   `isUsed` looks for the literal key text anywhere in the source, and

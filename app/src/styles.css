@@ -774,6 +774,132 @@ ul.evidence .title {
   align-items: start;
 }
 
+/* Conversations.
+ *
+ * Declared here, above the shared `76rem` query, and added to its selector
+ * list — the reason `.graph-layout` records at length: a media query is not a
+ * stronger rule, only a conditional one, so a grid declared *below* it wins at
+ * equal specificity and the layout never collapses. `.explore-panes` and
+ * `.ask-columns` work solely because they sit above it too.
+ *
+ * The middle column is wider than Ask's, and the left one narrower: a
+ * transcript is read as a column of prose rather than scanned, and a
+ * conversation list carries a title and a count where Ask's history carries a
+ * whole question. */
+.chat-columns {
+  display: grid;
+  grid-template-columns: minmax(11rem, 0.9fr) minmax(26rem, 2.6fr) minmax(17rem, 1.3fr);
+  gap: 1.25rem;
+  margin-top: 1rem;
+  align-items: start;
+}
+
+/* The transcript scrolls inside its own pane rather than growing the page: the
+   composer has to stay reachable without scrolling back down past the whole
+   conversation to find it.
+ *
+ * Viewport-relative rather than a fixed height, which a screenshot pass is what
+ * caught: at 26rem the box held about two and a half turns and clipped the
+ * third mid-line, while a 1400px-tall window had 550px of nothing underneath
+ * the panes. Clamped at both ends — below 16rem a turn does not fit at all, and
+ * above 40rem the composer starts leaving the fold on a short window. */
+.transcript {
+  max-height: clamp(16rem, 50vh, 40rem);
+  overflow-y: auto;
+  margin-bottom: 0.75rem;
+}
+
+.turn {
+  border-top: 1px solid var(--line);
+  padding: 0.75rem 0;
+}
+
+.turn:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+/* The question, set apart from the answer. Left border rather than a background
+   so a long exchange does not read as a stack of cards. */
+.turn .asked {
+  margin: 0 0 0.35rem;
+  padding-left: 0.6rem;
+  border-left: 3px solid var(--accent);
+  font-weight: 600;
+}
+
+/* What was actually searched for, when it differs from what was typed. Muted
+   and small because it is provenance rather than content — but present, because
+   an answer to a question the person did not type is indistinguishable from a
+   bad answer unless this is visible. */
+.turn .searched {
+  margin: 0 0 0.5rem;
+  padding-left: 0.6rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.turn .prose {
+  margin: 0.25rem 0;
+  white-space: pre-wrap;
+}
+
+/* A turn still being written. The prose is a draft and the `done` event
+   replaces it, so this says "not final yet" without implying anything is
+   wrong — `.reason`'s colour is for a refusal. */
+.turn .prose.streaming {
+  color: var(--fg);
+}
+
+.turn .thinking {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* Where a turn has got to. A column rather than a line, because the evidence
+   count stays visible under the later stages: once the passages are found, how
+   many there were is the most useful thing on screen while the model writes. */
+.turn .progress-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0.25rem 0;
+}
+
+.turn.failed .reason,
+.turn.insufficient_evidence .reason,
+.turn.off_corpus .reason {
+  color: var(--muted);
+  margin: 0.25rem 0;
+}
+
+.turn .guidance {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.25rem 0 0;
+}
+
+/* The delete confirmation, inline in the row rather than a dialog: the row is
+   the thing being deleted and moving the decision elsewhere loses which one. */
+.pane-conversations .confirm {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.pane-conversations ul.history li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.pane-conversations ul.history li .link:first-child {
+  flex: 1 1 100%;
+  text-align: left;
+}
+
 ul.history {
   list-style: none;
   margin: 0;
@@ -822,6 +948,12 @@ ul.history .muted {
 ol.citations button.link {
   white-space: normal;
   overflow-wrap: anywhere;
+  /* An inline-block's baseline is the baseline of its *last* line, and the list
+     marker aligns to the line box that contains it — so a citation wrapping to
+     four lines put its own number beside the fourth. Found in the real window on
+     a conversation whose claims ran long; the Ask screen shares this rule and had
+     the same defect, hidden by shorter claims. */
+  vertical-align: top;
 }
 
 .passage {
@@ -865,7 +997,8 @@ ol.citations button.link {
    would each get about 18rem of a window that looks wide enough. */
 @media (max-width: 76rem) {
   .explore-panes,
-  .ask-columns {
+  .ask-columns,
+  .chat-columns {
     grid-template-columns: 1fr;
   }
 }

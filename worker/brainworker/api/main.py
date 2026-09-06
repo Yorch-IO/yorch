@@ -10,13 +10,14 @@ in docker-compose.yaml, and breaking it would need to be a deliberate act.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import pathlib
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 from uuid import uuid4
@@ -24,6 +25,7 @@ from uuid import uuid4
 import httpx
 import psycopg
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client
 
@@ -32,7 +34,16 @@ from ..artifacts import ArtifactRef, ArtifactStore
 from ..catalog import Catalog, MigrationError, current_version, require_schema
 from ..graph import DEFAULT_CONFIDENCE_FLOOR, Graph, GraphError
 from ..graph.queries import TemplateError, bind, get
-from ..answering.effort import MAX_STYLE_CHARS
+from ..answering.effort import DEFAULT_EFFORT, MAX_STYLE_CHARS
+from ..chat.title import fallback as fallback_title
+from ..chat.types import (
+    MAX_MESSAGE_CHARS,
+    WINDOW_ANSWER_CHARS,
+    WINDOW_TURNS,
+    ChatStart,
+    ChatTurn,
+    TurnRecord,
+)
 from ..graph.schema import LEGACY_TENANT_ID, SEMANTIC_EDGES
 from ..activities.rebuild import REQUIRED_ARTIFACT
 
@@ -49,6 +60,7 @@ from ..pipeline import (
     VideoRequest,
 )
 from ..workflows.ask import AskWorkflow
+from ..workflows.chat import ChatWorkflow
 from ..workflows.ingest import Approval, IngestWorkflow
 from ..workflows.rebuild import RebuildWorkflow
 from ..workflows.video import VideoIngestWorkflow
@@ -1817,6 +1829,373 @@ def _explore(template_id: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                 "message": f"No se pudo consultar el grafo: {e}",
             },
         ) from e
+
+
+# ---------------------------------------------------------------------------
+# Conversations
+#
+# The same two-clock split `/ask` records above, plus the half a conversation
+# adds: **the answer is written in the worker and read in the API**, in another
+# process. `POST /chat/{id}/turn` claims a turn number and signals; the prose
+# arrives through `conversation_delta`, which the activity writes and the stream
+# route reads.
+#
+# A table rather than a notification because it replays. `?since=N` is what makes
+# a reader who reloads, or whose connection drops, resume from where they were
+# instead of from nothing — which is the same failure the `/ask` split exists to
+# prevent, arriving from the streaming direction.
+#
+# `LEGACY_TENANT_ID` is named at every call site here. This plane *is* the free,
+# self-managed, single-tenant one, and saying so is what makes it a decision
+# rather than a default that travelled.
+
+
+@dataclass
+class NewConversation:
+    library_id: str
+
+
+@dataclass
+class NewTurn:
+    """One message. The cap is a *field constraint* on purpose.
+
+    Both planes then answer an oversized body with FastAPI's own
+    422-with-a-list, the same decision `Question.effort` and
+    `AnswerStyleUpdate.body` already record — a hand-raised 400 carrying a `kind`
+    would make the two planes answer one bad request two different ways.
+    """
+
+    text: Annotated[str, Field(max_length=MAX_MESSAGE_CHARS)]
+    effort: Literal["brief", "standard", "thorough"] = DEFAULT_EFFORT
+
+
+def _turn_json(turn: Any) -> dict[str, Any]:
+    return {
+        "seq": turn.seq,
+        "question": turn.question,
+        "searched": turn.searched,
+        "answer": turn.answer,
+        "state": turn.state,
+        "effort": turn.effort,
+        "style_effort": turn.style_effort,
+        "citations": turn.citations,
+        "cited_evidence": turn.cited_evidence,
+        "error": turn.error,
+        "asked_at": turn.asked_at.isoformat() if turn.asked_at else None,
+        "answered_at": turn.answered_at.isoformat() if turn.answered_at else None,
+    }
+
+
+def _conversation_json(row: Any) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "library_id": row.library_id,
+        "title": row.title,
+        "title_generated": row.title_generated,
+        "turns": row.turns,
+        "created_at": row.created_at.isoformat(),
+        "last_message_at": row.last_message_at.isoformat(),
+    }
+
+
+def _unreachable(e: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "kind": "catalog_unreachable",
+            "message": f"No se pudo leer el catálogo ({type(e).__name__}: {e}).",
+        },
+    )
+
+
+_NO_CONVERSATION = HTTPException(
+    status_code=404,
+    detail={
+        "kind": "conversation_not_found",
+        "message": "Esa conversación no existe.",
+    },
+)
+
+
+@app.post("/chat")
+async def create_conversation(body: NewConversation) -> dict[str, Any]:
+    """Open a conversation. Must precede any turn.
+
+    Not an optimisation: `conversation_turn` and `conversation_delta` derive
+    their tenant in the INSERT from this row, so a turn signalled for a
+    conversation that does not exist would insert nothing at all — silently, the
+    same way an event written before its run row is silently dropped.
+    """
+    s = settings()
+    conversation_id = f"cnv_{uuid4().hex[:24]}"
+    try:
+        with Catalog(s.database_url, pooled=False) as catalog:
+            catalog.start_conversation(
+                conversation_id,
+                tenant_id=LEGACY_TENANT_ID,
+                library_id=body.library_id,
+                title="",
+            )
+    except Exception as e:
+        raise _unreachable(e) from e
+    return {"conversation_id": conversation_id, "library_id": body.library_id}
+
+
+@app.get("/chat")
+async def list_conversations(limit: int = 50) -> dict[str, Any]:
+    s = settings()
+    try:
+        with Catalog(s.database_url, pooled=False) as catalog:
+            rows = catalog.conversations(
+                tenant_id=LEGACY_TENANT_ID, limit=max(1, min(limit, 200))
+            )
+    except Exception as e:
+        raise _unreachable(e) from e
+    return {"conversations": [_conversation_json(r) for r in rows]}
+
+
+@app.get("/chat/{conversation_id}")
+async def read_conversation(conversation_id: str) -> dict[str, Any]:
+    """The whole transcript, which is what survives Temporal's retention."""
+    s = settings()
+    try:
+        with Catalog(s.database_url, pooled=False) as catalog:
+            row = catalog.conversation(conversation_id, tenant_id=LEGACY_TENANT_ID)
+            if row is None:
+                raise _NO_CONVERSATION
+            turns = catalog.turns(conversation_id, tenant_id=LEGACY_TENANT_ID)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _unreachable(e) from e
+    return {**_conversation_json(row), "turns_detail": [_turn_json(t) for t in turns]}
+
+
+@app.delete("/chat/{conversation_id}", status_code=204)
+async def delete_conversation(conversation_id: str) -> None:
+    s = settings()
+    try:
+        with Catalog(s.database_url, pooled=False) as catalog:
+            if not catalog.delete_conversation(
+                conversation_id, tenant_id=LEGACY_TENANT_ID
+            ):
+                raise _NO_CONVERSATION
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _unreachable(e) from e
+
+
+@app.post("/chat/{conversation_id}/turn")
+async def add_turn(conversation_id: str, body: NewTurn) -> dict[str, Any]:
+    """Claim a turn number and hand the question to the conversation's session.
+
+    **Signal-with-start**, so this is one call whether or not a session is live.
+    A conversation whose workflow has gone dormant — or aged out of Temporal
+    entirely — is resumed here from the catalog, which is what makes the record
+    outlive the retention that bounds the session.
+
+    The sequence number is claimed *before* the signal, in the same statement
+    that checks who owns the conversation, so the signal carries an id the
+    workflow can be idempotent on: a duplicated delivery names a turn already
+    queued and is dropped rather than asked and billed twice.
+    """
+    s = settings()
+    if not s.gemini.configured:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "kind": "provider_unconfigured",
+                "message": "Falta BRAIN_GEMINI_PROJECT_ID: no se puede conversar.",
+            },
+        )
+
+    try:
+        with Catalog(s.database_url, pooled=False) as catalog:
+            row = catalog.conversation(conversation_id, tenant_id=LEGACY_TENANT_ID)
+            if row is None:
+                raise _NO_CONVERSATION
+
+            # The window the session starts from, if this is the one that starts
+            # it. Only settled turns: a turn still running has no answer to
+            # resolve a pronoun against, and a failed one has none either.
+            history = [
+                TurnRecord(question=t.question, answer=t.answer[:WINDOW_ANSWER_CHARS])
+                for t in catalog.turns(
+                    conversation_id, tenant_id=LEGACY_TENANT_ID, limit=WINDOW_TURNS * 2
+                )
+                if t.answer
+            ][-WINDOW_TURNS:]
+
+            seq = catalog.open_turn(
+                conversation_id,
+                tenant_id=LEGACY_TENANT_ID,
+                question=body.text,
+                effort=body.effort,
+            )
+            if seq is None:
+                raise _NO_CONVERSATION
+
+            # The first question names the conversation until `chat-title` does.
+            # Written here rather than at creation because the title is the first
+            # *question*, and at creation there is not one yet.
+            if seq == 1:
+                catalog.set_conversation_title(
+                    conversation_id,
+                    fallback_title(body.text),
+                    tenant_id=LEGACY_TENANT_ID,
+                    generated=False,
+                )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _unreachable(e) from e
+
+    turn = ChatTurn(
+        conversation_id=conversation_id,
+        turn_seq=seq,
+        text=body.text,
+        library_id=row.library_id,
+        tenant_id=LEGACY_TENANT_ID,
+        effort=body.effort,
+    )
+    client = await temporal()
+    await client.start_workflow(
+        ChatWorkflow.run,
+        ChatStart(
+            conversation_id=conversation_id,
+            library_id=row.library_id,
+            tenant_id=LEGACY_TENANT_ID,
+            window=history,
+            answered=row.turns,
+        ),
+        id=f"chat-{conversation_id}",
+        task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
+        start_signal="ask",
+        start_signal_args=[turn],
+    )
+    return {"conversation_id": conversation_id, "turn_seq": seq, "state": "running"}
+
+
+#: How often the stream route looks for new prose. Fast enough that text reads as
+#: arriving rather than appearing, slow enough that a turn taking a minute costs
+#: a few hundred cheap indexed reads on one pooled connection.
+STREAM_POLL_SECONDS = 0.2
+
+#: A stream never outlives the turn it is following by more than this. The
+#: activity's own ceiling is `TURN_TIMEOUT`; this is the backstop for a turn whose
+#: row never settles at all — a worker killed mid-answer, say — so a generator
+#: cannot be left running for the lifetime of the process.
+STREAM_MAX_SECONDS = 20 * 60
+
+
+def _sse(payload: dict[str, Any]) -> str:
+    """One event. No `event:` name — the type is a field, so one handler reads
+    every event and an unknown one is data rather than a dropped message."""
+    return f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+
+@app.get("/chat/{conversation_id}/turn/{turn_seq}/stream")
+async def stream_turn(
+    conversation_id: str, turn_seq: int, since: int = 0
+) -> StreamingResponse:
+    """The answer, as it is written.
+
+    `since` is the resume point: pass the highest chunk sequence already seen and
+    only what follows it is sent. A reader who never disconnects passes 0 once.
+
+    Ends on the turn's own row settling, not on the relay going quiet — a model
+    that pauses mid-answer is not a model that has finished. The terminal `done`
+    event carries the whole settled turn, and **it is authoritative**: the prose
+    that streamed is a draft of one field, and a turn can stream fluently and
+    still come back `insufficient_evidence` because the citations, which arrive
+    last in the envelope, did not survive verification. A client must replace
+    what it showed rather than keep it.
+
+    A disconnected client stops the stream and **does not stop the turn**.
+    Generation is one call and is billed for what it produced, so cancelling
+    refunds nothing and would reproduce exactly the failure `/ask` split its two
+    calls to avoid: an answer computed, billed, and thrown away.
+    """
+    s = settings()
+
+    async def events():
+        deadline = time.monotonic() + STREAM_MAX_SECONDS
+        cursor = since
+        try:
+            # Pooled, unlike every other read here: this one connection is used
+            # a few hundred times over a turn, and an unpooled catalog opens a
+            # fresh connection per statement.
+            with Catalog(s.database_url, min_size=1, max_size=2) as catalog:
+                while True:
+                    for row in catalog.relay(
+                        conversation_id, turn_seq,
+                        tenant_id=LEGACY_TENANT_ID, since=cursor,
+                    ):
+                        cursor = int(row["chunk_seq"])
+                        # One ordered stream, two kinds. A row whose kind is not
+                        # `token` is a stage, and its name goes on the wire as
+                        # the stage rather than as a fourth event type per
+                        # stage — so a stage added in the worker reaches an
+                        # older client as a `stage` event it can render or
+                        # ignore, instead of as an unknown event type.
+                        if row["kind"] == "token":
+                            yield _sse({
+                                "type": "token",
+                                "seq": cursor,
+                                "text": row["text"],
+                            })
+                        else:
+                            yield _sse({
+                                "type": "stage",
+                                "seq": cursor,
+                                "stage": row["kind"],
+                                **(row["detail"] or {}),
+                            })
+
+                    settled = next(
+                        (
+                            t
+                            for t in catalog.turns(
+                                conversation_id, tenant_id=LEGACY_TENANT_ID
+                            )
+                            if t.seq == turn_seq and t.state != "running"
+                        ),
+                        None,
+                    )
+                    if settled is not None:
+                        yield _sse({"type": "done", "turn": _turn_json(settled)})
+                        return
+                    if time.monotonic() > deadline:
+                        yield _sse({
+                            "type": "error",
+                            "kind": "turn_abandoned",
+                            "message": (
+                                "El turno no terminó dentro del tiempo previsto; "
+                                "vuelve a abrir la conversación para ver su estado."
+                            ),
+                        })
+                        return
+                    await asyncio.sleep(STREAM_POLL_SECONDS)
+        except asyncio.CancelledError:
+            # The reader went away. The turn keeps going and lands in the
+            # catalog; there is nothing to clean up and nothing to refund.
+            raise
+        except Exception as e:
+            # Never a 500 mid-flight: the response has already begun, so the only
+            # way to say what happened is to say it in the stream.
+            yield _sse({
+                "type": "error",
+                "kind": "catalog_unreachable",
+                "message": f"{type(e).__name__}: {e}",
+            })
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/answer-styles")

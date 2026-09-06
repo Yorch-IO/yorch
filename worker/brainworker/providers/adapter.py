@@ -116,6 +116,54 @@ class VertexAdapter:
                 f"model returned invalid JSON despite a response schema: {e}"
             ) from e
 
+    def generate_json_stream(
+        self,
+        prompt: str,
+        *,
+        system: str,
+        schema: dict,
+        on_delta: Callable[[str], None],
+        stage: str = "generate",
+        history: Sequence[tuple[str, str]] | None = None,
+        thinking_budget: int | None = None,
+    ) -> Any:
+        """`generate_json`, with the raw envelope handed to `on_delta` as it arrives.
+
+        **`on_delta` receives JSON, not prose.** What arrives is the serialised
+        object — braces, field names and escapes — because that is what the model
+        writes in JSON mode. Turning it into readable text is
+        `answering.jsonstream.FieldStreamer`'s job, and it lives there rather
+        than here so that this stays a transport concern and the decoding stays
+        a pure function with a test table.
+
+        The return value is the parsed object, identical to `generate_json`'s.
+        Everything that reads the answer — the sufficiency flag, the citations,
+        the verification — reads it from there, so a streamed call and a whole
+        one produce the same `Answer` from the same bytes. What streamed is a
+        draft of one field; what is returned is the document.
+        """
+        result = self.provider.generate_stream(
+            prompt,
+            on_delta=on_delta,
+            system=system,
+            temperature=0.0,
+            response_schema=schema,
+            stage=stage,
+            **({"history": history} if history else {}),
+            **({"thinking_budget": thinking_budget} if thinking_budget is not None else {}),
+        )
+        self.usage.add(result.usage)
+        log.debug(
+            "%s (streamed): %d in / %d out tokens",
+            stage, result.usage.input_tokens, result.usage.output_tokens,
+        )
+        try:
+            return json.loads(result.text)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"model returned invalid JSON despite a response schema: {e}"
+            ) from e
+
 
 class CachedEmbedder:
     """Implements `docagent.runner.Embedder` over the ADC provider, with a cache.

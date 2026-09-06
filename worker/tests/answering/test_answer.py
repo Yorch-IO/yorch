@@ -419,3 +419,127 @@ def test_every_way_out_of_compose_records_the_level_it_answered_at():
 
     # And the answered path.
     assert mod.compose(FakeProvider(_answered()), asked, evidence(2)).effort == "thorough"
+
+
+# -- streaming --------------------------------------------------------------
+#
+# `citas` is the last field in SCHEMA, so verification cannot run until the
+# envelope closes. Everything below is about that gap: what a reader is shown
+# while it is open, and what is true once it shuts.
+
+
+class StreamingProvider(FakeProvider):
+    """Hands the canned payload over in fixed-size pieces, like a real stream."""
+
+    def __init__(self, payload, *, piece: int = 7) -> None:
+        super().__init__(payload)
+        self.piece = piece
+
+    def generate_stream(self, prompt, *, on_delta, **kw):
+        result = self.generate(prompt, **kw)
+        for i in range(0, len(result.text), self.piece):
+            on_delta(result.text[i:i + self.piece])
+        return result
+
+
+def stream(payload, ev=None, **kw):
+    """Compose with streaming on; return (answer, what the reader was shown)."""
+    shown: list[str] = []
+    provider = StreamingProvider(payload, **kw)
+    result = mod.compose(
+        provider, question(), evidence(2) if ev is None else ev,
+        on_delta=shown.append,
+    )
+    return result, "".join(shown)
+
+
+def test_the_prose_is_streamed_and_the_envelope_is_not():
+    answer, shown = stream({
+        "suficiente": True,
+        "respuesta": "La gente es feliz cuando tiene propósito.",
+        "citas": [{"chunk_id": f"chk_{0:024d}", "afirmacion": "propósito"}],
+        "motivo": "",
+    })
+    assert answer.state == "answered"
+    # No braces, no field names, no escapes: the reader saw prose.
+    assert shown == "La gente es feliz cuando tiene propósito."
+    assert "suficiente" not in shown and "{" not in shown
+
+
+def test_streaming_produces_the_same_answer_as_not_streaming():
+    payload = {
+        "suficiente": True,
+        "respuesta": "Una respuesta cualquiera.",
+        "citas": [{"chunk_id": f"chk_{1:024d}", "afirmacion": "algo"}],
+        "motivo": "",
+    }
+    whole = mod.compose(FakeProvider(payload), question(), evidence(2))
+    streamed, _ = stream(payload)
+    assert dataclasses.asdict(streamed) == dataclasses.asdict(whole)
+
+
+def test_a_streamed_turn_that_loses_its_citations_is_still_refused():
+    """The gap this whole design has to survive.
+
+    The model wrote a confident, fluent paragraph and cited a chunk it was never
+    shown. The reader watched that paragraph arrive. It is still not an answer,
+    and `state` has to say so — otherwise streaming would have created a way to
+    ship an unverified answer that the non-streaming path refuses.
+    """
+    answer, shown = stream({
+        "suficiente": True,
+        "respuesta": "La felicidad procede de la virtud, según el texto.",
+        "citas": [{"chunk_id": "chk_" + "f" * 24, "afirmacion": "inventada"}],
+        "motivo": "",
+    })
+    assert shown == "La felicidad procede de la virtud, según el texto."
+    assert answer.state == "insufficient_evidence"
+    assert answer.text == ""
+    assert answer.citations == []
+    assert "inexistente" in answer.reason
+
+
+def test_a_streamed_turn_the_model_itself_refuses_streams_nothing():
+    """`suficiente: false` comes first in the envelope and `respuesta` is empty,
+    so there is no draft to withdraw — the refusal is all there ever was."""
+    answer, shown = stream({
+        "suficiente": False,
+        "respuesta": "",
+        "citas": [],
+        "motivo": "los fragmentos no hablan de eso",
+    })
+    assert shown == ""
+    assert answer.state == "insufficient_evidence"
+    assert answer.reason == "los fragmentos no hablan de eso"
+
+
+def test_a_truncated_envelope_still_hands_over_the_draft_it_had():
+    """`MAX_TOKENS` cuts the object mid-string.
+
+    `json.loads` then fails and the turn is refused — but the characters already
+    decoded were paid for, and the caller is owed them so it can explain what
+    happened rather than showing a blank.
+    """
+    answer, shown = stream('{"suficiente": true, "respuesta": "empezó a responder y')
+    assert shown == "empezó a responder y"
+    assert answer.state == "insufficient_evidence"
+    assert answer.spend, "a truncated call still billed for its tokens"
+
+
+def test_the_draft_may_contain_a_chunk_id_the_finished_answer_does_not():
+    """`_clean` runs on the parsed text, never on the deltas.
+
+    So the two can differ, and this pins the direction: what is returned is
+    clean. A caller that appended the deltas instead of replacing them would
+    leave an id on screen that the answer does not contain.
+    """
+    cited = f"chk_{0:024d}"
+    answer, shown = stream({
+        "suficiente": True,
+        "respuesta": f"La virtud basta [{cited}].",
+        "citas": [{"chunk_id": cited, "afirmacion": "virtud"}],
+        "motivo": "",
+    })
+    assert cited in shown
+    assert cited not in answer.text
+    assert answer.state == "answered"

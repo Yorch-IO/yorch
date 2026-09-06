@@ -788,6 +788,128 @@ export interface AskProgress {
   error: AskFailure | null;
 }
 
+// -- conversations ----------------------------------------------------------
+//
+// A conversation is multi-turn asking over the same retrieval path a one-shot
+// question uses. Two things about the shape are worth knowing before reading
+// the screen:
+//
+// The transcript comes from the **catalog**, not from Temporal — which is what
+// lets a conversation outlive the retention that bounds a session. So there is
+// no client-side history to reconcile and nothing that can drift; the server is
+// the only copy.
+//
+// And a turn's answer arrives twice: as `token` events while it is written, and
+// as the settled turn on `done`. The second is authoritative and **replaces**
+// the first — see `ChatEvent`.
+
+/** One conversation, as a list row renders it. */
+export interface Conversation {
+  id: string;
+  libraryId: string;
+  /** Never empty: the first question truncated until `chat-title` names it. */
+  title: string;
+  titleGenerated: boolean;
+  turns: number;
+  createdAt: string;
+  lastMessageAt: string;
+}
+
+export interface Conversations {
+  conversations: Conversation[];
+}
+
+/**
+ * A turn's state. Four of the five are an answer's own; `running` is the turn
+ * still being worked on and is the reason this is not `AnswerState`.
+ */
+export type TurnState = "running" | AnswerState | "failed";
+
+/** One question and its answer. */
+export interface ConversationTurn {
+  seq: number;
+  /** What the person typed. */
+  question: string;
+  /**
+   * The standalone question the rewrite produced, which is what was actually
+   * embedded and searched for.
+   *
+   * Shown, not kept for debugging. A follow-up is answered against a question
+   * the person did not type — that is the whole mechanism — and an answer that
+   * quietly addresses something adjacent to what was asked is
+   * indistinguishable from a bad answer unless the substitution is visible.
+   * Equal to `question` on a first turn, which makes no rewrite call.
+   */
+  searched: string | null;
+  answer: string;
+  state: TurnState;
+  effort: string;
+  /** The level the *style* used, which steps down when the corpus supplied too
+   *  little to justify the one asked for. */
+  styleEffort: string | null;
+  citations: Citation[];
+  /** Only the chunks a verified citation names — never the whole retrieval. */
+  citedEvidence: EvidenceItem[];
+  error: AskFailure | null;
+  askedAt: string;
+  answeredAt: string | null;
+}
+
+export interface ConversationDetail extends Conversation {
+  turnsDetail: ConversationTurn[];
+}
+
+export interface ConversationStarted {
+  conversationId: string;
+  libraryId: string;
+}
+
+export interface TurnStarted {
+  conversationId: string;
+  turnSeq: number;
+  state: string;
+}
+
+/**
+ * One server-sent event from a turn in flight.
+ *
+ * One shape for all three types rather than a discriminated union, mirroring
+ * the Rust struct: an event type this build has never heard of arrives as data
+ * with an unknown `type` rather than failing to decode, so a newer server
+ * cannot take the stream down.
+ *
+ * - `stage` — `stage`, and on `evidence` the counts `chunks` and `dense`. What
+ *   covers the wait: streamed prose was measured at about 8% of a turn, and the
+ *   rest used to be one unchanging line over the rewrite call, the planning
+ *   call, retrieval and the model's reasoning.
+ * - `token` — `seq` and `text`. Prose as the model writes it, and a **draft**.
+ * - `done` — `turn`, the settled turn. Authoritative, and it *replaces* the
+ *   draft rather than completing it: `citas` is the last field in the answering
+ *   schema, so verification cannot run until the envelope closes, and a turn can
+ *   stream fluently and still come back `insufficient_evidence` because no
+ *   citation survived.
+ * - `error` — `kind` and `message`. The stream could not continue; the turn
+ *   itself may still be landing in the catalog.
+ */
+export interface ChatEvent {
+  type: string;
+  seq?: number | null;
+  text?: string | null;
+  turn?: ConversationTurn | null;
+  kind?: string | null;
+  message?: string | null;
+  /** Which stage a `stage` event announces. */
+  stage?: string | null;
+  /** On `evidence`: how many chunks reached the prompt. */
+  chunks?: number | null;
+  /**
+   * On `evidence`: how many cleared the dense floor. `null` means "not
+   * measured", which is not zero — zero is a question the corpus does not
+   * support, and the two must not render the same.
+   */
+  dense?: number | null;
+}
+
 export interface Answer {
   state: AnswerState;
   text: string;
@@ -1293,6 +1415,57 @@ export const api = {
    *  the answer rather than consuming it on the first read. */
   askResult: (questionId: string) =>
     invoke<AskProgress>("ask_result", { questionId }),
+
+  // -- conversations --------------------------------------------------------
+  /** Open a conversation. Must precede any turn: the turn and relay tables
+   *  derive their tenant from this row, so a turn naming a conversation that
+   *  does not exist writes nothing at all. */
+  chatCreate: (libraryId: string) =>
+    invoke<ConversationStarted>("chat_create", { request: { libraryId } }),
+  chatList: () => invoke<Conversations>("chat_list"),
+  /** The whole transcript. Read from the catalog rather than from Temporal,
+   *  which is what makes a conversation outlive a session's retention. */
+  chatRead: (conversationId: string) =>
+    invoke<ConversationDetail>("chat_read", { conversationId }),
+  /** Irreversible, and free. The screen confirms before calling this. */
+  chatDelete: (conversationId: string) =>
+    invoke<void>("chat_delete", { conversationId }),
+  /** Ask the next question. Returns as soon as the turn has a number, not when
+   *  it has an answer — `chatStream` follows that. */
+  chatTurn: (conversationId: string, text: string, effort?: AskEffort) =>
+    invoke<TurnStarted>("chat_turn", {
+      conversationId,
+      // `effort` omitted rather than sent as null when absent: omitting is how
+      // the payload says "whatever the server's default is", and a null would
+      // be a value the server has to interpret.
+      request: effort ? { text, effort } : { text },
+    }),
+  /**
+   * Follow a turn's answer as it is written.
+   *
+   * `since` is the resume point — pass the highest `seq` already seen and only
+   * what follows is sent, so reopening a conversation mid-answer costs nothing
+   * and never shows the same text twice.
+   *
+   * Resolves when the stream ends. The `done` event has already been delivered
+   * to `onEvent` by then, so a caller does not need the return value for
+   * anything but knowing it is over.
+   */
+  chatStream: (
+    conversationId: string,
+    turnSeq: number,
+    since: number,
+    onEvent: (e: ChatEvent) => void,
+  ) => {
+    const channel = new Channel<ChatEvent>();
+    channel.onmessage = onEvent;
+    return invoke<void>("chat_stream", {
+      conversationId,
+      turnSeq,
+      since,
+      onEvent: channel,
+    });
+  },
 
   // -- the Library's three verbs --------------------------------------------
   documentDetail: (libraryId: string, documentId: string) =>

@@ -57,8 +57,13 @@ const NOT_CITED_KEY: Record<AnswerState, string> = {
 };
 
 /** One retrieved passage, rendered whole. This panel exists to be read against
- *  a claim, so it is not the truncated preview the old `<details>` list was. */
-function Passage({ item }: { item: EvidenceItem }) {
+ *  a claim, so it is not the truncated preview the old `<details>` list was.
+ *
+ *  Exported because the Chat screen renders the same thing, and the same
+ *  reasoning `DocumentGraph`'s `Swatch` records applies: one component means one
+ *  stylesheet rule moves both, rather than two that drift until somebody
+ *  notices the passages look different on two screens. */
+export function Passage({ item }: { item: EvidenceItem }) {
   const { t } = useTranslation();
   return (
     <div className="passage">

@@ -61,6 +61,23 @@ const AUDIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// can actually be slow, and it is made once, when a person expands the panel.
 const EVENTS_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How long a conversation's stream will wait between pieces of an answer.
+///
+/// **A different kind of number from every other constant here.** The rest are
+/// total budgets: the whole request must finish inside them. A turn's stream
+/// cannot have one — its body arrives over the life of an answer, and a total
+/// budget generous enough for a `thorough` turn would be no budget at all for a
+/// dead connection. So this bounds one *read*, and the stream lives as long as
+/// the server keeps saying something.
+///
+/// Generous even so, because the gap that matters is not between tokens but
+/// between the request and the first of them: planning, embedding, the
+/// topicality probe and retrieval all happen before the model writes a word,
+/// and on a large library that is tens of seconds during which the relay has
+/// nothing to publish. The server's own poll loop is what keeps this honest —
+/// it emits a terminal event rather than going quiet.
+const CHAT_STREAM_IDLE: Duration = Duration::from_secs(120);
+
 /// Uploading a source file. Generous because this is the one request whose
 /// duration is set by the user's upstream bandwidth rather than by the server:
 /// the cap is 200 MB, and a slow home connection can spend minutes on a book
@@ -847,6 +864,154 @@ fn default_effort() -> String {
     "standard".to_string()
 }
 
+// -- conversations ----------------------------------------------------------
+//
+// A conversation's transcript comes from the catalog rather than from Temporal,
+// which is what lets it outlive the retention that bounds a session. These are
+// response shapes, so they deserialize the snake_case the control planes emit
+// and re-serialize camelCase for the webview.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Conversation {
+    pub id: String,
+    pub library_id: String,
+    pub title: String,
+    pub title_generated: bool,
+    pub turns: u32,
+    pub created_at: String,
+    pub last_message_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Conversations {
+    pub conversations: Vec<Conversation>,
+}
+
+/// One question and its answer.
+///
+/// `searched` is the standalone question the rewrite produced, and it is shown
+/// rather than kept for debugging: a follow-up is answered against a question
+/// the person did not type, and an answer that quietly addresses something
+/// adjacent is indistinguishable from a bad answer unless the substitution is
+/// visible.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ConversationTurn {
+    pub seq: u32,
+    pub question: String,
+    #[serde(default)]
+    pub searched: Option<String>,
+    #[serde(default)]
+    pub answer: String,
+    pub state: String,
+    #[serde(default)]
+    pub effort: String,
+    #[serde(default)]
+    pub style_effort: Option<String>,
+    #[serde(default)]
+    pub citations: Vec<Citation>,
+    #[serde(default)]
+    pub cited_evidence: Vec<EvidenceItem>,
+    #[serde(default)]
+    pub error: Option<AskFailure>,
+    pub asked_at: String,
+    #[serde(default)]
+    pub answered_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ConversationDetail {
+    pub id: String,
+    pub library_id: String,
+    pub title: String,
+    pub title_generated: bool,
+    pub turns: u32,
+    pub created_at: String,
+    pub last_message_at: String,
+    #[serde(default)]
+    pub turns_detail: Vec<ConversationTurn>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ConversationStarted {
+    pub conversation_id: String,
+    pub library_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct TurnStarted {
+    pub conversation_id: String,
+    pub turn_seq: u32,
+    pub state: String,
+}
+
+/// The body of `POST /chat`. A request shape, so the rename goes the other way.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct NewConversation {
+    pub library_id: String,
+}
+
+/// The body of `POST /chat/{id}/turn`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct NewTurn {
+    pub text: String,
+    /// Omitted when absent rather than defaulted here. A level spelled into
+    /// this struct would be a copy of a value that already lives in the Python
+    /// dataclass, and the copy that silently disagreed after somebody moved the
+    /// other — the same reasoning `ask.service.ts` records for the same field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+/// One server-sent event from a turn in flight.
+///
+/// Every field but the discriminator is optional because the three event types
+/// share this one shape — `token` carries `seq` and `text`, `done` carries
+/// `turn`, `error` carries `kind` and `message`. Modelling them as one struct
+/// rather than an enum is deliberate: an event type this build has never heard
+/// of arrives as data with an unknown `event` rather than failing to
+/// deserialize, so a newer server cannot take the stream down.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ChatEvent {
+    /// `token`, `done` or `error`. Named `event` in Rust because `type` is a
+    /// keyword; it is `type` on both wires.
+    #[serde(rename = "type")]
+    pub event: String,
+    #[serde(default)]
+    pub seq: Option<u32>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub turn: Option<ConversationTurn>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Which stage a `stage` event is announcing.
+    ///
+    /// Declared, because serde drops what it does not declare — and a proxy that
+    /// silently ate this would leave the window showing one unchanging line for
+    /// the nine tenths of a turn these events exist to cover.
+    #[serde(default)]
+    pub stage: Option<String>,
+    /// How many chunks reached the prompt, on the `evidence` stage.
+    #[serde(default)]
+    pub chunks: Option<u32>,
+    /// How many of them cleared the dense floor. `None` is "not measured",
+    /// which is different from zero — zero is a question the corpus does not
+    /// support, and the two must not render the same.
+    #[serde(default)]
+    pub dense: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase"))]
 pub struct Citation {
@@ -1424,6 +1589,50 @@ pub struct ConceptClaims {
 /// the API is there and did not finish in time. Collapsing them cost two
 /// investigations aimed at the wrong component — once at a port allocator that
 /// was innocent, once at a control API that had logged `200 OK`.
+/// Bytes in, whole events out.
+///
+/// Pulled out of `chat_stream` because the interesting part cannot be reached
+/// through it: what is worth asserting is what happens at a *chunk boundary*,
+/// and a boundary is decided by the network. As a struct it takes a table of
+/// byte slices instead.
+///
+/// **Decoding waits for a newline.** A chunk can end in the middle of a
+/// multi-byte character, and this corpus is Spanish — decoding each chunk as it
+/// arrived would turn every accent unlucky enough to straddle a boundary into a
+/// replacement character, in the one text the reader is actually reading. A
+/// newline is ASCII and cannot appear inside a UTF-8 sequence, so a line that
+/// ends with one is always safe to decode.
+#[derive(Default)]
+struct SseBuffer {
+    buf: Vec<u8>,
+}
+
+impl SseBuffer {
+    /// Feed a chunk; get the events it completed. Anything after the last
+    /// newline is a partial line and is kept for the next call.
+    fn push(&mut self, chunk: &[u8]) -> Vec<ChatEvent> {
+        self.buf.extend_from_slice(chunk);
+        let mut out = Vec::new();
+        while let Some(at) = self.buf.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = self.buf.drain(..=at).collect();
+            let line = String::from_utf8_lossy(&line);
+            let line = line.trim_end_matches(['\r', '\n']);
+            let Some(payload) = line.strip_prefix("data: ") else {
+                // Blank separators between events, and any SSE field this build
+                // does not read (`event:`, `id:`, `retry:`, a `:` comment).
+                continue;
+            };
+            // An event this build cannot parse is dropped rather than ending the
+            // stream: the answer is still arriving, and the authoritative copy
+            // is in the catalog either way.
+            if let Ok(event) = serde_json::from_str::<ChatEvent>(payload) {
+                out.push(event);
+            }
+        }
+        out
+    }
+}
+
 fn unreachable(url: String, source: reqwest::Error) -> AppError {
     if source.is_timeout() {
         AppError::ControlTimeout { url, source }
@@ -1527,16 +1736,23 @@ impl Control {
         .await
     }
 
-    async fn send<T: serde::de::DeserializeOwned>(
+    /// Attach credentials, send, and check the status. The body is untouched.
+    ///
+    /// Every helper funnels through here, which is what makes "credentials are
+    /// attached in exactly one place" true rather than a convention — a new
+    /// helper cannot be added that forgets them.
+    ///
+    /// `timeout` is a **total** budget and is therefore wrong for a response
+    /// whose body arrives over the life of an answer. `None` leaves it off, and
+    /// the one caller that passes `None` — `chat_stream` — bounds itself per
+    /// read instead. See `CHAT_STREAM_IDLE`.
+    async fn send_raw(
         &self,
         req: reqwest::RequestBuilder,
         path: &str,
-        timeout: Duration,
-    ) -> Result<T> {
+        timeout: Option<Duration>,
+    ) -> Result<reqwest::Response> {
         let url = format!("{}{path}", self.base);
-        // Credentials are attached here and nowhere else: every helper above
-        // funnels through this method, so a new one cannot be added that
-        // forgets them.
         let req = match &self.auth {
             Some(auth) => {
                 let req = req.bearer_auth(&auth.token);
@@ -1547,10 +1763,13 @@ impl Control {
             }
             None => req,
         };
+        let req = match timeout {
+            Some(t) => req.timeout(t),
+            None => req,
+        };
         // See `unreachable`: which of the two this becomes is decided by the
         // cause, not by the call site.
         let response = req
-            .timeout(timeout)
             .send()
             .await
             .map_err(|source| unreachable(url.clone(), source))?;
@@ -1563,11 +1782,36 @@ impl Control {
             // person to read. Truncating here would sometimes take the tag.
             return Err(AppError::control_status(status.as_u16(), body));
         }
+        Ok(response)
+    }
 
-        response
+    async fn send<T: serde::de::DeserializeOwned>(
+        &self,
+        req: reqwest::RequestBuilder,
+        path: &str,
+        timeout: Duration,
+    ) -> Result<T> {
+        let url = format!("{}{path}", self.base);
+        self.send_raw(req, path, Some(timeout))
+            .await?
             .json::<T>()
             .await
             .map_err(|source| unreachable(url, source))
+    }
+
+    /// A request whose success carries no body, such as a 204.
+    ///
+    /// Separate from `send` rather than decoding into `()`: serde cannot make
+    /// `()` out of an empty body, so a 204 through the JSON path fails *after*
+    /// the server has already done the thing — which reads as "the delete did
+    /// not work" about a delete that did.
+    async fn send_empty(
+        &self,
+        req: reqwest::RequestBuilder,
+        path: &str,
+        timeout: Duration,
+    ) -> Result<()> {
+        self.send_raw(req, path, Some(timeout)).await.map(|_| ())
     }
 
     pub async fn health(&self) -> Result<Health> {
@@ -1796,6 +2040,91 @@ impl Control {
             HEALTH_TIMEOUT,
         )
         .await
+    }
+
+    // -- conversations -----------------------------------------------------
+
+    pub async fn chat_create(&self, body: &NewConversation) -> Result<ConversationStarted> {
+        self.post_json("/chat", body, ASK_TIMEOUT).await
+    }
+
+    pub async fn chat_list(&self) -> Result<Conversations> {
+        self.get("/chat", RUNS_TIMEOUT).await
+    }
+
+    pub async fn chat_read(&self, conversation_id: &str) -> Result<ConversationDetail> {
+        self.get(&format!("/chat/{conversation_id}"), RUNS_TIMEOUT).await
+    }
+
+    pub async fn chat_delete(&self, conversation_id: &str) -> Result<()> {
+        self.send_empty(
+            self.http
+                .delete(format!("{}/chat/{conversation_id}", self.base)),
+            &format!("/chat/{conversation_id}"),
+            REMOVE_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn chat_turn(&self, conversation_id: &str, body: &NewTurn) -> Result<TurnStarted> {
+        self.post_json(&format!("/chat/{conversation_id}/turn"), body, ASK_TIMEOUT)
+            .await
+    }
+
+    /// Follow one turn's answer as it is written, handing each event to `on_event`.
+    ///
+    /// The only streaming call in this client, and the only one that passes no
+    /// total timeout — see `CHAT_STREAM_IDLE` for why a total budget is the
+    /// wrong shape here. It still goes through `send_raw`, so it cannot be the
+    /// request that forgets its credentials.
+    ///
+    /// **Bytes are buffered and split on newlines before being decoded.** A
+    /// chunk boundary can fall in the middle of a multi-byte character, and this
+    /// corpus is Spanish — decoding each chunk as it arrives would turn every
+    /// accent unlucky enough to straddle one into a replacement character. A
+    /// newline is ASCII and cannot appear inside a UTF-8 sequence, so a complete
+    /// line is always safe to decode.
+    ///
+    /// `since` is the resume point: pass the highest `seq` already seen and only
+    /// what follows is sent. That is what makes reopening a window cost nothing.
+    pub async fn chat_stream<F>(
+        &self,
+        conversation_id: &str,
+        turn_seq: u32,
+        since: u32,
+        mut on_event: F,
+    ) -> Result<()>
+    where
+        F: FnMut(ChatEvent),
+    {
+        let path = format!("/chat/{conversation_id}/turn/{turn_seq}/stream?since={since}");
+        let url = format!("{}{path}", self.base);
+        let mut response = self
+            .send_raw(self.http.get(&url), &path, None)
+            .await?;
+
+        let mut lines = SseBuffer::default();
+        loop {
+            let chunk = match tokio::time::timeout(CHAT_STREAM_IDLE, response.chunk()).await {
+                Err(_) => {
+                    return Err(AppError::ControlStreamStalled {
+                        url,
+                        seconds: CHAT_STREAM_IDLE.as_secs(),
+                    })
+                }
+                Ok(Err(source)) => return Err(unreachable(url, source)),
+                Ok(Ok(None)) => break,
+                Ok(Ok(Some(bytes))) => bytes,
+            };
+            for event in lines.push(&chunk) {
+                let terminal = event.event == "done" || event.event == "error";
+                on_event(event);
+                if terminal {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
     }
 
     pub async fn remove_document(
@@ -2903,5 +3232,305 @@ mod estimate_range {
         assert!(!encoded.contains('+'), "{encoded}");
         assert!(!encoded.contains('|'), "{encoded}");
         assert!(encoded.contains("%2B"), "{encoded}");
+    }
+
+    // -- conversations -----------------------------------------------------
+
+    const TURN: &str = r#"{
+        "seq": 2,
+        "question": "¿y su muerte?",
+        "searched": "¿Qué dice el corpus sobre la muerte de Jesucristo?",
+        "answer": "Los fragmentos dicen…",
+        "state": "answered",
+        "effort": "standard",
+        "style_effort": "brief",
+        "citations": [{
+            "chunk_id": "chk_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "Cap 1 · [1:2]",
+            "claim": "algo",
+            "page": null,
+            "section_title": null
+        }],
+        "cited_evidence": [{
+            "chunk_id": "chk_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "El Reto de Dios",
+            "breadcrumb": "Cap 1",
+            "text": "…",
+            "kind": "cuerpo",
+            "score": 0.81,
+            "source": "vector",
+            "locator": "Cap 1 · [1:2]",
+            "version_id": "ver_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "document_id": "doc_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "page": null,
+            "claims": []
+        }],
+        "error": null,
+        "asked_at": "2026-09-06T01:00:00+00:00",
+        "answered_at": "2026-09-06T01:00:09+00:00"
+    }"#;
+
+    #[test]
+    fn a_turn_arrives_snake_case_and_leaves_camel_case() {
+        let turn: ConversationTurn = serde_json::from_str(TURN).unwrap();
+        assert_eq!(turn.seq, 2);
+        assert_eq!(turn.searched.as_deref(), Some("¿Qué dice el corpus sobre la muerte de Jesucristo?"));
+        assert_eq!(turn.citations.len(), 1);
+        // Evidence carries fields this struct does not declare — serde drops
+        // them, which is what lets the server add one without breaking a build.
+        assert_eq!(turn.cited_evidence[0].title, "El Reto de Dios");
+
+        let out = serde_json::to_value(&turn).unwrap();
+        assert_eq!(out["styleEffort"], "brief");
+        assert_eq!(out["citedEvidence"][0]["chunkId"], "chk_aaaaaaaaaaaaaaaaaaaaaaaa");
+        assert_eq!(out["askedAt"], "2026-09-06T01:00:00+00:00");
+        // The snake_case names must not survive to the webview, or a component
+        // reading either spelling would work by accident until somebody tidied.
+        assert!(out.get("style_effort").is_none());
+        assert!(out.get("cited_evidence").is_none());
+    }
+
+    #[test]
+    fn a_new_turn_arrives_camel_case_and_leaves_snake_case() {
+        let body: NewTurn = serde_json::from_str(r#"{"text":"¿y su muerte?","effort":"thorough"}"#)
+            .unwrap();
+        let out = serde_json::to_value(&body).unwrap();
+        assert_eq!(out["text"], "¿y su muerte?");
+        assert_eq!(out["effort"], "thorough");
+    }
+
+    #[test]
+    fn a_turn_with_no_level_omits_the_key_rather_than_sending_null() {
+        // The same decision `ask.service.ts` records: omitting the key is how
+        // the payload says "whatever the server's default is", and a `null`
+        // would be a value the server has to interpret.
+        let body: NewTurn = serde_json::from_str(r#"{"text":"¿?"}"#).unwrap();
+        let out = serde_json::to_value(&body).unwrap();
+        assert!(out.get("effort").is_none());
+    }
+
+    #[test]
+    fn a_conversation_summary_survives_the_round_trip() {
+        let row: Conversation = serde_json::from_str(
+            r#"{"id":"cnv_1","library_id":"lib_a","title":"La fe","title_generated":true,
+                "turns":2,"created_at":"t0","last_message_at":"t1"}"#,
+        )
+        .unwrap();
+        let out = serde_json::to_value(&row).unwrap();
+        assert_eq!(out["libraryId"], "lib_a");
+        assert_eq!(out["titleGenerated"], true);
+        assert_eq!(out["lastMessageAt"], "t1");
+        assert!(out.get("library_id").is_none());
+    }
+
+    // -- the stream ---------------------------------------------------------
+
+    fn events(chunks: &[&[u8]]) -> Vec<ChatEvent> {
+        let mut buf = SseBuffer::default();
+        chunks.iter().flat_map(|c| buf.push(c)).collect()
+    }
+
+    #[test]
+    fn a_whole_event_in_one_chunk() {
+        let got = events(&[b"data: {\"type\":\"token\",\"seq\":1,\"text\":\"hola\"}\n\n"]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].event, "token");
+        assert_eq!(got[0].text.as_deref(), Some("hola"));
+        assert_eq!(got[0].seq, Some(1));
+    }
+
+    #[test]
+    fn an_event_split_across_chunks_is_held_until_it_is_whole() {
+        let got = events(&[
+            b"data: {\"type\":\"tok",
+            b"en\",\"seq\":1,\"text\":\"hola\"}",
+            b"\n\n",
+        ]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text.as_deref(), Some("hola"));
+    }
+
+    #[test]
+    fn an_accent_split_across_a_chunk_boundary_survives() {
+        // The reason decoding waits for a newline. `ó` is two bytes, and a chunk
+        // boundary can fall between them — this corpus is Spanish, so that is
+        // not a rare case. Decoding per chunk would put a replacement character
+        // in the text the reader is reading.
+        let line = "data: {\"type\":\"token\",\"text\":\"predicación\"}\n";
+        let whole = line.as_bytes();
+        // One byte into the two-byte `ó`, computed rather than guessed.
+        let cut = line.find('ó').unwrap() + 1;
+        assert!(std::str::from_utf8(&whole[..cut]).is_err(), "the split must be mid-character");
+        let got = events(&[&whole[..cut], &whole[cut..]]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text.as_deref(), Some("predicación"));
+    }
+
+    #[test]
+    fn several_events_in_one_chunk_all_come_out_in_order() {
+        let got = events(&[
+            b"data: {\"type\":\"token\",\"seq\":1,\"text\":\"a\"}\n\ndata: {\"type\":\"token\",\"seq\":2,\"text\":\"b\"}\n\n",
+        ]);
+        assert_eq!(
+            got.iter().map(|e| e.text.clone().unwrap()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+    }
+
+    #[test]
+    fn the_done_event_carries_the_settled_turn() {
+        // Compacted first: `TURN` is pretty-printed, and an SSE `data:` line
+        // ends at the first newline — embedding it raw would frame one event as
+        // a dozen broken ones. Worth knowing before writing another of these.
+        let turn: serde_json::Value = serde_json::from_str(TURN).unwrap();
+        let line = format!(
+            "data: {}\n\n",
+            serde_json::json!({"type": "done", "turn": turn})
+        );
+        let got = events(&[line.as_bytes()]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].event, "done");
+        let turn = got[0].turn.as_ref().expect("done carried no turn");
+        assert_eq!(turn.state, "answered");
+        assert_eq!(turn.citations.len(), 1);
+    }
+
+    #[test]
+    fn an_error_event_keeps_the_kind_the_ui_keys_on() {
+        let got = events(&[
+            b"data: {\"type\":\"error\",\"kind\":\"catalog_unreachable\",\"message\":\"no\"}\n\n",
+        ]);
+        assert_eq!(got[0].kind.as_deref(), Some("catalog_unreachable"));
+    }
+
+    #[test]
+    fn lines_that_are_not_data_are_ignored_rather_than_breaking_the_stream() {
+        // Blank separators, comments and any SSE field this build does not read.
+        let got = events(&[
+            b": keep-alive\n\nevent: token\nid: 7\ndata: {\"type\":\"token\",\"text\":\"x\"}\n\n",
+        ]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn an_event_this_build_cannot_parse_is_dropped_not_fatal() {
+        // A newer server sending something unknown must not take the stream
+        // down: the answer is still arriving and the authoritative copy is in
+        // the catalog either way.
+        let got = events(&[
+            b"data: not json at all\n\ndata: {\"type\":\"token\",\"text\":\"sigue\"}\n\n",
+        ]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text.as_deref(), Some("sigue"));
+    }
+
+    #[test]
+    fn an_unknown_event_type_arrives_as_data_rather_than_failing() {
+        let got = events(&[b"data: {\"type\":\"stage\",\"seq\":3}\n\n"]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].event, "stage");
+    }
+
+    #[test]
+    fn the_event_type_is_spelled_type_on_the_way_out_too() {
+        // Rust calls it `event` because `type` is a keyword; the webview must
+        // still see the same discriminator the server sent.
+        let got = events(&[b"data: {\"type\":\"token\",\"text\":\"x\"}\n\n"]);
+        let out = serde_json::to_value(&got[0]).unwrap();
+        assert_eq!(out["type"], "token");
+        assert!(out.get("event").is_none());
+    }
+
+    /// One turn's stream, captured from the running control API on 2026-09-05.
+    ///
+    /// A real sample rather than a handwritten one, for the reason
+    /// `test_the_raw_history_translates_against_a_real_temporal` gives on the
+    /// Python side: a double built from the same assumptions as the code agrees
+    /// with them. This is Spanish prose with real accents, a real settled turn
+    /// and real citations, framed exactly as the server frames it.
+    const REAL: &[u8] = include_bytes!("../fixtures/chat-turn.sse");
+
+    #[test]
+    fn the_real_stream_decodes_however_it_is_cut_up() {
+        // The property that matters, asserted at *every* byte boundary rather
+        // than at boundaries somebody thought to pick. A chunk can end anywhere,
+        // and this corpus is Spanish: 6.7 kB of it holds hundreds of two-byte
+        // characters, so a decoder that split them would be caught here even if
+        // no handwritten case happened to land on one.
+        let whole = events(&[REAL]);
+        assert_eq!(whole.len(), 1, "the capture should hold exactly one event");
+        assert_eq!(whole[0].event, "done");
+        let expected = whole[0].turn.as_ref().expect("no turn in the capture");
+
+        for cut in 1..REAL.len() {
+            let got = events(&[&REAL[..cut], &REAL[cut..]]);
+            assert_eq!(got.len(), 1, "cut at {cut} produced {} events", got.len());
+            let turn = got[0].turn.as_ref().expect("no turn");
+            assert_eq!(turn.answer, expected.answer, "answer differs when cut at {cut}");
+            assert_eq!(turn.question, expected.question, "question differs when cut at {cut}");
+            assert_eq!(turn.searched, expected.searched, "searched differs when cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn the_real_stream_carries_what_the_screen_needs() {
+        let got = events(&[REAL]);
+        let turn = got[0].turn.as_ref().unwrap();
+        assert_eq!(turn.state, "answered");
+        // The substitution the whole feature exists for: what was asked is not
+        // what was searched.
+        assert_ne!(turn.searched.as_deref(), Some(turn.question.as_str()));
+        assert!(turn.searched.as_deref().unwrap().contains("justificación"));
+        // Every citation the screen offers must carry a locator, because a
+        // citation nobody can open is one `answer._verify` would have dropped.
+        assert!(!turn.citations.is_empty());
+        for c in &turn.citations {
+            assert!(!c.locator.is_empty(), "a citation reached the client with no locator");
+        }
+        assert_eq!(turn.cited_evidence.len(), turn.citations.len());
+    }
+
+    #[test]
+    fn a_stage_event_survives_the_proxy_with_its_counts() {
+        // serde drops what it does not declare, so a proxy missing these fields
+        // would leave the window on one unchanging line for the nine tenths of a
+        // turn they exist to cover — and nothing would error.
+        let got = events(&[
+            b"data: {\"type\":\"stage\",\"seq\":4,\"stage\":\"evidence\",\"chunks\":48,\"dense\":27}\n\n",
+        ]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].event, "stage");
+        assert_eq!(got[0].stage.as_deref(), Some("evidence"));
+        assert_eq!(got[0].chunks, Some(48));
+        assert_eq!(got[0].dense, Some(27));
+
+        let out = serde_json::to_value(&got[0]).unwrap();
+        assert_eq!(out["stage"], "evidence");
+        assert_eq!(out["chunks"], 48);
+    }
+
+    #[test]
+    fn a_stage_with_no_counts_reports_absence_rather_than_zero() {
+        // `dense: 0` is a question the corpus does not support; `None` is a
+        // stage that never measured it. The two must not render the same.
+        let got = events(&[b"data: {\"type\":\"stage\",\"stage\":\"planning\"}\n\n"]);
+        assert_eq!(got[0].stage.as_deref(), Some("planning"));
+        assert_eq!(got[0].chunks, None);
+        assert_eq!(got[0].dense, None);
+    }
+
+    #[test]
+    fn a_stage_carries_no_text_so_it_cannot_be_appended_to_an_answer() {
+        let got = events(&[
+            b"data: {\"type\":\"token\",\"text\":\"a\"}\n\ndata: {\"type\":\"stage\",\"stage\":\"generating\"}\n\ndata: {\"type\":\"token\",\"text\":\"b\"}\n\n",
+        ]);
+        let prose: String = got
+            .iter()
+            .filter(|e| e.event == "token")
+            .filter_map(|e| e.text.clone())
+            .collect();
+        assert_eq!(prose, "ab");
+        assert!(got.iter().any(|e| e.event == "stage" && e.text.is_none()));
     }
 }

@@ -6,6 +6,7 @@ import { BackendProvider, useBackend } from "./lib/backend";
 import { LibrariesProvider, LibraryPicker } from "./lib/libraries";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { AskScreen } from "./screens/AskScreen";
+import { ChatScreen } from "./screens/ChatScreen";
 import { ImportScreen } from "./screens/ImportScreen";
 import { ExploreScreen } from "./screens/ExploreScreen";
 import { HomeScreen } from "./screens/HomeScreen";
@@ -26,6 +27,7 @@ const TABS = [
   "graph",
   "import",
   "ask",
+  "chat",
 ] as const;
 export type Tab = (typeof TABS)[number];
 
@@ -49,6 +51,7 @@ const SCREENS: Record<
   graph: GraphScreen,
   import: ImportScreen,
   ask: AskScreen,
+  chat: ChatScreen,
 };
 
 /** Home and Services are the two screens that own no library. Services is what
@@ -62,6 +65,7 @@ const NEEDS_LIBRARY: ReadonlySet<Tab> = new Set<Tab>([
   "graph",
   "import",
   "ask",
+  "chat",
 ]);
 
 /** The provider has to sit above what it invalidates, and `App` is what reads

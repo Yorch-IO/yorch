@@ -9,6 +9,7 @@ why it is a workflow and this is not.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from ..config import Settings
 from ..providers import Provider
@@ -21,12 +22,52 @@ from .types import Answer, Question
 log = logging.getLogger(__name__)
 
 
-def ask(settings: Settings, question: Question) -> Answer:
+def ask(
+    settings: Settings,
+    question: Question,
+    on_delta: Callable[[str], None] | None = None,
+    on_stage: Callable[..., None] | None = None,
+) -> Answer:
+    """Plan, retrieve, answer.
+
+    `on_delta` is forwarded to `answer.compose` and does not reach the two stages
+    before it. That is not an omission: planning and retrieval produce no prose,
+    they produce a template id and a list of chunks, and there is nothing about
+    either that a reader could be shown a character at a time.
+
+    `on_stage` is what covers them, and it is the more useful of the two.
+    Measured 2026-09-06: streamed prose is about 8% of a turn's wait — 0.8s of a
+    10s turn on `brief`, and 75s for a `standard` turn on the same library — and
+    the rest was one unchanging line over four things that can each take seconds.
+    It is called with a stage name, and `retrieving` carries the two counts
+    below.
+
+    **`evidence` reports the dense-floor count, which was already being computed
+    and discarded.** `search` runs the topicality probe at full width and returns
+    how many cleared `MIN_SCORE`; that number is what tells a narrow question
+    from a well-supported one, and `effective_style_level` already steps the
+    style down on it. Reporting it costs nothing and no tokens.
+
+    Note the ordering both callbacks imply: an `off_corpus` question returns
+    *before* `compose` is reached, so `on_delta` is never called at all and the
+    first thing the caller learns after `retrieving` is the finished refusal.
+    """
+    def stage(name: str, **detail: object) -> None:
+        # Never allowed to fail the question it is describing.
+        if on_stage is None:
+            return
+        try:
+            on_stage(name, detail or None)
+        except Exception as e:  # noqa: BLE001 - progress is not the product
+            log.warning("stage report %r failed: %s", name, e)
+
     provider = Provider(settings.gemini)
 
+    stage("planning")
     plan = planner_mod.plan(provider, question)
     spend = [plan.spend] if plan.spend else []
 
+    stage("retrieving")
     try:
         supported: list[int] = []
         evidence = search(settings, provider, question, plan, spend, supported)
@@ -50,11 +91,23 @@ def ask(settings: Settings, question: Question) -> Answer:
             style_effort=effort_mod.EFFORT_LEVELS[0],
         )
 
+    # Both counts, because they answer different questions: how much reached the
+    # prompt, and how much of it cleared the dense floor. The second is what
+    # distinguishes a narrow question from one the corpus supports well, and it
+    # is the number `effective_style_level` steps the style down on.
+    stage(
+        "evidence",
+        chunks=len(evidence),
+        dense=supported[0] if supported else None,
+    )
     level = effort_mod.effective_style_level(
         question.effort, len(evidence), supported[0] if supported else None
     )
+    stage("generating")
     result = answer_mod.compose(
-        provider, question, evidence, plan, style=_style(settings, question, level)
+        provider, question, evidence, plan,
+        style=_style(settings, question, level),
+        on_delta=on_delta,
     )
     result.spend = spend + result.spend
     # The level the *style* used, which is the level asked for unless the corpus

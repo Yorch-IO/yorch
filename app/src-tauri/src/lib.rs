@@ -23,8 +23,9 @@ use auth::{AuthConfig, Pkce, Session};
 use backend::{BackendMode, BackendSettings};
 use control::{
     AnswerStyleSaved, AnswerStyleUpdate, AnswerStyles,
-    Activation, Approval, Auth, AskProgress, AskStarted, ChunkContext, ConceptClaims, Control,
-    DocumentDetail,
+    Activation, Approval, Auth, AskProgress, AskStarted, ChatEvent, ChunkContext, ConceptClaims,
+    Control, ConversationDetail, ConversationStarted, Conversations,
+    DocumentDetail, NewConversation, NewTurn, TurnStarted,
     GateReport, Health, IngestRequest, Libraries, Library, LibraryGraph, Outline, PingResult,
     ProjectSummary, Question, RebuildReport, RelatedDocuments, Removal, RunAudit,
     RunEventPage, RunListPage, SectionChunks,
@@ -1005,6 +1006,90 @@ async fn ask_result(state: State<'_, AppState>, question_id: String) -> Result<A
     control.ask_result(&question_id).await
 }
 
+// -- conversations ----------------------------------------------------------
+
+/// Open a conversation. Must precede any turn: the turn and relay tables derive
+/// their tenant from this row, so a turn naming a conversation that does not
+/// exist writes nothing at all.
+#[tauri::command]
+async fn chat_create(
+    state: State<'_, AppState>,
+    request: NewConversation,
+) -> Result<ConversationStarted> {
+    let control = state.control().await?;
+    control.chat_create(&request).await
+}
+
+#[tauri::command]
+async fn chat_list(state: State<'_, AppState>) -> Result<Conversations> {
+    let control = state.control().await?;
+    control.chat_list().await
+}
+
+/// The whole transcript, read from the catalog rather than from Temporal —
+/// which is what makes a conversation outlive a session's retention.
+#[tauri::command]
+async fn chat_read(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<ConversationDetail> {
+    let control = state.control().await?;
+    control.chat_read(&conversation_id).await
+}
+
+#[tauri::command]
+async fn chat_delete(state: State<'_, AppState>, conversation_id: String) -> Result<()> {
+    let control = state.control().await?;
+    control.chat_delete(&conversation_id).await
+}
+
+/// Ask the next question. Returns as soon as the turn has a number, not when it
+/// has an answer — `chat_stream` follows that.
+#[tauri::command]
+async fn chat_turn(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    request: NewTurn,
+) -> Result<TurnStarted> {
+    let control = state.control().await?;
+    control.chat_turn(&conversation_id, &request).await
+}
+
+/// Follow a turn's answer as it is written.
+///
+/// The only streaming command in this app, and it keeps the webview's
+/// `default-src 'self'` CSP intact the same way every other one does: the
+/// webview invokes a `#[tauri::command]`, Rust makes the HTTP request, and the
+/// events come back over a Channel rather than over a connection the page
+/// opened itself.
+///
+/// **What streams is a draft.** The `done` event carries the settled turn and is
+/// authoritative: `citas` is the last field in the answering schema, so
+/// verification cannot run until the envelope closes, and a turn can stream
+/// fluent prose and still come back `insufficient_evidence` because no citation
+/// survived. The caller must replace what it showed rather than append to it.
+///
+/// `since` is the resume point. A window reopened mid-answer passes the highest
+/// `seq` it saw and pays nothing for the part it already has.
+#[tauri::command]
+async fn chat_stream(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    turn_seq: u32,
+    since: u32,
+    on_event: tauri::ipc::Channel<ChatEvent>,
+) -> Result<()> {
+    let control = state.control().await?;
+    control
+        .chat_stream(&conversation_id, turn_seq, since, |event| {
+            // A closed channel means the window moved on. The turn is
+            // unaffected — it lands in the catalog either way — so this is
+            // dropped rather than treated as a failure.
+            let _ = on_event.send(event);
+        })
+        .await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1048,6 +1133,12 @@ pub fn run() {
             answer_styles,
             set_answer_style,
             ask_result,
+            chat_create,
+            chat_list,
+            chat_read,
+            chat_delete,
+            chat_turn,
+            chat_stream,
             explore_outline,
             explore_section_chunks,
             explore_chunk_context,

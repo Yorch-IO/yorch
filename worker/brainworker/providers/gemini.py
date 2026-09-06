@@ -24,7 +24,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from google import genai
 from google.genai import errors, types
@@ -278,7 +278,7 @@ class Provider:
 
     # -- generation --------------------------------------------------------
 
-    def generate(
+    def _prepare(
         self,
         prompt: str,
         *,
@@ -290,8 +290,13 @@ class Provider:
         stage: str | None = None,
         history: Sequence[tuple[str, str]] | None = None,
         thinking_budget: int | None = None,
-    ) -> Generation:
-        """One completion, with usage attached.
+    ) -> tuple[Any, types.GenerateContentConfig, str]:
+        """Everything a call needs, built once and shared by both callers.
+
+        Split out of `generate` when streaming arrived: the config, the history
+        and the thinking budget are identical whether the response comes back
+        whole or in pieces, and two copies of this would be two places for a
+        stage's reasoning budget to be resolved differently.
 
         `history` is a list of prior `(sent, received)` exchanges, prepended as
         alternating user/model turns. Only semantic extraction's gleaning pass
@@ -351,13 +356,88 @@ class Provider:
                 types.Content(role="user", parts=[types.Part(text=prompt)])
             )
 
+        return contents, config, model or self.settings.model
+
+    def generate(self, prompt: str, **kw: Any) -> Generation:
+        """One completion, whole. See `_prepare` for every argument."""
+        contents, config, model_id = self._prepare(prompt, **kw)
+
         def run():
             return self.client.models.generate_content(
-                model=model or self.settings.model, contents=contents, config=config
+                model=model_id, contents=contents, config=config
             )
 
         response = self._call("generate", run)
         return Generation(text=response.text or "", usage=_usage_of(response))
+
+    def generate_stream(
+        self, prompt: str, *, on_delta: Callable[[str], None], **kw: Any
+    ) -> Generation:
+        """One completion, handed to `on_delta` as it is written.
+
+        Same arguments as `generate`, plus the callback. The return value is the
+        same `Generation` the whole-response path returns, so a caller that also
+        wants the finished text — every caller does, because the streamed text is
+        a draft and the parsed envelope is what is authoritative — does not have
+        to reassemble it.
+
+        **Retry stops at the first chunk.** `_call` retries a failed request up
+        to six times, which is right for a call whose result nobody has seen. Once
+        a delta has been handed to `on_delta` it is on somebody's screen, and a
+        retry would replay it from the beginning: the reader would watch the
+        answer restart. So the request *and its first chunk* are opened inside
+        `_call` — which is where a quota refusal or a 503 actually lands — and
+        everything after that is outside it.
+
+        **Usage arrives at the end, not at the beginning.** Each chunk may carry
+        `usage_metadata` and the last one carries the totals; reading the first
+        would report a few tokens for the most expensive call in a turn, and
+        `Spend` would under-report the bill with nothing saying so. The last
+        chunk that carries any is the one that counts.
+        """
+        contents, config, model_id = self._prepare(prompt, **kw)
+
+        def start():
+            stream = self.client.models.generate_content_stream(
+                model=model_id, contents=contents, config=config
+            )
+            # `next` is what actually issues the request for most transports, so
+            # pulling the first chunk here is what puts it under the retry.
+            it = iter(stream)
+            return it, next(it, None)
+
+        stream_iter, first = self._call("generate", start)
+
+        parts: list[str] = []
+        usage = Usage(calls=1)
+
+        def take(chunk: Any) -> None:
+            nonlocal usage
+            piece = _chunk_text(chunk)
+            if piece:
+                parts.append(piece)
+                on_delta(piece)
+            if getattr(chunk, "usage_metadata", None) is not None:
+                usage = _usage_of(chunk)
+
+        try:
+            if first is not None:
+                take(first)
+            for chunk in stream_iter:
+                take(chunk)
+        except errors.APIError as e:
+            # Deliberately not retried — see the docstring. Classified anyway, so
+            # the UI still gets a kind it can act on.
+            raise _classify(e) from e
+        except ProviderError:
+            raise
+        except Exception as e:
+            raise ProviderError(
+                f"generate failed mid-stream: {type(e).__name__}: {e}",
+                kind="provider_unavailable",
+            ) from e
+
+        return Generation(text="".join(parts), usage=usage)
 
     # -- embeddings --------------------------------------------------------
 
@@ -438,6 +518,21 @@ class Provider:
             f"{self.settings.model} / {self.settings.embedding_model} "
             f"@ {self.settings.location}"
         )
+
+
+def _chunk_text(chunk: Any) -> str:
+    """The visible text of one streamed chunk, or nothing.
+
+    `.text` is a convenience property that concatenates the candidate's parts,
+    and it is `None` — and on some SDK versions raises a warning — for a chunk
+    that carries only a `finish_reason`, only `usage_metadata`, or only a
+    thinking part. Every stream ends with at least one such chunk, so reading it
+    naively turns the normal end of every answer into an exception.
+    """
+    try:
+        return chunk.text or ""
+    except Exception:
+        return ""
 
 
 def _usage_of(response: Any) -> Usage:

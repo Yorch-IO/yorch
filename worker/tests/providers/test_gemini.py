@@ -362,3 +362,142 @@ def test_json_mode_is_requested_by_schema_not_by_prompt_wording(monkeypatch):
     config = client.models.calls[0]["config"]
     assert config.response_mime_type == "application/json"
     assert config.response_schema == {"type": "object"}
+
+
+# -- streaming --------------------------------------------------------------
+#
+# The two rules `generate_stream` exists to keep are both about *when* things
+# happen rather than what they are: retry stops once the reader has seen a
+# delta, and usage is read at the end rather than the beginning.
+
+
+class FakeChunk:
+    """One streamed piece. `text` may be absent, empty, or raise."""
+
+    def __init__(self, text=None, usage=None, explode=False):
+        self._text = text
+        self._explode = explode
+        self.usage_metadata = usage
+
+    @property
+    def text(self):
+        if self._explode:
+            raise RuntimeError("no candidates on this chunk")
+        return self._text
+
+
+class FakeStreamModels:
+    def __init__(self, *attempts):
+        # One entry per attempt: either a list of chunks, or an exception to
+        # raise, or a ("mid", chunks, exc) tuple that fails part-way through.
+        self.attempts = list(attempts)
+        self.calls = 0
+
+    def generate_content_stream(self, **kw):
+        self.calls += 1
+        plan = self.attempts[min(self.calls - 1, len(self.attempts) - 1)]
+        if isinstance(plan, Exception):
+            raise plan
+
+        def gen():
+            for item in plan:
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+
+        return gen()
+
+
+def stream_provider(monkeypatch, models):
+    p = Provider(settings())
+    client = type("C", (), {"models": models})()
+    monkeypatch.setattr(type(p), "client", property(lambda self: client))
+    return p
+
+
+def test_every_delta_reaches_the_callback_and_the_text_is_their_concatenation(monkeypatch):
+    models = FakeStreamModels([FakeChunk("hola "), FakeChunk("mundo")])
+    seen: list[str] = []
+    out = stream_provider(monkeypatch, models).generate_stream("q", on_delta=seen.append)
+    assert seen == ["hola ", "mundo"]
+    assert out.text == "hola mundo"
+
+
+def test_usage_is_taken_from_the_last_chunk_that_carries_any(monkeypatch):
+    """The first chunk's counts are a fraction of the bill.
+
+    Reading them would under-report the most expensive call in a turn, and
+    nothing downstream could tell — a `Spend` row with plausible small numbers
+    looks exactly like a cheap call.
+    """
+    models = FakeStreamModels([
+        FakeChunk("a", usage=FakeUsage(prompt=10, candidates=1)),
+        FakeChunk("b"),
+        FakeChunk(None, usage=FakeUsage(prompt=10, candidates=900)),
+    ])
+    out = stream_provider(monkeypatch, models).generate_stream("q", on_delta=lambda _: None)
+    assert out.usage.input_tokens == 10
+    assert out.usage.output_tokens == 900
+    assert out.usage.calls == 1
+
+
+def test_a_stream_that_never_reports_usage_still_counts_the_call(monkeypatch):
+    models = FakeStreamModels([FakeChunk("x")])
+    out = stream_provider(monkeypatch, models).generate_stream("q", on_delta=lambda _: None)
+    assert out.usage.calls == 1
+
+
+def test_a_chunk_with_no_text_is_not_an_error(monkeypatch):
+    """Every stream ends with one: a finish_reason and usage, and no parts."""
+    models = FakeStreamModels([FakeChunk("solo"), FakeChunk(None), FakeChunk(explode=True)])
+    seen: list[str] = []
+    out = stream_provider(monkeypatch, models).generate_stream("q", on_delta=seen.append)
+    assert seen == ["solo"]
+    assert out.text == "solo"
+
+
+def test_a_failure_opening_the_stream_is_retried(monkeypatch):
+    monkeypatch.setattr(g.time, "sleep", lambda _: None)
+    models = FakeStreamModels(FakeAPIError(503, "UNAVAILABLE"), [FakeChunk("al fin")])
+    out = stream_provider(monkeypatch, models).generate_stream("q", on_delta=lambda _: None)
+    assert out.text == "al fin"
+    assert models.calls == 2
+
+
+def test_a_failure_after_the_first_delta_is_not_retried(monkeypatch):
+    """A retry here would replay text somebody has already read.
+
+    The reader would watch the answer start over, which is worse than the error
+    — and the tokens of the abandoned attempt are billed either way.
+    """
+    monkeypatch.setattr(g.time, "sleep", lambda _: None)
+    models = FakeStreamModels([FakeChunk("empez"), FakeAPIError(503, "UNAVAILABLE")])
+    seen: list[str] = []
+    with pytest.raises(ProviderError) as e:
+        stream_provider(monkeypatch, models).generate_stream("q", on_delta=seen.append)
+    assert e.value.kind == "provider_unavailable"
+    assert models.calls == 1
+    assert seen == ["empez"]
+
+
+def test_a_transport_failure_mid_stream_is_classified_not_swallowed(monkeypatch):
+    models = FakeStreamModels([FakeChunk("a"), RuntimeError("connection reset")])
+    with pytest.raises(ProviderError) as e:
+        stream_provider(monkeypatch, models).generate_stream("q", on_delta=lambda _: None)
+    assert e.value.kind == "provider_unavailable"
+    assert "connection reset" in str(e.value)
+
+
+def test_streaming_and_whole_calls_are_configured_identically(monkeypatch):
+    """Both go through `_prepare`, which is the point of it existing.
+
+    A thinking budget or a schema resolved differently on the two paths would
+    make a streamed answer a different answer, not merely a differently
+    delivered one.
+    """
+    p = Provider(settings())
+    whole = p._prepare("q", system="S", response_schema={"x": 1}, stage="answering")
+    streamed = p._prepare("q", system="S", response_schema={"x": 1}, stage="answering")
+    assert whole[1].system_instruction == streamed[1].system_instruction
+    assert whole[1].response_mime_type == streamed[1].response_mime_type == "application/json"
+    assert whole[2] == streamed[2]

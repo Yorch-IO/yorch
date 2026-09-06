@@ -40,6 +40,8 @@ def test_applying_every_migration_creates_every_table(database_url: str):
         "20260903180000_answer_style",
         "20260905060000_run_kind_video",
         "20260905180000_run_library_label",
+        "20260905200000_conversation",
+        "20260906120000_delta_kind",
     ]
     assert {
         "library",
@@ -58,6 +60,9 @@ def test_applying_every_migration_creates_every_table(database_url: str):
         "app_user",
         "tenant_membership",
         "answer_style",
+        "conversation",
+        "conversation_turn",
+        "conversation_delta",
     } <= _tables(database_url)
 
 
@@ -99,6 +104,8 @@ def test_require_schema_accepts_a_catalog_ahead_of_the_code(database_url: str):
         "20260901120000_run_event",
         "20260903180000_answer_style",
         "20260905060000_run_kind_video",
+        "20260905180000_run_library_label",
+        "20260905200000_conversation",
         m.REQUIRED_MIGRATION,
     ]
 

@@ -11,7 +11,8 @@
     "import": "Importar",
     "ask": "Preguntar",
     "explore": "Explorar",
-    "graph": "Grafo"
+    "graph": "Grafo",
+    "chat": "Conversación"
   },
   "home": {
     "title": "Inicio",
@@ -361,6 +362,44 @@
     "again": "Preguntar de nuevo",
     "thinkingFor": "Buscando… {{seconds}} s",
     "keepsRunning": "sigue en marcha aunque cambies de pestaña o cierres la ventana"
+  },
+  "chat": {
+    "title": "Conversación",
+    "intro": "Pregunta y sigue preguntando: cada mensaje se reescribe como una pregunta independiente antes de buscar en la biblioteca, y toda respuesta sigue llevando citas que puedes comprobar.",
+    "conversations": "Conversaciones",
+    "new": "Nueva conversación",
+    "listEmpty": "Aún no hay conversaciones en este estante.",
+    "untitled": "Sin título",
+    "turnCount": "turnos ({{count}})",
+    "delete": "eliminar",
+    "confirmDelete": "Eliminar definitivamente",
+    "cancel": "cancelar",
+    "nothingYet": "Pregunta algo para empezar. Las preguntas siguientes pueden referirse a las anteriores.",
+    "message": "Mensaje",
+    "placeholder": "Haz una pregunta y luego continúa…",
+    "send": "Enviar",
+    "sending": "Respondiendo…",
+    "thinking": "Buscando en la biblioteca…",
+    "writing": "escribiendo…",
+    "effortLegend": "Cuánto buscar",
+    "searchedAs": "Se buscó: {{question}}",
+    "answered": "Respuesta",
+    "insufficient": "Evidencia insuficiente",
+    "offCorpus": "Esta pregunta no es sobre esta biblioteca",
+    "failed": "No se pudo responder este turno.",
+    "noAnswer": "No se produjo ninguna respuesta.",
+    "showCitations": "citas ({{count}})",
+    "citations": "Citas",
+    "noCitations": "Las citas aparecen aquí cuando un turno ha sido respondido.",
+    "noPassage": "El fragmento de esta cita no está almacenado.",
+    "stage": {
+      "rewriting": "Interpretando la pregunta…",
+      "planning": "Decidiendo dónde buscar…",
+      "retrieving": "Buscando en la biblioteca…",
+      "evidence": "{{chunks}} fragmentos encontrados, {{dense}} muy relacionados",
+      "evidenceUnmeasured": "{{chunks}} fragmentos encontrados",
+      "generating": "Redactando la respuesta…"
+    }
   },
   "explore": {
     "title": "Explorar",

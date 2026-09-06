@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 
 from ..pipeline import Spend
 from ..providers import Provider, VertexAdapter
 from .effort import budget_for, compose_system
+from .jsonstream import FieldStreamer
 from .types import Answer, Citation, Evidence, Plan, Question
 
 log = logging.getLogger(__name__)
@@ -104,7 +106,24 @@ def compose(
     evidence: list[Evidence],
     plan: Plan | None = None,
     style: str = "",
+    on_delta: Callable[[str], None] | None = None,
 ) -> Answer:
+    """Compose an answer, or refuse.
+
+    `on_delta` makes this stream: it receives the answer's prose as the model
+    writes it, decoded out of the JSON envelope by `FieldStreamer`. It changes
+    nothing else. **Every branch below the call is shared**, which is the reason
+    it is a parameter rather than a second function — `suficiente`, `_verify`,
+    `_clean` and all four refusals have exactly one implementation, so a streamed
+    answer and a whole one carry the same guarantees.
+
+    The consequence a caller has to handle: `citas` is the *last* field in
+    `SCHEMA`, so verification cannot run until the envelope closes. A turn can
+    therefore stream fluent prose and still come back
+    `insufficient_evidence` — because the model cited nothing, or cited chunks it
+    was never shown. What streamed is a draft; the returned `Answer` is the
+    document, and a caller showing the draft must replace it rather than keep it.
+    """
     if not evidence:
         return Answer(
             state="insufficient_evidence",
@@ -116,12 +135,17 @@ def compose(
     adapter = VertexAdapter(provider)
     prompt = _prompt(question, evidence)
 
+    call = dict(
+        system=compose_system(SYSTEM, style),
+        schema=SCHEMA,
+        stage="answering",
+        thinking_budget=_thinking_override(provider, question),
+    )
     try:
-        raw = adapter.generate_json(
-            prompt, system=compose_system(SYSTEM, style), schema=SCHEMA,
-            stage="answering",
-            thinking_budget=_thinking_override(provider, question),
-        )
+        if on_delta is None:
+            raw = adapter.generate_json(prompt, **call)
+        else:
+            raw = _streamed(adapter, prompt, call, on_delta)
     except Exception as e:
         log.warning("answer generation failed: %s", e)
         return Answer(
@@ -178,6 +202,38 @@ def compose(
         spend=spend,
         effort=question.effort,
     )
+
+
+def _streamed(
+    adapter: VertexAdapter,
+    prompt: str,
+    call: dict,
+    on_delta: Callable[[str], None],
+) -> dict:
+    """The same call, with `respuesta` relayed as it is decoded.
+
+    The envelope arrives as JSON, so what reaches `on_delta` here is the prose
+    of one field and nothing else — no braces, no field names, no escapes.
+
+    `finish()` matters on the failure path as much as the happy one: a stream cut
+    short by `MAX_TOKENS` never closes the string, and the characters already
+    decoded are the best draft there is. Withholding them because a closing quote
+    never arrived would lose the visible answer to a truncation that
+    `json.loads` is about to complain about anyway.
+    """
+    streamer = FieldStreamer("respuesta")
+
+    def relay(piece: str) -> None:
+        shown = streamer.feed(piece)
+        if shown:
+            on_delta(shown)
+
+    try:
+        return adapter.generate_json_stream(prompt, on_delta=relay, **call)
+    finally:
+        tail = streamer.finish()
+        if tail:
+            on_delta(tail)
 
 
 _INLINE_ID = re.compile(

@@ -96,4 +96,23 @@ describe("translation bundles", () => {
       );
     }
   });
+
+  it("names every tab in the sidebar", () => {
+    // The hole the dead-key scan cannot see. The nav renders a *dynamic* key,
+    // `t(`nav.${name}`)`, so the scan's dynamic fallback marks every `nav.*` as
+    // used and a tab with no label of its own is invisible to it — the scan
+    // finds a key nothing reads and is blind to a read with no key.
+    //
+    // Found the way it had to be: an eighth tab was added and the sidebar
+    // rendered the literal string `nav.chat` in the real window.
+    const tabs = readFileSync(join(process.cwd(), "src/App.tsx"), "utf8");
+    const block = tabs.match(/const TABS = \[([\s\S]*?)\] as const;/);
+    expect(block, "TABS is no longer a literal array; this test cannot read it").toBeTruthy();
+    const names = [...block![1]!.matchAll(/"([a-z]+)"/g)].map((m) => m[1]!);
+    expect(names.length).toBeGreaterThan(1);
+    for (const name of names) {
+      expect(Object.keys(en.nav), `nav.${name} is missing from en`).toContain(name);
+      expect(Object.keys(es.nav), `nav.${name} is missing from es`).toContain(name);
+    }
+  });
 });

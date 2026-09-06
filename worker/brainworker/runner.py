@@ -9,11 +9,12 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from . import config
-from .activities import activating, asking, ingest, paid, rebuild, removing
+from .activities import activating, asking, chatting, ingest, paid, rebuild, removing
 from .activities import video as videoacts
 from .activities.health import probe_provider, probe_services
 from .workflows.activation import ActivationWorkflow
 from .workflows.ask import AskWorkflow
+from .workflows.chat import ChatWorkflow
 from .workflows.ingest import IngestWorkflow
 from .workflows.ping import PingWorkflow
 from .workflows.probe import ProviderProbeWorkflow
@@ -28,6 +29,7 @@ WORKFLOWS = [
     IngestWorkflow,
     RebuildWorkflow,
     AskWorkflow,
+    ChatWorkflow,
     RemovalWorkflow,
     ActivationWorkflow,
     ProviderProbeWorkflow,
@@ -43,6 +45,11 @@ ACTIVITIES = [
     asking.answer_question,
     asking.start_question_run,
     asking.record_question_cost,
+    chatting.open_chat_run,
+    chatting.run_chat_turn,
+    chatting.fail_chat_turn,
+    chatting.name_conversation,
+    chatting.record_turn_cost,
     removing.remove_document,
     removing.remove_version,
     activating.promote_version,

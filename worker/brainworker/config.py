@@ -122,6 +122,21 @@ class Paths:
         return self.root / "cache"
 
     @property
+    def embed_cache(self) -> pathlib.Path:
+        """Embeddings already paid for.
+
+        At the volume root rather than under a tenant, for the reason the
+        correction cache is: an entry is keyed by the model, the width, the task
+        and the text, so reading one requires already holding that text. That is
+        a saving, not a channel.
+
+        Here rather than beside its callers because there are now two — indexing
+        and *answering* — and a second copy of this path would be a cache that
+        silently never hits, which is the failure mode a cache cannot report.
+        """
+        return self.cache / "embed"
+
+    @property
     def snapshots(self) -> pathlib.Path:
         return self.root / "snapshots"
 
@@ -234,6 +249,17 @@ class Gemini:
             "correction": 0,
             "semantics": 0,
             "profile": 0,
+            # Rewriting a follow-up into a standalone question is substitution:
+            # "¿y su muerte?" plus the previous turn becomes "¿qué dice el
+            # corpus sobre la muerte de Jesucristo?". It is the same kind of
+            # mechanical work as `planning`, on a prompt a few hundred tokens
+            # long, and it sits between the user pressing enter and anything
+            # appearing — so reasoning there buys nothing and is paid for in
+            # latency as well as tokens.
+            "chat-rewrite": 0,
+            # Naming a conversation from its first exchange, once. Same
+            # reasoning, and the output is a handful of words.
+            "chat-title": 0,
         }
     )
 

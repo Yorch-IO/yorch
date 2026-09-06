@@ -21,6 +21,7 @@ from typing import Any, Iterator, Sequence
 
 import psycopg
 from psycopg.rows import class_row, dict_row
+from psycopg.types.json import Json
 
 from ..graph.schema import LEGACY_TENANT_ID
 from psycopg_pool import ConnectionPool
@@ -227,6 +228,50 @@ class RunSummary:
     #: price and a run that has not spent yet are different facts, and zero
     #: claims the second. A run still in its free stages legitimately has none.
     usd_so_far: float | None
+
+
+#: How many times `open_turn` will retry a lost race for the next sequence
+#: number. Two concurrent turns in one conversation is already unusual — the Ask
+#: screen allows one question at a time for the same reason — so this is a
+#: backstop against a duplicate signal, not a queue.
+_TURN_SEQ_ATTEMPTS = 5
+
+
+@dataclass
+class Conversation:
+    """One multi-turn conversation, as a list renders it."""
+
+    id: str
+    library_id: str
+    title: str
+    title_generated: bool
+    created_at: datetime
+    last_message_at: datetime
+    turns: int = 0
+
+
+@dataclass
+class ConversationTurn:
+    """One question and its answer.
+
+    `searched` is the standalone question the rewrite produced and is what was
+    actually embedded — shown rather than kept for debugging, because an answer
+    to a question the person did not type is indistinguishable from a bad answer
+    unless the substitution is visible.
+    """
+
+    seq: int
+    question: str
+    searched: str | None
+    answer: str
+    state: str
+    effort: str
+    style_effort: str | None
+    citations: list[dict[str, Any]]
+    cited_evidence: list[dict[str, Any]]
+    error: dict[str, str] | None
+    asked_at: datetime
+    answered_at: datetime | None
 
 
 @dataclass
@@ -1441,4 +1486,334 @@ class Catalog:
             conn.execute(
                 "UPDATE profile_warning SET acknowledged = true WHERE id = %s",
                 (warning_id,),
+            )
+
+    # -- conversations -----------------------------------------------------
+    #
+    # `conversation` takes a required `tenant_id` on every read, like every other
+    # listing here. `conversation_turn` and `conversation_delta` never take one:
+    # they derive it in the INSERT from the conversation they hang off, exactly
+    # as `cost_entry`, `run_artifact` and `run_event` derive theirs from a run.
+    # A turn and its conversation therefore cannot disagree about who owns them,
+    # and a write naming a conversation that does not exist inserts nothing —
+    # which is why `start_conversation` must run before any turn is signalled.
+
+    def start_conversation(
+        self,
+        conversation_id: str,
+        *,
+        tenant_id: str,
+        library_id: str,
+        title: str,
+    ) -> None:
+        """Create the row a conversation's turns will hang off."""
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO conversation
+                       (id, tenant_id, library_id, title)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (id) DO NOTHING
+                """,
+                (conversation_id, tenant_id, library_id, title),
+            )
+
+    def conversations(
+        self, *, tenant_id: str, limit: int = 50
+    ) -> list[Conversation]:
+        """This organisation's conversations, most recently used first."""
+        with self._conn() as conn:
+            with conn.cursor(row_factory=class_row(Conversation)) as cur:
+                return cur.execute(
+                    """
+                    SELECT c.id, c.library_id, c.title, c.title_generated,
+                           c.created_at, c.last_message_at,
+                           (SELECT count(*) FROM conversation_turn t
+                             WHERE t.conversation_id = c.id)::int AS turns
+                      FROM conversation c
+                     WHERE c.tenant_id = %s
+                     ORDER BY c.last_message_at DESC
+                     LIMIT %s
+                    """,
+                    (tenant_id, limit),
+                ).fetchall()
+
+    def conversation(
+        self, conversation_id: str, *, tenant_id: str
+    ) -> Conversation | None:
+        with self._conn() as conn:
+            with conn.cursor(row_factory=class_row(Conversation)) as cur:
+                return cur.execute(
+                    """
+                    SELECT c.id, c.library_id, c.title, c.title_generated,
+                           c.created_at, c.last_message_at,
+                           (SELECT count(*) FROM conversation_turn t
+                             WHERE t.conversation_id = c.id)::int AS turns
+                      FROM conversation c
+                     WHERE c.id = %s AND c.tenant_id = %s
+                    """,
+                    (conversation_id, tenant_id),
+                ).fetchone()
+
+    def set_conversation_title(
+        self,
+        conversation_id: str,
+        title: str,
+        *,
+        tenant_id: str,
+        generated: bool = True,
+    ) -> None:
+        """Name a conversation.
+
+        `generated=True` is the model naming it, and it happens once:
+        `title_generated` is recorded rather than inferred from the turn count,
+        because a title call that failed must not be retried on every subsequent
+        turn of a long conversation.
+
+        `generated=False` is the provisional name — the first question,
+        truncated — and it **refuses to overwrite a generated one**. Without that
+        guard the two writers race on a fast first turn: the model names the
+        conversation, and a provisional write that was already in flight puts the
+        truncated question back over it.
+        """
+        guard = "" if generated else " AND NOT title_generated"
+        with self._conn() as conn:
+            conn.execute(
+                f"""
+                UPDATE conversation
+                   SET title = %s, title_generated = %s
+                 WHERE id = %s AND tenant_id = %s{guard}
+                """,
+                (title, generated, conversation_id, tenant_id),
+            )
+
+    def delete_conversation(self, conversation_id: str, *, tenant_id: str) -> bool:
+        """Remove a conversation and its turns. False if it was not theirs.
+
+        Unlike removing a document, this touches no other store: a conversation
+        has no Qdrant points and no graph nodes, so the ordering `removal.py`
+        exists to enforce has nothing to order. The turns and their deltas go
+        with it by cascade.
+        """
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM conversation WHERE id = %s AND tenant_id = %s",
+                    (conversation_id, tenant_id),
+                )
+                return cur.rowcount > 0
+
+    def turns(
+        self, conversation_id: str, *, tenant_id: str, limit: int | None = None
+    ) -> list[ConversationTurn]:
+        """The transcript, oldest first.
+
+        `limit` keeps the *last* n, which is what reseeding a dormant session's
+        window needs — the end of a conversation is what a pronoun reaches back
+        into. Ordered ascending on the way out either way, because both the
+        reader and the rewrite read it forwards.
+        """
+        tail = "" if limit is None else " ORDER BY t.seq DESC LIMIT %s"
+        args: tuple[Any, ...] = (conversation_id, tenant_id)
+        if limit is not None:
+            args = args + (limit,)
+        with self._conn() as conn:
+            with conn.cursor(row_factory=class_row(ConversationTurn)) as cur:
+                rows = cur.execute(
+                    f"""
+                    SELECT t.seq, t.question, t.searched, t.answer, t.state,
+                           t.effort, t.style_effort, t.citations, t.cited_evidence,
+                           t.error, t.asked_at, t.answered_at
+                      FROM conversation_turn t
+                      JOIN conversation c ON c.id = t.conversation_id
+                     WHERE t.conversation_id = %s AND c.tenant_id = %s
+                    {tail or " ORDER BY t.seq"}
+                    """,
+                    args,
+                ).fetchall()
+        return sorted(rows, key=lambda r: r.seq)
+
+    def open_turn(
+        self,
+        conversation_id: str,
+        *,
+        tenant_id: str,
+        question: str,
+        effort: str,
+    ) -> int | None:
+        """Claim the next turn number and record the question. `None` if refused.
+
+        One statement doing three things that must not be separable:
+
+        * **the ownership predicate** — `c.tenant_id = %s` in the `SELECT`'s
+          `WHERE`, so a conversation belonging to another organisation produces
+          no row and this returns `None`. An id is not authorization, and the
+          free plane's `/reindex` is the recorded example of what happens when a
+          lookup by id is trusted on its own.
+        * **the tenant derivation** — `c.tenant_id` is *selected*, never passed,
+          so a turn cannot disagree with its conversation.
+        * **the sequence** — computed inside the same insert. Two concurrent
+          turns can still both read the same maximum under READ COMMITTED, and
+          the primary key is what settles it: the loser gets a unique violation
+          and retries, rather than silently overwriting the winner's question.
+
+        The row is written before the turn is answered, deliberately. Same
+        reasoning as `start_question_run` opening a run row before asking: a turn
+        in flight has to be visible while it is in flight, or a reader who
+        reloads mid-answer sees a conversation that has forgotten what they just
+        said.
+        """
+        for _ in range(_TURN_SEQ_ATTEMPTS):
+            try:
+                with self._conn() as conn:
+                    with conn.cursor() as cur:
+                        row = cur.execute(
+                            """
+                            INSERT INTO conversation_turn
+                                   (conversation_id, seq, tenant_id, question, effort)
+                            SELECT c.id,
+                                   coalesce((SELECT max(t.seq)
+                                               FROM conversation_turn t
+                                              WHERE t.conversation_id = c.id), 0) + 1,
+                                   c.tenant_id, %s, %s
+                              FROM conversation c
+                             WHERE c.id = %s AND c.tenant_id = %s
+                            RETURNING seq
+                            """,
+                            (question, effort, conversation_id, tenant_id),
+                        ).fetchone()
+                return None if row is None else int(row[0])
+            except psycopg.errors.UniqueViolation:
+                continue
+        raise CatalogError(
+            f"could not claim a turn number for {conversation_id}: "
+            "too many concurrent turns"
+        )
+
+    def settle_turn(
+        self,
+        conversation_id: str,
+        seq: int,
+        *,
+        state: str,
+        searched: str = "",
+        answer: str = "",
+        style_effort: str | None = None,
+        citations: Sequence[dict[str, Any]] = (),
+        cited_evidence: Sequence[dict[str, Any]] = (),
+        error: dict[str, str] | None = None,
+    ) -> None:
+        """Write the turn's outcome, and touch the conversation's clock.
+
+        Both in one connection: a transcript whose last turn is answered while
+        the list still sorts the conversation by an older timestamp is a
+        conversation the reader cannot find again.
+        """
+        with self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE conversation_turn
+                   SET state = %s, searched = %s, answer = %s,
+                       style_effort = %s, citations = %s, cited_evidence = %s,
+                       error = %s, answered_at = CURRENT_TIMESTAMP
+                 WHERE conversation_id = %s AND seq = %s
+                """,
+                (
+                    state, searched or None, answer, style_effort,
+                    Json(list(citations)), Json(list(cited_evidence)),
+                    Json(error) if error else None,
+                    conversation_id, seq,
+                ),
+            )
+            conn.execute(
+                "UPDATE conversation SET last_message_at = CURRENT_TIMESTAMP "
+                "WHERE id = %s",
+                (conversation_id,),
+            )
+
+    # -- the stream relay --------------------------------------------------
+
+    def publish(
+        self,
+        conversation_id: str,
+        turn_seq: int,
+        rows: Sequence[tuple[int, str, str, dict[str, Any] | None]],
+    ) -> None:
+        """Publish relay rows for a turn in flight: `(chunk_seq, kind, text, detail)`.
+
+        One ordered stream carrying two things. `kind` is `token` for prose and a
+        stage name otherwise, and because both share `chunk_seq` they interleave
+        without the reader having to merge two sources — which a timestamp could
+        not do anyway, since two flushes inside a millisecond are exactly what
+        the sequence exists to disambiguate.
+
+        Prose is batched by the caller: a row per token would be tens of
+        thousands of inserts for one answer. Stages are not batched, because
+        there are five of them and each one's whole value is arriving *when it
+        happens*.
+
+        Best-effort at every call site: a relay that is down costs the reader a
+        live view, never the answer, which lands on the turn row regardless.
+        """
+        if not rows:
+            return
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO conversation_delta
+                           (conversation_id, turn_seq, chunk_seq, tenant_id,
+                            kind, text, detail)
+                    SELECT %s, %s, %s, c.tenant_id, %s, %s, %s
+                      FROM conversation c WHERE c.id = %s
+                    ON CONFLICT (conversation_id, turn_seq, chunk_seq) DO NOTHING
+                    """,
+                    [
+                        (
+                            conversation_id, turn_seq, n, kind, text,
+                            Json(detail) if detail is not None else None,
+                            conversation_id,
+                        )
+                        for n, kind, text, detail in rows
+                    ],
+                )
+
+    def relay(
+        self, conversation_id: str, turn_seq: int, *, tenant_id: str, since: int = 0
+    ) -> list[dict[str, Any]]:
+        """Everything published for one turn after `since`, in order.
+
+        `since` is the resume point that makes a dropped SSE connection cost
+        nothing, which is the whole reason this is a table rather than a
+        notification. Stage rows come back through it too, so a reader who
+        reconnects mid-turn learns which stage it is in rather than only what
+        prose it has missed.
+        """
+        with self._conn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                return cur.execute(
+                    """
+                    SELECT d.chunk_seq, d.kind, d.text, d.detail
+                      FROM conversation_delta d
+                      JOIN conversation c ON c.id = d.conversation_id
+                     WHERE d.conversation_id = %s AND d.turn_seq = %s
+                       AND d.chunk_seq > %s AND c.tenant_id = %s
+                     ORDER BY d.chunk_seq
+                    """,
+                    (conversation_id, turn_seq, since, tenant_id),
+                ).fetchall()
+
+    def clear_deltas(self, conversation_id: str, turn_seq: int) -> None:
+        """Drop a settled turn's relay rows.
+
+        The finished text is on the turn row, so anything left here is a second
+        copy of something already saved. Called after `settle_turn`, never
+        before: a reader still following the stream has to be able to reach the
+        end of it.
+        """
+        with self._conn() as conn:
+            conn.execute(
+                "DELETE FROM conversation_delta "
+                "WHERE conversation_id = %s AND turn_seq = %s",
+                (conversation_id, turn_seq),
             )

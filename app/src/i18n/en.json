@@ -11,7 +11,8 @@
     "import": "Import",
     "ask": "Ask",
     "explore": "Explore",
-    "graph": "Graph"
+    "graph": "Graph",
+    "chat": "Conversation"
   },
   "home": {
     "title": "Home",
@@ -361,6 +362,44 @@
     "again": "Ask again",
     "thinkingFor": "Searching… {{seconds}}s",
     "keepsRunning": "it keeps running if you leave this tab or close the window"
+  },
+  "chat": {
+    "title": "Conversation",
+    "intro": "Ask a follow-up and it is understood in context: the question is rewritten to stand on its own before the library is searched, and every answer still carries citations you can check.",
+    "conversations": "Conversations",
+    "new": "New conversation",
+    "listEmpty": "No conversations on this shelf yet.",
+    "untitled": "Untitled",
+    "turnCount": "turns ({{count}})",
+    "delete": "delete",
+    "confirmDelete": "Delete for good",
+    "cancel": "cancel",
+    "nothingYet": "Ask something to begin. Later questions may refer back to earlier ones.",
+    "message": "Message",
+    "placeholder": "Ask a question, then follow it up…",
+    "send": "Send",
+    "sending": "Answering…",
+    "thinking": "Searching the library…",
+    "writing": "writing…",
+    "effortLegend": "How hard to look",
+    "searchedAs": "Searched as: {{question}}",
+    "answered": "Answer",
+    "insufficient": "Not enough evidence",
+    "offCorpus": "This question is not about this library",
+    "failed": "This turn could not be answered.",
+    "noAnswer": "No answer was produced.",
+    "showCitations": "citations ({{count}})",
+    "citations": "Citations",
+    "noCitations": "Citations appear here once a turn has been answered.",
+    "noPassage": "The passage behind this citation is not stored.",
+    "stage": {
+      "rewriting": "Understanding the follow-up…",
+      "planning": "Working out where to look…",
+      "retrieving": "Searching the library…",
+      "evidence": "{{chunks}} passages found, {{dense}} closely related",
+      "evidenceUnmeasured": "{{chunks}} passages found",
+      "generating": "Writing the answer…"
+    }
   },
   "explore": {
     "title": "Explore",

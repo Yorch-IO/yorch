@@ -32,6 +32,19 @@ pub enum AppError {
     /// advice. "It may still be starting" is true of a refused connection and a
     /// lie about an expired deadline — the API answered, just not in time — and
     /// saying it anyway sent two investigations at the wrong component.
+    /// A stream that opened, said something or nothing, and then went quiet.
+    ///
+    /// A third case rather than either of the two above, for the same reason
+    /// they are two: the advice differs. A refused connection is "the stack may
+    /// still be starting"; an expired total budget is "it answered, too slowly";
+    /// this is "the connection is open and the far end has stopped talking",
+    /// which is a worker that died mid-answer or a network that went away
+    /// without closing. The turn itself is unaffected — it lands in the catalog —
+    /// so the advice is to reopen the conversation, not to ask again and pay
+    /// twice.
+    #[error("the answer stopped arriving from {url} after {seconds}s")]
+    ControlStreamStalled { url: String, seconds: u64 },
+
     #[error("the control API did not answer within the time allowed at {url}: {source}")]
     ControlTimeout {
         url: String,
@@ -84,6 +97,7 @@ impl AppError {
             Self::DockerMissing(_) => "docker_missing",
             Self::Compose { .. } => "compose_failed",
             Self::ControlUnreachable { .. } => "control_unreachable",
+            Self::ControlStreamStalled { .. } => "control_stream_stalled",
             Self::ControlTimeout { .. } => "control_timeout",
             Self::ControlStatus { .. } => "control_status",
             Self::NoFreePort { .. } => "no_free_port",

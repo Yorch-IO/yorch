@@ -4,7 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-Three things, and one of them is **not** in this checkout:
+**Four things, and two of them are not in this checkout.** That sentence used to
+read "three things, and one of them", and the arithmetic was load-bearing: it is
+why the conversations feature shipped to both planes and to the desktop app on
+2026-09-06 and **missed the Angular web client entirely**, which consumes the
+same paths and has its own screen for every other feature. A plan that says
+"both planes" is a plan about two backends and says nothing about how many
+clients there are. Count them here.
 
 - **`docaget/`** — a working, measured document-indexing engine (Python package
   `docagent`). Extracts, chunks with byte-exact spans, LLM-corrects, embeds via
@@ -24,6 +30,20 @@ Three things, and one of them is **not** in this checkout:
   being built *around* that engine: a durable Temporal pipeline with an approval
   gate before anything is paid for, a Postgres catalog for provenance and cost,
   and a UI that makes the pre-index workflow inspectable.
+- **`../yorch-angular-frontend`** — the **web client**, in its own checkout,
+  and the one most easily forgotten because nothing in this repository imports
+  it. Angular 20+ standalone components with signals and `httpResource`, served
+  against the *paid* plane through `environment.apiBase = '/api'` proxied to
+  8788 — it has no local mode and no Rust, so it talks to NestJS directly and
+  therefore sees **snake_case payloads** where the desktop client sees camelCase
+  (the Rust proxy renames on the way out). Its `core/models/contract.spec.ts`
+  validates captured fixtures against hand-written models rather than
+  enumerating the API surface, so **a path it has never heard of is invisible to
+  it and its suite stays green** — which is the mechanism by which "stale" here
+  does not look like "broken". Its test command is
+  `npx ng test --watch=false`; the `--browsers` flag now wants a Vitest browser
+  provider that is not installed. Plan:
+  `~/.claude/plans/angular-web-chat.md`.
 
 The directory is spelled **`docaget`**; the Python package and CLI inside it are
 spelled **`docagent`**. This is a typo in the directory name and it is
@@ -580,6 +600,55 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
   out would make an id authorization, which the free plane's `/reindex` already
   records as a silent cross-tenant write. The primary key settles the race two
   concurrent turns can lose.
+- **The wire is silent for most of a turn, so both planes ping.** This is the
+  same measurement as the stage timeline read from the connection's side, and it
+  was a live defect until 2026-09-06. Nothing is emitted between `generating`
+  and the first prose, because reasoning tokens produce no text and
+  `FieldStreamer` withholds a 60-character tail on top of that — measured against
+  Vertex: **8.4 s on a `brief` turn, 11 s on two `standard` ones, and 43 s on an
+  `off_corpus` turn**, which returns before `compose` is reached and therefore
+  streams nothing at all, ever. A client cannot tell that from a dead
+  connection, and the desktop app's `CHAT_STREAM_IDLE` was measuring the model's
+  reasoning rather than the socket.
+  `{"type": "ping"}` every `STREAM_PING_SECONDS` (10 s, forked as `PING_MS` on
+  the paid plane), reset by every *real* event and not only by another ping — so
+  a stream carrying prose never interleaves one. It is a real event and not an
+  SSE comment because Nest's `@Sse()` serialises a `MessageEvent` and cannot
+  write `: keepalive`, and one shape from both planes is worth more than a
+  comment on one of them. **It needs no client change**, which is the payoff of
+  the rule directly above: Rust, React and Angular all treat an unrecognised
+  `type` as data. It carries **no `seq`** — it is not a position in the relay, so
+  a reader resuming with `?since=` can never advance past unread prose.
+  Verified live on both planes: one ping 10.08 s into the paid plane's silence
+  and four at 10 s intervals across the free plane's 43 s.
+- **A broken stream is not a failed turn, and the advice is opposite.** The turn
+  keeps generating in the worker and lands in `conversation_turn` either way —
+  that is the whole reason a disconnect does not cancel it — so rendering "this
+  turn could not be answered" over one that is still running is the recorded
+  `ASK_TIMEOUT` failure in a new shape: an answer computed, billed, and reported
+  as lost. Seen in the real window on 2026-09-06 against the paid plane. Both
+  screens key on the kind rather than on the state (`LOST_STREAM` =
+  `control_stream_stalled`, `turn_abandoned`) and, more importantly, **ask the
+  server what happened** instead of deciding: one free re-read of the
+  conversation, never a re-ask, which would pay for the turn twice. The client's
+  own guess stands only if that read fails too. Note `AppErrorKind` in
+  `app/src/lib/api.ts` had never declared `control_stream_stalled`, so no
+  guidance could be keyed on a kind Rust had been returning since the feature
+  shipped.
+- **A refusal's `reason` is the only thing that says which refusal it was, and
+  `_settle` was dropping it.** `error` went out as `None` for every state, so
+  four different facts with four different remedies rendered as one line reading
+  "not enough evidence": nothing cleared the dense floor, the model cited nothing
+  verifiable, the search returned no fragment at all, and the model could not
+  compose an envelope. `answer.py` states the rule this restores — "no answer"
+  with nothing to look at is indistinguishable from a broken index. It rides in
+  `error` as `{kind: state, message: reason}` rather than in a column of its own,
+  because both clients already render `error.message` under a settled turn, so
+  it needs no migration and no payload change; and because `kind` being the
+  *state* means the guidance maps have never heard of it and add nothing, which
+  is correct — a refusal must not borrow a failure's advice. Verified live: an
+  `off_corpus` turn now stores "ningún fragmento de esta biblioteca supera el
+  umbral de similitud".
 
 - **`off_corpus` and `insufficient_evidence` are different states.** The first
   means nothing cleared `topicality_gate`'s dense floor, the second means the
@@ -1250,7 +1319,19 @@ Conversation screen's composer in the real window and sending them with `Return`
 So this verification is unblocked and merely undone; the recipe is
 `GDK_BACKEND=x11` (so the window is an XWayland client `xdotool` and `import` can
 see at all), `xdotool search --name "Company Brain"`, `mousemove --window` to
-focus a field, then `xdotool type` with **no** `--window`. **No video has been
+focus a field, then `xdotool type` with **no** `--window`.
+**And take the click coordinates from `xwininfo`, not from
+`xdotool getwindowgeometry`.** The search returns two windows with this name —
+a frame and the client inside it — and for the client the two tools disagree
+about where it is: `xdotool` said `695,192` where `xwininfo` said `670,130`,
+because it reports the position relative to the parent it resolved rather than
+to the root. `import -window <id>` dumps the *client*, so a screenshot's
+coordinates are the client's, and a 25x62 px offset is exactly enough to land a
+sidebar click in the empty space below the last tab. The failure is silent —
+`xdotool mousemove … click 1` reports success, the pointer really is over the
+window, and the screenshot afterwards simply shows the screen unchanged — so it
+reads as "clicks do not reach the webview", which is the wrong conclusion and
+the one already recorded once above. **No video has been
 indexed on the paid plane**: production serves `POST /videos` (verified — it
 answers 401 where an unknown route answers 404) and no run has ever started
 there. And **nothing longer than 19 seconds has been indexed at all**, on either
@@ -1264,12 +1345,28 @@ Six real turns went through the real window against the live free plane on
 total — and both `chat.parity.spec.ts` and the routes were verified on the paid
 plane, which answers 401 on every chat path where an unknown route answers 404.
 Stage events were added the same day and are verified live — see the timeline in
-*Conversations* above. What has not happened: **no conversation has ever been
-held on the paid plane** (that needs a Cognito JWT and would spend on
-`preprod`'s 73 books); and **nobody has watched the draft→settled replacement
-happen**, because the only turn that could have shown it refused *before*
-`compose` was reached. The replacement is covered by tests at three layers and
-by nothing in a window.
+*Conversations* above.
+
+**The paid plane's half was closed later that day**, and it is worth reading as
+the argument for closing this kind of gap rather than recording it. Conversations
+were held on `preprod`/`lib_teologia` — the real 73-book corpus — three ways: by
+`curl` against 8788 with a Cognito token, in the Angular web client, and in the
+desktop app switched to cloud mode. About a dozen paid turns, `standard` and
+`brief`, at $0.023-$0.033 each. **It found three defects that no suite could
+see, one of them making the feature unusable on a real corpus** — the silent
+wire, the "could not be answered" over a still-running turn, and the dropped
+refusal reason, all three written up under *Conversations*. A fourth is recorded
+under *Known defects*: one answering call spent its whole 65,521-token output
+ceiling on reasoning and billed $0.497 for no text.
+It also found the naming bug in the paid plane's own `chat.service.ts`, where
+`answered` was counted *after* `claimTurn`, so a conversation was never named —
+and the existing test had been asserting the buggy value.
+
+What still has not happened: **nobody has watched the draft→settled replacement
+happen.** The turns that could have shown it either answered cleanly or refused
+*before* `compose` was reached, and the case needs a turn that streams fluent
+prose and then loses every citation to `_verify`. Covered by tests at three
+layers and by nothing in a window.
 
 **Folder watching does not exist.** `source_folder` and its repository methods
 are there; there is no scan workflow, no add/change/delete detection, and
@@ -1360,11 +1457,22 @@ has still never *succeeded* from the window, because the account driving it
 belongs to the legacy organisation and that is precisely the case the paid
 plane refuses — see the defect below on that kind carrying two meanings.
 
-**The backend switch is still unwitnessed.** The library picker's refetch on a
-change of plane (`lib/backend.tsx`) is covered by
-`lib/backend.test.tsx`, whose three switching tests fail when the fix is
-removed — checked by removing it — and nobody has yet watched the picker change
-from `lib_teologia · 72 documentos` to another plane's shelf in a window.
+**The backend switch is witnessed as of 2026-09-06, and by more than the
+picker.** It was recorded here as unwitnessed — `lib/backend.test.tsx`'s three
+switching tests fail when the fix is removed, checked by removing it, and nobody
+had watched a real window change planes. The app was then run in **cloud mode
+against the paid plane** and the whole screen came from it: the picker read
+`lib_teologia · 80 documents, 76 indexed` (which is `preprod`, reachable no
+other way — the free plane's legacy tenant holds only `lib_pruebas`), the
+Conversation tab listed the paid plane's two conversations with their generated
+titles, a transcript rendered with its rewrite line and its citations panel, and
+a new turn streamed and settled through the Rust proxy in 13.5 s for $0.0233
+with 4 verified citations. Home renders its stack error in that mode, which is
+correct and not a fault: containers are the local plane's business.
+The session was **injected** rather than signed in, deliberately — the PKCE
+loopback flow is separately tracked as never having run, and what was under test
+here is the switch and the screen, not Cognito. So this closes the switch and
+not the sign-in.
 
 **Drag and drop is in the same position, and cannot leave it by testing.** The
 handler is bound to Tauri's own webview event, which neither jsdom nor a static
@@ -2104,6 +2212,33 @@ Distinct from the list above: this is shipped code that is wrong, not features
 that are missing. Each was found by running the thing, and each is recorded
 rather than fixed because the fix is somebody's decision or sits in another
 session's files.
+
+- **An answering call can spend its entire output ceiling on reasoning, return
+  no text, and be reported as "not enough evidence".** Measured on the real
+  corpus 2026-09-06, a `standard` chat turn over `preprod`/`lib_teologia`: the
+  answering call billed **65,521 output tokens and $0.497373** — 20x the $0.0233
+  a normal turn of the same shape cost forty minutes later — took **6 m 42 s**,
+  and produced not one character of prose. 65,521 is `gemini-3.6-flash`'s
+  65,536-token output ceiling, so the model hit `MAX_TOKENS` while thinking; the
+  envelope never closed, `json.loads` raised, and `answer.compose`'s exception
+  branch returned `insufficient_evidence`. **Nothing failed anywhere.** The run
+  is `succeeded`, the turn reads "Evidencia insuficiente", and that is a claim
+  about the corpus this run has no basis for — it sends the reader to look at
+  their library instead of at the bill.
+  CLAUDE.md already records the neighbouring half — "`max_output_tokens` is
+  measured against reasoning too, and a small budget returns `MAX_TOKENS` with
+  no text" — and the unbounded direction is the same failure from the other end:
+  every effort level deliberately names **no** reasoning budget, on a measured
+  A/B where `None` beat 8192 on four questions, and none of those four ever ran
+  away. So the fix is a decision, not a typo: capping `max_output_tokens` or
+  naming a budget would reverse a measurement, and the alternative — detecting
+  `finish_reason == MAX_TOKENS` and reporting a truncation rather than a
+  refusal — needs the finish reason threaded out of `generate_stream`, which
+  today returns only text and usage.
+  What *was* fixed the same day is that the reason is no longer thrown away, so
+  the turn at least reads "el modelo no pudo componer una respuesta
+  (JSONDecodeError)" instead of a verdict on the corpus. One occurrence in
+  roughly a dozen paid turns.
 
 - **`DocumentGraph` shows a label where it means a count.** `DocumentGraph.tsx:671`
   renders `t("graph.shared", { count: item.sharedConcepts })` under every outer

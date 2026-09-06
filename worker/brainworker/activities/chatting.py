@@ -254,6 +254,33 @@ def _settle(
     """
     cited = {c.chunk_id for c in answer.citations}
     evidence = [asdict(e) for e in answer.evidence if e.chunk_id in cited]
+
+    # A refusal's `reason` is the only thing that says *which* refusal it was,
+    # and it was being dropped: `error` went out as `None` for every state, so a
+    # reader saw "not enough evidence" and nothing else. That flattens four
+    # different facts with four different remedies into one — nothing cleared the
+    # dense floor, the model cited nothing verifiable, the search returned no
+    # fragment at all, and the model could not compose an envelope. `answer.py`
+    # states the rule this restores: "no answer" with nothing to look at is
+    # indistinguishable from a broken index.
+    #
+    # Measured on the turn that found it, on the real corpus 2026-09-06: an
+    # answering call spent **65,521 output tokens — the model's whole ceiling —
+    # on reasoning, returned no text, and billed $0.497**, twenty times a normal
+    # `standard` turn. It surfaced as "Evidencia insuficiente", which is a claim
+    # about the corpus the run had no basis for, and the reason that would have
+    # named the truncation was thrown away here.
+    #
+    # It rides in `error` rather than in a column of its own because both clients
+    # already render `error.message` under a settled turn, so this needs no
+    # migration and no payload change. `kind` is the *state*, which the guidance
+    # maps have never heard of and therefore add nothing to — correct, because a
+    # refusal is not a failure and must not borrow a failure's advice.
+    refusal = (
+        {"kind": state, "message": answer.reason}
+        if state != "answered" and answer.reason
+        else None
+    )
     try:
         with Catalog(
             settings.database_url, pooled=False, timeout=RECORD_TIMEOUT
@@ -267,7 +294,7 @@ def _settle(
                 style_effort=answer.style_effort or None,
                 citations=[asdict(c) for c in answer.citations],
                 cited_evidence=evidence,
-                error=None,
+                error=refusal,
             )
             catalog.clear_deltas(turn.conversation_id, turn.turn_seq)
     except Exception as e:

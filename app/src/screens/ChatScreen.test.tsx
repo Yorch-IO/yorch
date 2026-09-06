@@ -246,6 +246,52 @@ describe("a turn that fails", () => {
     await mounted();
     await send("¿?");
     await waitFor(() => expect(screen.getByText("sin cuota")).toBeTruthy());
+    expect(screen.getByText(t("chat.failed"))).toBeTruthy();
+  });
+});
+
+describe("a stream that breaks", () => {
+  /**
+   * A broken stream and a failed turn are not the same event, and the advice is
+   * opposite. The turn keeps generating in the worker and lands in
+   * `conversation_turn` either way — which is the whole reason a disconnect does
+   * not cancel it — so declaring it unanswerable is the recorded `ASK_TIMEOUT`
+   * failure in a new shape: an answer computed, billed, and reported as lost.
+   * Seen in the real window on 2026-09-06 against the paid plane, when one
+   * upstream Vertex stream stalled and the 120s idle budget fired.
+   */
+  function breaks(kind: string) {
+    chatCreate.mockResolvedValue({ conversationId: "cnv_1", libraryId: "lib_a" });
+    chatTurn.mockResolvedValue({ conversationId: "cnv_1", turnSeq: 1, state: "running" });
+    chatStream.mockRejectedValue(
+      Object.assign(new Error("the answer stopped arriving"), { kind }),
+    );
+  }
+
+  it("says the connection dropped, not that the turn could not be answered", async () => {
+    breaks("control_stream_stalled");
+    await mounted();
+    await send("¿?");
+    await waitFor(() => expect(screen.getByText(t("chat.lostStream"))).toBeTruthy());
+    expect(screen.queryByText(t("chat.failed"))).toBeNull();
+  });
+
+  it("asks the server what happened instead of deciding for itself", async () => {
+    // The dispatch is this client's guess; the catalog holds the fact. Re-reading
+    // is free — re-*asking* is what would pay for the turn twice, and is not
+    // done. So the assertion is that exactly one read follows, and no new turn.
+    breaks("control_stream_stalled");
+    chatRead.mockResolvedValue({
+      id: "cnv_1", libraryId: "lib_a", title: "T", titleGenerated: true,
+      turns: 1, createdAt: "t0", lastMessageAt: "t1",
+      turnsDetail: [turn({ answer: "Sí llegó", state: "answered" })],
+    });
+    await mounted();
+    const before = chatRead.mock.calls.length;
+    await send("¿?");
+    await waitFor(() => expect(screen.getByText("Sí llegó")).toBeTruthy());
+    expect(chatRead.mock.calls.length).toBe(before + 1);
+    expect(chatTurn).toHaveBeenCalledTimes(1);
   });
 });
 

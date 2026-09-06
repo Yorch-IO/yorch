@@ -51,6 +51,20 @@ const STATE_KEY: Record<string, string> = {
   failed: "chat.failed",
 };
 
+/**
+ * Kinds that mean "the delivery broke", never "the turn did".
+ *
+ * `failed` carries two readings and they call for opposite advice. The turn
+ * itself failing is final. A *stream* failing says nothing about the turn: it
+ * keeps generating in the worker and lands in `conversation_turn` either way,
+ * which is the whole reason a disconnect does not cancel it. Rendering
+ * "this turn could not be answered" over a turn that was still running is the
+ * recorded `ASK_TIMEOUT` failure arriving in a new shape — an answer computed,
+ * billed, and reported as lost. Measured in the real window on 2026-09-06,
+ * against the paid plane.
+ */
+const LOST_STREAM = new Set(["control_stream_stalled", "turn_abandoned"]);
+
 export function ChatScreen() {
   const { t } = useTranslation();
   const { selected: libraryId } = useLibraries();
@@ -66,6 +80,11 @@ export function ChatScreen() {
 
   const busy = state.streaming !== null;
   const transcript = useRef<HTMLDivElement | null>(null);
+  // Mirrors the selection for callbacks that must not yank a reader back to a
+  // conversation they have since left. A ref rather than a dependency, so
+  // `follow` is not rebuilt while it is holding a stream open.
+  const selectedRef = useRef(state.selected);
+  selectedRef.current = state.selected;
 
   // -- loading ------------------------------------------------------------
 
@@ -149,9 +168,17 @@ export function ChatScreen() {
         kind: controlErrorKind(e) ?? (isAppError(e) ? e.kind : "chat_failed"),
         message: errorMessage(e),
       });
+      // Then ask the server what actually happened, because the dispatch above
+      // is the client's guess and the catalog holds the fact. Measured in the
+      // window on 2026-09-06: one upstream stream stalled, the idle budget
+      // fired at 120s, and the transcript showed a failure over a turn that was
+      // still generating and would have settled. Re-*reading* is free; re-asking
+      // is what would pay for the turn twice, so only the first is done. The
+      // guess stands only if this read fails too.
+      if (selectedRef.current === conversationId) await open(conversationId);
     }
     void refresh();
-  }, [refresh]);
+  }, [refresh, open]);
 
   const send = useCallback(async () => {
     const text = draft.trim();
@@ -423,7 +450,10 @@ function Turn({
   onCitations: () => void;
 }) {
   const { t } = useTranslation();
-  const stateKey = STATE_KEY[turn.state];
+  const stateKey =
+    turn.state === "failed" && turn.error && LOST_STREAM.has(turn.error.kind)
+      ? "chat.lostStream"
+      : STATE_KEY[turn.state];
 
   return (
     <article className={`turn ${turn.state}`}>

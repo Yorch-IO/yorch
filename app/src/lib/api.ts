@@ -14,6 +14,9 @@ export type AppErrorKind =
   | "compose_failed"
   | "control_unreachable"
   | "control_timeout"
+  // A stream that stopped delivering, which is not the same failure as a
+  // request that never answered: the turn behind it is still running.
+  | "control_stream_stalled"
   | "control_status"
   | "no_free_port"
   | "workspace_not_native"
@@ -107,6 +110,7 @@ const GUIDANCE: Partial<Record<AppErrorKind, string>> = {
   compose_failed: "error.composeFailed",
   control_unreachable: "error.controlUnreachable",
   control_timeout: "error.controlTimeout",
+  control_stream_stalled: "error.controlStreamStalled",
   not_signed_in: "error.notSignedIn",
 };
 

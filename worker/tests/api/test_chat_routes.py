@@ -477,3 +477,83 @@ def test_a_reconnecting_reader_is_sent_the_stages_it_missed_from_since(client, c
     ]
     events = _events(client.get("/chat/cnv_1/turn/1/stream?since=1").text)
     assert [e["stage"] for e in events if e["type"] == "stage"] == ["retrieving"]
+
+
+# -- the keepalive ----------------------------------------------------------
+#
+# The wire is legitimately silent for most of a turn: nothing is emitted between
+# `generating` and the first prose, because reasoning tokens produce no text and
+# `FieldStreamer` withholds a tail on top of that. Measured against Vertex on
+# 2026-09-06: 8.4s on a `brief` turn and 11s on two `standard` ones. A client
+# cannot tell that from a dead connection — and one upstream stream really did
+# stall, silently, until Temporal closed the activity 15 minutes later, while the
+# desktop app's 120s idle budget declared the still-running turn unanswerable.
+
+
+class _SettlesLater:
+    """A catalog whose turn stays `running` for a while, which every other test
+    here deliberately avoids: they assert the shape of a stream over a turn that
+    has already landed, and this is the only behaviour that needs the wait."""
+
+    def __init__(self, polls: int, token_per_poll: bool) -> None:
+        self.inner = _FakeCatalog()
+        self.polls = polls
+        self.token_per_poll = token_per_poll
+        self.seen = 0
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def relay(self, cid, turn_seq, *, tenant_id, since=0):
+        if self.token_per_poll:
+            return [{"chunk_seq": since + 1, "kind": "token", "text": ".", "detail": None}]
+        return []
+
+    def turns(self, cid, *, tenant_id, limit=None):
+        self.seen += 1
+        if self.seen > self.polls:
+            return [Turn(seq=1, answer="listo", state="answered")]
+        return [Turn(seq=1, state="running")]
+
+
+@pytest.fixture
+def quick_ping(monkeypatch):
+    """A poll period an order of magnitude under the ping interval, which is the
+    real ratio (0.2s against 10s) at a speed a test can wait for."""
+    monkeypatch.setattr(main, "STREAM_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(main, "STREAM_PING_SECONDS", 0.1)
+
+
+def test_the_stream_pings_while_the_turn_is_quiet(client, catalog, monkeypatch, quick_ping):
+    fake = _SettlesLater(polls=40, token_per_poll=False)
+    monkeypatch.setattr(main, "Catalog", lambda *_, **__: fake)
+    _open(fake.inner)
+    events = _events(client.get("/chat/cnv_1/turn/1/stream").text)
+    assert [e["type"] for e in events if e["type"] != "ping"] == ["done"]
+    pings = [e for e in events if e["type"] == "ping"]
+    assert pings, "a silent turn left the wire silent, which reads as a dead connection"
+    # No sequence: a ping is not a position in the relay, so a client resuming
+    # with `?since=` must never be able to advance past unread prose.
+    assert all("seq" not in p for p in pings)
+
+
+def test_no_ping_arrives_while_prose_is_still_flowing(client, catalog, monkeypatch, quick_ping):
+    """The interval is reset by every *real* event, not only by another ping.
+
+    This is what that reset buys, and it is why the assertion is on the count
+    rather than on the timing: with tokens arriving faster than the interval the
+    wire is never quiet, so a keepalive would only be noise interleaved through
+    an answer somebody is reading.
+    """
+    fake = _SettlesLater(polls=40, token_per_poll=True)
+    monkeypatch.setattr(main, "Catalog", lambda *_, **__: fake)
+    _open(fake.inner)
+    events = _events(client.get("/chat/cnv_1/turn/1/stream").text)
+    assert len([e for e in events if e["type"] == "token"]) >= 40
+    assert [e for e in events if e["type"] == "ping"] == []

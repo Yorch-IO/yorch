@@ -2089,6 +2089,27 @@ STREAM_POLL_SECONDS = 0.2
 #: cannot be left running for the lifetime of the process.
 STREAM_MAX_SECONDS = 20 * 60
 
+#: How long the wire may stay silent before an empty `ping` event is sent.
+#:
+#: **The stream is legitimately silent for most of a turn, and that silence used
+#: to be indistinguishable from a dead connection.** Nothing is emitted between
+#: `generating` and the first prose, because reasoning tokens produce no text and
+#: `FieldStreamer` withholds a tail on top of that — measured against Vertex on
+#: 2026-09-06: 8.4s on a `brief` turn and 11s on two `standard` ones, with the
+#: whole turn taking 10s and 16s. A client cannot tell that apart from a stalled
+#: upstream, and one really did stall: a `standard` turn opened its
+#: `streamGenerateContent` stream, produced not one chunk, and was still open 15
+#: minutes later when Temporal's `start_to_close` closed the activity. The
+#: desktop app gave up at its own 120s idle budget and told the person the turn
+#: "could not be answered", of a turn that was still running.
+#:
+#: So the client's idle budget must measure the *connection*, which is what it is
+#: for, and this is what lets it: a ping is a row-less event, costs no query and
+#: no tokens, and needs no client change — both clients already treat an
+#: unrecognised `type` as data rather than as a failure, which is the reason that
+#: decision was taken. Well under any client budget: `CHAT_STREAM_IDLE` is 120s.
+STREAM_PING_SECONDS = 10.0
+
 
 def _sse(payload: dict[str, Any]) -> str:
     """One event. No `event:` name — the type is a field, so one handler reads
@@ -2123,6 +2144,10 @@ async def stream_turn(
     async def events():
         deadline = time.monotonic() + STREAM_MAX_SECONDS
         cursor = since
+        # Tracked rather than derived from the loop count: the ping's whole
+        # purpose is to say "the connection is alive" when nothing else has, so
+        # it has to be reset by every *real* event too, not only by another ping.
+        last_sent = time.monotonic()
         try:
             # Pooled, unlike every other read here: this one connection is used
             # a few hundred times over a turn, and an unpooled catalog opens a
@@ -2153,6 +2178,7 @@ async def stream_turn(
                                 "stage": row["kind"],
                                 **(row["detail"] or {}),
                             })
+                        last_sent = time.monotonic()
 
                     settled = next(
                         (
@@ -2177,6 +2203,12 @@ async def stream_turn(
                             ),
                         })
                         return
+                    now = time.monotonic()
+                    if now - last_sent >= STREAM_PING_SECONDS:
+                        # Carries no sequence: it is not a position in the relay
+                        # and a client must never advance `since` past it.
+                        yield _sse({"type": "ping"})
+                        last_sent = now
                     await asyncio.sleep(STREAM_POLL_SECONDS)
         except asyncio.CancelledError:
             # The reader went away. The turn keeps going and lands in the

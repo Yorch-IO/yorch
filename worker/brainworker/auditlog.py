@@ -184,6 +184,14 @@ def build(
             "error_detail": run.error_detail,
             "title": run.title,
             "library_id": run.library_id,
+            # Hand-built, so a field added to `RunSummary` does not arrive here
+            # by itself — and the paid plane's `auditRun` derives from its own
+            # `runSummary`, so it *does*. Dropping it made the two planes
+            # disagree about the same run with nothing failing anywhere, which
+            # is the shape of the `asdict`/`style_effort` defect this file is
+            # one hop away from. Caught on production: `/runs` reported the URL
+            # and `/runs/{id}/audit` reported null for the same row.
+            "label": run.label,
             "document_id": run.document_id,
             "version_id": run.version_id,
         },

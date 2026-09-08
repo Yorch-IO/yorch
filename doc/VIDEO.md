@@ -578,9 +578,41 @@ that the fallback is real and reachable, and that reaching it costs the whole
 Transcribe bill — so `CAPTION_ATTEMPTS` is a floor under a measured risk rather
 than a theoretical one.
 
-**What has still not run.** The fetcher has never run against **production**
-Temporal, no video has been indexed through the split all the way to an index
-(both runs above stopped before the bill, deliberately), and the migration has
-not been applied to the production catalog. Nor has any of it been driven from
-the desktop window — the queue row above was read from `GET /runs`, not looked
-at.
+**Deployed to production 2026-09-08**, image `be5061d-8102f1c`, with the three
+pending migrations applied by the `migrate` service. The reported failure was
+then reproduced from the host itself, against the exact URL from the report:
+
+```
+POST /videos  https://youtu.be/yq6uVBsVkeQ   -> 200, video-1788869591212-5bc8e240
+GET  /runs?library_id=lib_videos
+  state        failed          stage    probing
+  library_id   lib_videos      label    https://youtu.be/yq6uVBsVkeQ
+  title        null            usd      null
+  error_kind   youtube_refused_this_host
+  detail       ERROR: [youtube] yq6uVBsVkeQ: Sign in to confirm you're not a bot.
+GET  /runs/{id}/audit
+  probing  outcome=-
+  probing  outcome=failed
+```
+
+Three days earlier the same request produced no row, no error and no trace.
+`BRAIN_FETCH_TASK_QUEUE` is empty on that host and reaches all three containers
+as such, so the split is deployed and **off**: the failure is legible, and no
+video gets past `probing` from EC2 until somebody turns it on.
+
+**And the deploy found one more dropped field.** `/runs` reported the URL for
+that run and `/runs/{id}/audit` reported `label: null` for the same row:
+`auditlog.build` hand-names its columns, while the paid plane's `auditRun` is
+`runSummary` minus one key and therefore picked the new field up by itself.
+Nothing failed — the client type declares `label` and null is legal for it. It
+is now compared field by field against `RunSummary` in a test, so the next
+column added to the queue fails until it is threaded through.
+
+**What has still not run.** The fetcher has never run against production
+Temporal, and no video has been indexed through the split all the way to an
+index — both local runs stopped before the bill, deliberately, and the
+production run above was the refusal itself. `fetch_task_queue` is wired
+through terraform and `apply.sh` on a branch of its own in the
+`yorch-aws-platform` checkout and **has not been applied**. Nor has any of this
+been driven from the desktop window: every queue row above was read from
+`GET /runs`, not looked at.

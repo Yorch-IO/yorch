@@ -103,6 +103,31 @@ def _catalog(monkeypatch, catalog):
 # -- the ledger, as a pure function ----------------------------------------
 
 
+def test_the_audit_says_the_same_things_about_a_run_as_the_queue_does():
+    """`auditlog.build` hand-builds its run object, so a field does not arrive
+    by itself.
+
+    The paid plane's `auditRun` is `runSummary` minus one key, so it picks up
+    every column the list carries; this side names them one at a time. `label`
+    was dropped, and it showed on production: `/runs` reported
+    `https://youtu.be/yq6uVBsVkeQ` for a probe that YouTube refused and
+    `/runs/{id}/audit` reported null for the very same row. Nothing failed —
+    the client type declares the field, and null is a legal value for it.
+
+    Compared field by field against `RunSummary` rather than against a literal
+    list, so the next column added to the queue fails here until it is threaded
+    through.
+    """
+    from dataclasses import fields
+
+    run = _run(label="https://youtu.be/yq6uVBsVkeQ", title=None, document_id=None)
+    built = auditlog.build(run, [], [], [], [])["run"]
+
+    expected = {f.name for f in fields(RunSummary)} - {"usd_so_far"}
+    assert set(built) == expected, set(built) ^ expected
+    assert built["label"] == "https://youtu.be/yq6uVBsVkeQ"
+
+
 def test_a_stage_that_spends_nothing_reports_null_rather_than_zero():
     """"This stage does not spend" and "this stage's charge was not recorded"
     are different claims, and a zero renders as the first while sometimes

@@ -715,6 +715,42 @@ class VideoRequest:
     #: the machine replaying it.
     fetch_queue: str = ""
 
+    #: A `VideoInfo` the caller already resolved, or None to resolve here.
+    #:
+    #: **The client-side answer to the same measurement `fetch_queue` answers**,
+    #: and the one that works for somebody who is not also running a second
+    #: worker. `extract_info` is refused from a datacentre address and answered
+    #: from a residential one, so the desktop app makes that call on the machine
+    #: the person is sitting at — with a bundled `yt-dlp` — and sends the result.
+    #: The pipeline then never asks YouTube who this video is at all.
+    #:
+    #: It travels because it is small *by construction*: the raw info dict is
+    #: 1,656,277 bytes on `yq6uVBsVkeQ` and `VideoInfo` is a few kilobytes. That
+    #: narrowing already existed for crossing a task queue, and turns out to be
+    #: exactly what is needed for crossing a plane.
+    #:
+    #: It is **not trusted**. `videosource.check_resolved` refuses a record whose
+    #: id does not match `url` or whose caption URL is not YouTube's — at the
+    #: route, and again in `probe_video`, which is the activity that fetches it.
+    resolved: VideoInfo | None = None
+
+    #: Audio the caller already staged, as the path the worker sees, or empty.
+    #:
+    #: The second half of the same split, for a video with no captions at all. A
+    #: `googlevideo` media URL carries the address that resolved it and answers
+    #: 403 anywhere else — measured — so the download cannot be moved away from
+    #: the `extract_info` that produced the URL. When the app made that call, the
+    #: app is the only thing that can make this one.
+    #:
+    #: A **path**, not an S3 URI: putting bytes in S3 needs the instance role,
+    #: which a laptop does not have and must not be given. The app uploads
+    #: through the plane it is already authenticated to (`POST /videos/audio`),
+    #: the file lands in that organisation's own inbox, and `stage_audio` moves
+    #: it to S3 from the host that holds the role. `Paths.contains` refuses a
+    #: path naming anywhere else, which is the check `stage_source` already
+    #: makes for a document.
+    audio_path: str = ""
+
 
 @dataclass
 class CaptionTrack:

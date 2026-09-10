@@ -292,3 +292,101 @@ def test_correction_defaults_on_only_for_automatic_captions():
     # A human already punctuated these, and Amazon punctuates its own output.
     assert v.correction_default("manual") is False
     assert v.correction_default(None) is False
+
+
+# --- a record somebody else produced -----------------------------------------
+
+
+class _Track:
+    """Duck-typed like `check_resolved` itself, and for the same reason: the
+    module under test refuses to import `pipeline`, so a test that built a real
+    `CaptionTrack` would be asserting through a dependency the code does not
+    have."""
+
+    def __init__(self, kind: str = "manual", language: str = "es") -> None:
+        self.kind = kind
+        self.language = language
+        self.ext = "vtt"
+
+
+class _Info:
+    def __init__(self, **kw) -> None:
+        self.video_id = kw.get("video_id", VID)
+        self.duration_s = kw.get("duration_s", 1800)
+        self.chosen = kw.get("chosen", _Track())
+        self.caption_url = kw.get(
+            "caption_url", f"https://www.youtube.com/api/timedtext?v={VID}"
+        )
+
+
+def test_a_record_that_matches_its_url_is_accepted():
+    # The shape `resolve_video` returns, and the shape the desktop app sends.
+    # Both go through this, so the trusted path cannot drift from the checked
+    # one.
+    v.check_resolved(f"https://youtu.be/{VID}", _Info())
+    v.check_resolved(f"https://www.youtube.com/watch?v={VID}&t=5", _Info())
+
+
+def test_a_record_for_a_different_video_is_refused():
+    """The check that is not about safety at all, and the most damaging to miss.
+
+    `source_key` comes from the URL and the transcript comes from the record, so
+    a mismatch indexes one video's words under another video's identity, with a
+    locator that deep-links to the wrong recording. Nothing downstream fails: it
+    is a document that is simply, quietly, not what it says it is.
+    """
+    with pytest.raises(v.ResolutionNotTrusted, match="jNQXAC9IVRw"):
+        v.check_resolved(
+            "https://youtu.be/jNQXAC9IVRw", _Info(video_id=VID)
+        )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/api/timedtext?v=x",
+        "http://www.youtube.com/api/timedtext?v=x",
+        "https://www.youtube.com/watch?v=x",
+        "https://youtube.com.evil.example/api/timedtext",
+    ],
+)
+def test_a_caption_url_that_is_not_youtubes_is_refused(url):
+    """The SSRF guard, needed only because the record can now come from outside.
+
+    `probe_video` fetches this string. The allowlist inside `video_id` covers
+    which *video* may be named and says nothing about which *host* may be
+    fetched — two different questions that happened to have one answer while
+    yt-dlp on a trusted worker was the only thing that could produce a caption
+    URL. Note the third case: the right host and the wrong path is still not a
+    caption endpoint, and the fourth: a suffix match would have let it through.
+    """
+    with pytest.raises(v.ResolutionNotTrusted):
+        v.check_resolved(f"https://youtu.be/{VID}", _Info(caption_url=url))
+
+
+def test_a_chosen_track_and_a_caption_url_have_to_agree():
+    """`probe_video` branches on one and reads the other, so an incoherent pair
+    is the branch that silently pays Amazon for a video that had captions."""
+    with pytest.raises(v.ResolutionNotTrusted, match="no chosen track"):
+        v.check_resolved(f"https://youtu.be/{VID}", _Info(chosen=None))
+    with pytest.raises(v.ResolutionNotTrusted, match="no caption URL"):
+        v.check_resolved(f"https://youtu.be/{VID}", _Info(caption_url=""))
+
+
+def test_no_captions_at_all_is_a_coherent_record():
+    # The Transcribe path. Nothing to fetch, so nothing to check.
+    v.check_resolved(f"https://youtu.be/{VID}", _Info(chosen=None, caption_url=""))
+
+
+def test_a_caption_kind_outside_the_two_is_refused():
+    """`dedupe_rolling` runs for `auto` and not for `manual`, and
+    `correction_default` reads the same field — so a third value takes the
+    manual branch of both without anything saying so."""
+    with pytest.raises(v.ResolutionNotTrusted, match="caption kind"):
+        v.check_resolved(f"https://youtu.be/{VID}", _Info(chosen=_Track(kind="asr")))
+
+
+def test_a_record_with_no_duration_is_refused():
+    # `duration_s` is a term in the transcription quote and in `identity_basis`.
+    with pytest.raises(v.ResolutionNotTrusted, match="no duration"):
+        v.check_resolved(f"https://youtu.be/{VID}", _Info(duration_s=0))

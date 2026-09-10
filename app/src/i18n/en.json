@@ -158,7 +158,15 @@
     "noMembership": "This account does not belong to that organisation.",
     "tenantRequired": "This account belongs to more than one organisation, and this release works with one. An operator has to leave a single active membership in place.",
     "tenantScopePending": "This organisation's corpus is managed by the local backend, which writes to the volume directly, so the paid service has no inbox to put a file in. Switch to the local backend to import into it, or sign in to an organisation of your own.",
-    "notAVideoUrl": "That link is not a single YouTube video. Playlists and channels are not expanded — paste each video's own link."
+    "notAVideoUrl": "That link is not a single YouTube video. Playlists and channels are not expanded — paste each video's own link.",
+    "ytdlpMissing": "This installation cannot download from YouTube itself. Reinstall the app, or set BRAIN_YTDLP to a yt-dlp binary.",
+    "youtubeRefusedThisMachine": "YouTube refused this computer, not the video. It asked to sign in — usually a sign of too many requests in a short time. Wait a few minutes and try again.",
+    "youtubeTimedOut": "YouTube did not answer this computer in time. Check the connection and try again.",
+    "videoUnavailable": "YouTube will not serve this video: it may be private, deleted, age-restricted or blocked in this country.",
+    "videoIsLive": "A live stream has no duration and no end, so there is nothing to index yet. Try again once the recording is published.",
+    "audioUnavailable": "This video has no captions, so its audio has to be downloaded, and YouTube would not serve it to this computer.",
+    "resolutionNotTrusted": "The video details did not match the link. Try pasting the link again.",
+    "audioFormatUnsupported": "The audio came back in a container Amazon Transcribe cannot read, and this product does not re-encode it."
   },
   "library": {
     "title": "Library",
@@ -242,7 +250,14 @@
     "videoTitle": "Videos",
     "videoHint": "Paste YouTube links, one per line. Each one becomes its own import, with its own gate.",
     "videoPlaceholder": "https://youtu.be/…",
-    "videoStart": "Index videos"
+    "videoStart": "Index videos",
+    "fetch": {
+      "resolving": "Asking YouTube about this video, from this computer…",
+      "downloading": "Downloading the audio, because this video has no captions…",
+      "downloadingOf": "Downloading the audio: {{done}} of {{total}}",
+      "uploading": "Sending the audio to the service…",
+      "starting": "Starting the run…"
+    }
   },
   "queue": {
     "title": "Imports",

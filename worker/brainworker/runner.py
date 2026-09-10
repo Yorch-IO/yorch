@@ -83,6 +83,8 @@ ACTIVITIES = [
     videoacts.preview_transcript,
     videoacts.estimate_video,
     videoacts.fetch_audio,
+    videoacts.stage_audio,
+    videoacts.discard_audio,
     videoacts.start_transcription,
     videoacts.poll_transcription,
     videoacts.collect_transcript,

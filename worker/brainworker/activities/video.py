@@ -186,6 +186,16 @@ async def probe_video(
     silently drops a write with no row to find, so recording after registration
     is the path that does not depend on a best-effort write having landed.
     """
+    # Whoever produced this record, it is held to the same rule. `resolve_video`
+    # satisfies it trivially; a `VideoInfo` that arrived in `VideoRequest.resolved`
+    # from a client may not, and this is the activity that fetches its
+    # `caption_url` — so the check belongs here, in front of the request, and
+    # not only at the route that accepted it.
+    try:
+        videosource.check_resolved(request.url, info)
+    except videosource.ResolutionNotTrusted as e:
+        raise _fail("resolution_not_trusted", str(e)) from e
+
     vid = info.video_id
     settings = _settings()
     store = ArtifactStore(settings.workspace, run_id)
@@ -344,8 +354,25 @@ def _choose_track(
     Language preference first, then manual over automatic — in that order,
     because a human transcript in the wrong language answers no question, while
     a machine transcript in the right one answers most of them.
+
+    **And the original language before any translation of it.** YouTube offers
+    an automatic track in every language it can translate into, and marks the
+    source one with an `-orig` suffix. Measured 2026-09-10 on `yq6uVBsVkeQ`, a
+    76-minute talk in Spanish: **157 automatic tracks, returned in alphabetical
+    order by code** — `ab`, `aa`, `af`, `ak`, `sq`, … — with the real one at
+    `es-orig`. So a caller that expressed no preference used to be handed
+    **Abkhazian**, a machine translation of a machine transcription, and the
+    gate said so only as a two-letter code in a line of small print. That is
+    the shape of thing that gets approved.
+
+    Sorted rather than special-cased in the loop, because the rule holds inside
+    a language preference too: `es` matches both `es` and `es-orig` by prefix,
+    and where a video offers both, `es-orig` is the one that was not round
+    tripped through a translator. The sort is **stable**, so it reorders
+    nothing else — it decides ties, which is all it should do.
     """
     vtt = [t for t in tracks if t.ext == "vtt"]
+    vtt.sort(key=lambda t: not t.language.endswith("-orig"))
     for lang in [*preferred, ""]:
         for kind in ("manual", "auto"):
             for t in vtt:
@@ -727,6 +754,134 @@ async def fetch_audio(
                 os.unlink(path)
 
 
+@activity.defn(name="stage_audio")
+async def stage_audio(
+    run_id: str,
+    audio_path: str,
+    probe: VideoProbe,
+    tenant_id: str,
+    version_id: str,
+) -> AudioStaged:
+    """Put audio the *caller* downloaded where Transcribe can read it.
+
+    `fetch_audio`'s twin, and the division between them is the measured one: a
+    `googlevideo` media URL carries the address that resolved it and answers 403
+    anywhere else, so the download has to happen beside the `extract_info` that
+    produced it. When that was the desktop app — because YouTube refuses this
+    deployment's own address — the app has the bytes and cannot put them in S3,
+    which needs the instance role. So it uploads them to the plane it is already
+    authenticated to and this activity, on the host that holds the role, does
+    the one step it can do.
+
+    **The path is checked before it is opened**, with `Paths.contains` — the
+    same guard `stage_source` makes for a document import, and needed for the
+    same reason: the string arrives over HTTP and a string becomes a path.
+    `POST /videos/audio` derives the filename itself and answers with it, so a
+    well-behaved client never names anything else; a badly behaved one is
+    refused here rather than reading another organisation's inbox.
+
+    It is idempotent in the same way `fetch_audio` is and by the same lookup: the
+    object is keyed on the version, so a retry finds it uploaded and returns
+    `reused=True` without reading the file again. That matters more here than
+    there, because the retry cannot re-download — the file the client staged is
+    deleted once it is in S3.
+    """
+    settings = _aws()
+    scope = settings.paths.for_tenant(tenant_id)
+    path = pathlib.Path(audio_path)
+    if not scope.contains(path):
+        raise _fail(
+            "audio_outside_workspace",
+            f"{audio_path!r} no está en el espacio de trabajo de esta organización",
+        )
+
+    key_prefix = _key(settings, tenant_id, version_id, "")
+    existing = await asyncio.to_thread(_find_staged_audio, settings, key_prefix)
+    if existing is not None:
+        uri, size, ext = existing
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+        return AudioStaged(s3_uri=uri, media_format=TRANSCRIBE_FORMATS.get(ext, ext),
+                           bytes=size, seconds=probe.duration_s, reused=True)
+
+    if not path.is_file():
+        raise _fail("audio_missing", f"no hay fichero en {audio_path!r}")
+    size = path.stat().st_size
+    if size > MAX_AUDIO_BYTES:
+        raise _fail("audio_too_large", f"{size // 1024**2} MiB de audio")
+    ext = path.suffix.lstrip(".").lower()
+    if ext not in TRANSCRIBE_FORMATS:
+        # The same refusal `fetch_audio` makes and for the same reason:
+        # transcoding would mean ffmpeg in the image, and the worker's
+        # "no compiler, no toolchain" property is worth more than one format.
+        raise _fail(
+            "audio_format_unsupported",
+            f"la aplicación subió .{ext}, que Transcribe no lee",
+        )
+
+    progress: dict[str, object] = {"bytes": 0, "done": False}
+    beat = asyncio.create_task(_heartbeat(progress))
+
+    def sent(n: int) -> None:
+        progress["bytes"] = int(progress.get("bytes", 0)) + n
+
+    try:
+        key = _key(settings, tenant_id, version_id, f".{ext}")
+        await asyncio.to_thread(_upload, settings, str(path), key, sent)
+        return AudioStaged(
+            s3_uri=f"s3://{settings.aws.bucket}/{key}",
+            media_format=TRANSCRIBE_FORMATS[ext],
+            bytes=size,
+            seconds=probe.duration_s,
+        )
+    finally:
+        progress["done"] = True
+        beat.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await beat
+        # Deleted whether or not the upload worked, exactly as `fetch_audio`
+        # deletes its download. The inbox is on the same volume as the corpus
+        # and this file is up to a gigabyte; a failed run must not leave one
+        # behind, and a retry re-uploads from S3's own copy or is told the
+        # client has to send it again.
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+
+
+@activity.defn(name="discard_audio")
+async def discard_audio(audio_path: str, tenant_id: str) -> None:
+    """Throw away audio the caller staged for a run that will not transcribe it.
+
+    `stage_audio` deletes the file whether or not its upload worked, exactly as
+    `fetch_audio` deletes its own download — but a run that is *rejected at the
+    gate*, or that finds the video already indexed, never reaches it. The bytes
+    are already on disk by then, because the download happens before the gate:
+    it costs nothing in dollars, so it is not what the gate is guarding, and
+    parking a workflow after approval until a laptop sends audio makes a run
+    that stalls invisibly when the window is closed.
+
+    Up to a gigabyte, on the volume that also holds the corpus, so this is worth
+    a line. A staged file that outlives its run is not a *new* property — an
+    upload through `POST /uploads` whose ingest is never started stays in the
+    inbox in exactly the same way — but three orders of magnitude is enough of a
+    difference to treat differently.
+
+    Best-effort, like every other bookkeeping write here: a file that cannot be
+    removed is a byte on a volume, and failing a run over it would be worse.
+    Containment is still checked, because the argument is still a path that
+    arrived over HTTP and this function's whole job is to delete something.
+    """
+    if not audio_path:
+        return
+    try:
+        scope = _settings().paths.for_tenant(tenant_id)
+        path = pathlib.Path(audio_path)
+        if scope.contains(path):
+            path.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001 - never fail a run over a leftover file
+        log.warning("could not discard staged audio at %s", audio_path)
+
+
 async def _heartbeat(progress: dict) -> None:
     while not progress.get("done"):
         if activity.in_activity():
@@ -787,10 +942,20 @@ def _find_staged_audio(settings, key_prefix: str):
     return None
 
 
-def _upload(settings, path: str, key: str) -> None:
+def _upload(settings, path: str, key: str, on_bytes=None) -> None:
     # `upload_file` is multipart and streaming. Nothing is read into memory: the
     # worker is capped at 2 GiB and offered to the OOM killer first.
-    _client(settings, "s3").upload_file(path, settings.aws.bucket, key)
+    #
+    # `on_bytes` is boto3's own per-part callback, and it is optional because
+    # only one caller needs it: `fetch_audio` counts on the *download* thread
+    # and has nothing left to report by the time it gets here, while
+    # `stage_audio` does nothing but this — so without it that activity's
+    # heartbeat would send a progress figure of 0 for however long a gigabyte
+    # takes. A zero that means "not measured" is the one shape this codebase
+    # keeps refusing to print.
+    _client(settings, "s3").upload_file(
+        path, settings.aws.bucket, key, Callback=on_bytes
+    )
 
 
 @activity.defn(name="start_transcription")

@@ -1,0 +1,39 @@
+# What the worker image build may see.
+#
+# `deploy-brain.sh build` and `infra/docker-compose.dev.yaml` both pass the
+# **repository root** as the build context, because `worker/Dockerfile`
+# installs `docaget/` as a path dependency and needs both trees. Without this
+# file that context is the whole checkout: measured 2026-09-10, **12 GB**, of
+# which 9.8 GB is `app/src-tauri/target` — Rust build artifacts that no line of
+# the Dockerfile can reach. On a disk with 11 GB free that is not waste, it is
+# a deploy that can fill the volume, which this machine has already been
+# bitten by once (`doc/COMPANY_BRAIN.md`, and the reason `--release` used to be
+# mandatory here).
+#
+# **An allowlist, not a denylist**, and that is the decision worth keeping: the
+# Dockerfile copies four explicit paths and nothing else, so anything that
+# grows anywhere else in this repository — a new corpus, a second target
+# directory, a bundled binary — cannot silently re-enter the context. A
+# denylist would need editing every time, and the symptom of forgetting is a
+# slow build rather than a broken one, which is the kind of thing nobody
+# chases.
+#
+# Keep this in step with the `COPY` lines in `worker/Dockerfile`. There is no
+# test that can: a build with a missing path fails loudly at `uv sync`, which
+# is the guard, and it is a good one.
+*
+
+!docaget/pyproject.toml
+!docaget/README.md
+!docaget/docagent
+!worker/pyproject.toml
+!worker/brainworker
+
+# Re-excluded inside what was let back in. `__pycache__` is the one that
+# matters: it is regenerated in the image anyway, and a stale `.pyc` beside a
+# source file is exactly the trap `doc/CLAUDE.md` records — CPython validates
+# a cached bytecode on the source's integer-second mtime and its size, so a
+# same-length edit can serve the code you thought you replaced.
+**/__pycache__
+**/*.pyc
+**/.venv

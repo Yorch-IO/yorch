@@ -261,6 +261,25 @@ async def fetch_audio(
                        bytes=1000, seconds=p.duration_s)
 
 
+@activity.defn(name="stage_audio")
+async def stage_audio(
+    run_id: str, audio_path: str, p: VideoProbe, tenant_id: str, version_id: str
+) -> AudioStaged:
+    # Typed like the real activity, which is not decoration: the converter maps
+    # payloads onto parameters **by arity**, so an untyped `*args` double
+    # accepts a call the real worker could not make. Five workflow tests once
+    # passed against a workflow the real converter could not run.
+    assert audio_path, "the workflow must pass the path the client staged"
+    CALLED.append("stage_audio")
+    return AudioStaged(s3_uri="s3://b/staged.m4a", media_format="mp4",
+                       bytes=2000, seconds=p.duration_s)
+
+
+@activity.defn(name="discard_audio")
+async def discard_audio(audio_path: str, tenant_id: str) -> None:
+    CALLED.append("discard_audio")
+
+
 @activity.defn(name="start_transcription")
 async def start_transcription(
     run_id: str, p: VideoProbe, audio: AudioStaged,
@@ -364,6 +383,7 @@ def activities(*, captions=True, already_indexed=False, statuses=None,
         prober(captions, kind), register(already_indexed), record_run_events,
         set_run_stage, record_run_outcome, link_duplicate, record_video_artifacts,
         group_transcript, preview_transcript, estimate_video, fetch_audio,
+        stage_audio, discard_audio,
         start_transcription, poller(statuses or []), collect_transcript,
         abandon_transcription, correct_text, chunk_transcript, project_structure,
         embed_and_index, activate_version,
@@ -602,6 +622,130 @@ async def test_an_empty_fetch_queue_means_this_one_and_changes_nothing(env):
         await handle.result()
 
     assert CALLED.index("resolve") < CALLED.index("probe")
+
+
+async def test_a_video_the_client_already_resolved_never_asks_youtube_again(env):
+    """The client-side answer to the same measurement `fetch_queue` answers.
+
+    `resolve_video` is **registered** here and asserted not to have been
+    called, which is the opposite shape from the fetch-queue test below and
+    deliberately so. That one withholds the activity because withholding is the
+    only way to prove *routing*; here the question is whether it ran at all, and
+    the double's own `CALLED.append` answers that in milliseconds. Withholding
+    would answer it too — by hanging for the ten real minutes of a
+    schedule-to-start timeout the time-skipping environment does not skip.
+
+    This is what makes paid mode work at all. `extract_info` is refused from a
+    datacentre address — measured 2026-09-05, "Sign in to confirm you're not a
+    bot" — so the desktop app makes that one call on the machine the person is
+    sitting at and sends the result, which `VideoInfo` was already narrowed
+    enough to allow: 1,656,277 bytes of raw info dict against a few kilobytes.
+    """
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow], activities=activities()):
+        handle = await _start(env, request(resolved=info_for()), StageOptions())
+        report = await _wait_for_gate(handle)
+        assert report.probe.video_id == VID
+        await handle.signal(VideoIngestWorkflow.approve, Approval(approved=False))
+        await handle.result()
+
+    assert "resolve" not in CALLED
+    assert "probe" in CALLED, "everything after the one refused call still runs here"
+
+
+async def test_audio_the_client_staged_is_moved_to_s3_rather_than_downloaded_again(env):
+    """The other half, and it cannot be served by the same activity.
+
+    A `googlevideo` media URL carries the address that resolved it and answers
+    403 anywhere else — measured — so when the app made the `extract_info` call
+    the app is also the only thing that can make this one. What is left for the
+    server is putting the bytes where Transcribe can read them, which needs the
+    instance role a laptop does not have.
+
+    `fetch_audio` is registered here on purpose: the assertion is that it is not
+    *called*, not that it is unavailable. Getting the branch backwards would
+    re-download from a host YouTube's signed URL refuses, and the run would fail
+    at the one stage that has already cost the user their bandwidth.
+    """
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow],
+                      activities=activities(captions=False, statuses=["COMPLETED"])):
+        handle = await _start(
+            env,
+            request(resolved=info_for(with_captions=False),
+                    audio_path="/workspace/tenants/t/inbox/audio.m4a"),
+            StageOptions(correct=False, embed=False),
+        )
+        await _wait_for_gate(handle)
+        await handle.signal(VideoIngestWorkflow.approve, Approval(approved=True))
+        await handle.result()
+
+    assert "stage_audio" in CALLED
+    assert "fetch_audio" not in CALLED
+
+
+async def test_without_a_staged_path_the_worker_downloads_the_audio_as_it_always_did(env):
+    """The default, unchanged. Local mode never sets `audio_path`, because the
+    container's egress *is* the machine's egress and YouTube answers it."""
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow],
+                      activities=activities(captions=False, statuses=["COMPLETED"])):
+        handle = await _start(env, request(), StageOptions(correct=False, embed=False))
+        await _wait_for_gate(handle)
+        await handle.signal(VideoIngestWorkflow.approve, Approval(approved=True))
+        await handle.result()
+
+    assert "fetch_audio" in CALLED
+    assert "stage_audio" not in CALLED
+
+
+async def test_a_rejected_gate_throws_away_the_audio_the_client_had_already_staged(env):
+    """The cost of downloading before the gate, paid back.
+
+    The download is free in dollars, which is why it can happen before anybody
+    approves anything — and why the alternative was rejected: parking the
+    workflow after approval until a laptop sends the bytes makes a run that
+    stalls silently when the window is closed. What it leaves behind is up to a
+    gigabyte in the inbox, and `stage_audio`'s own `finally` never runs on this
+    path.
+    """
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow],
+                      activities=activities(captions=False)):
+        handle = await _start(
+            env,
+            request(resolved=info_for(with_captions=False),
+                    audio_path="/workspace/tenants/t/inbox/audio.m4a"),
+            StageOptions(),
+        )
+        await _wait_for_gate(handle)
+        await handle.signal(VideoIngestWorkflow.approve, Approval(approved=False))
+        await handle.result()
+
+    assert "discard_audio" in CALLED
+    assert "stage_audio" not in CALLED
+
+
+async def test_a_run_that_transcribes_does_not_discard_its_own_audio(env):
+    """The obvious way to get the previous test wrong. `stage_audio` deletes
+    the file itself, so discarding as well would be a second unlink of a path
+    that by then names nothing — harmless here and a bug the day the two
+    orders differ."""
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow],
+                      activities=activities(captions=False, statuses=["COMPLETED"])):
+        handle = await _start(
+            env,
+            request(resolved=info_for(with_captions=False),
+                    audio_path="/workspace/tenants/t/inbox/audio.m4a"),
+            StageOptions(correct=False, embed=False),
+        )
+        await _wait_for_gate(handle)
+        await handle.signal(VideoIngestWorkflow.approve, Approval(approved=True))
+        await handle.result()
+
+    assert "stage_audio" in CALLED
+    assert "discard_audio" not in CALLED
 
 
 def test_a_task_nobody_claimed_is_named_rather_than_called_a_failed_activity():

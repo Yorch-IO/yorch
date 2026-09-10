@@ -8,6 +8,7 @@ import {
   errorGuidanceKey,
   errorMessage,
   type StageOptions,
+  type VideoFetchEvent,
 } from "../lib/api";
 import { useLibraries } from "../lib/libraries";
 import { useImportQueue } from "../lib/importQueue";
@@ -33,6 +34,36 @@ export function fileName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+/** How many megabytes, for a figure a person reads rather than compares. */
+function mib(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
+/**
+ * One line about what this machine is doing before the run exists.
+ *
+ * Pure and exported for its own test, for the reason `fileName` above gives:
+ * the property is a decision about a string, and the interesting one here is
+ * that **`total === 0` means yt-dlp offered no estimate** — so it renders as a
+ * running byte count and never as "of 0 MB" or as 0%. That is
+ * `/project-summary`'s rule about a leg it could not ask, applied to one
+ * number: an unmeasured figure must not be shown as a measured zero.
+ */
+export function fetchingLabel(
+  event: VideoFetchEvent,
+  t: (key: string, vars?: Record<string, unknown>) => string,
+): string {
+  if (event.step === "downloading" && event.bytes) {
+    return event.total
+      ? t("import.fetch.downloadingOf", {
+          done: mib(event.bytes),
+          total: mib(event.total),
+        })
+      : `${t("import.fetch.downloading")} ${mib(event.bytes)}`;
+  }
+  return t(`import.fetch.${event.step}`);
+}
+
 export function ImportScreen() {
   const { t, i18n } = useTranslation();
 
@@ -51,6 +82,12 @@ export function ImportScreen() {
   const [stages, setStages] = useState<StageOptions>(DEFAULT_STAGES);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  /** What the local fetch is doing, or null when nothing is fetching.
+   *
+   *  Cloud mode only, in practice: local mode sends no `resolved` because the
+   *  container's egress is this machine's egress and YouTube answers it, so
+   *  the only event that ever arrives there is `starting`. */
+  const [fetching, setFetching] = useState<VideoFetchEvent | null>(null);
   /** What the batch could not do, per file.
    *
    *  Kept apart from `error` because a batch is not all-or-nothing: four books
@@ -229,12 +266,13 @@ export function ImportScreen() {
     const enqueued = new Set<string>();
     for (const url of links) {
       try {
-        await api.videoStart({ libraryId, url });
+        await api.videoStart({ libraryId, url }, DEFAULT_STAGES, setFetching);
         enqueued.add(url);
       } catch (e) {
         failures.push({ path: url, message: errorMessage(e) });
       }
     }
+    setFetching(null);
     // Only what got through leaves the box, so a refused link stays visible
     // beside its reason and can be corrected rather than retyped.
     setUrls(links.filter((u) => !enqueued.has(u)).join("\n"));
@@ -328,6 +366,16 @@ export function ImportScreen() {
         >
           {busy ? t("import.working") : t("import.videoStart")}
         </button>
+        {/* The only thing on screen between pressing the button and the queue
+            appearing. In cloud mode the two calls YouTube refuses the server
+            are made here, on this machine — resolving is seconds and, for a
+            video with no captions, downloading its audio is minutes, all of it
+            before a run row exists for the queue to show. */}
+        {fetching !== null && (
+          <p className="muted" role="status">
+            {fetchingLabel(fetching, t)}
+          </p>
+        )}
       </div>
 
       <fieldset className="stages">

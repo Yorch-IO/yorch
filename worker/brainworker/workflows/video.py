@@ -174,14 +174,26 @@ class VideoIngestWorkflow:
         # workflow's own history, never from settings — a workflow may only
         # decide on what it can replay.
         fetch_queue = request.fetch_queue or workflow.info().task_queue
-        info: VideoInfo = await workflow.execute_activity(
-            vid.resolve_video,
-            request,
-            task_queue=fetch_queue,
-            schedule_to_start_timeout=FETCH_START_TIMEOUT,
-            start_to_close_timeout=FREE_TIMEOUT,
-            retry_policy=_RETRY,
-        )
+        info: VideoInfo | None = request.resolved
+        if info is None:
+            # Nobody resolved this for us, so the pipeline asks YouTube itself.
+            # That is the original path and it is still right wherever the
+            # worker's own egress is answered — a laptop, or a hosted
+            # deployment with `fetch_queue` pointed at one. It is the path that
+            # fails with `youtube_refused_this_host` from a datacentre, which
+            # is why a client that *can* make the call is offered the chance.
+            info = await workflow.execute_activity(
+                vid.resolve_video,
+                request,
+                task_queue=fetch_queue,
+                schedule_to_start_timeout=FETCH_START_TIMEOUT,
+                start_to_close_timeout=FREE_TIMEOUT,
+                retry_policy=_RETRY,
+            )
+        # No branch here for checking it: `probe_video` runs
+        # `videosource.check_resolved` on whatever it is handed, so the record
+        # this workflow supplies and the record an activity produced are held to
+        # the same rule by the same line of code.
         probe: VideoProbe = await workflow.execute_activity(
             vid.probe_video,
             args=[request, run_id, info],
@@ -211,6 +223,7 @@ class VideoIngestWorkflow:
                 start_to_close_timeout=WRITE_TIMEOUT,
                 retry_policy=_RETRY,
             )
+            await self._discard_staged_audio(request)
             await self._finish(run_id, "succeeded")
             return VideoResult(
                 run_id=run_id,
@@ -282,6 +295,7 @@ class VideoIngestWorkflow:
 
         approved = await self._gate(request, recommended, run_id)
         if not approved.approved:
+            await self._discard_staged_audio(request)
             await self._finish(run_id, "cancelled", "rejected", approved.reason)
             return VideoResult(
                 run_id=run_id,
@@ -381,6 +395,31 @@ class VideoIngestWorkflow:
             retry_policy=_RETRY,
         )
 
+    async def _discard_staged_audio(self, request: VideoRequest) -> None:
+        """Throw away audio the client staged for a run that will not use it.
+
+        The download happens before the gate — the bytes cost nothing, so they
+        are not what the gate is guarding, and the alternative parks a workflow
+        after approval until a laptop sends them, which stalls invisibly when
+        the window is closed. The consequence is this: a rejected gate, or a
+        video that turns out to be already indexed, leaves up to a gigabyte in
+        the inbox unless something removes it. `stage_audio` deletes in a
+        `finally` and neither of those paths reaches it.
+
+        Not covered: a run that *crashes* between registration and staging.
+        That leaves the file exactly as an upload through `POST /uploads` whose
+        ingest is never started leaves one, which is an existing property of
+        the inbox rather than something introduced here.
+        """
+        if not request.audio_path:
+            return
+        await workflow.execute_activity(
+            vid.discard_audio,
+            args=[request.audio_path, request.tenant_id],
+            start_to_close_timeout=WRITE_TIMEOUT,
+            retry_policy=RetryPolicy(maximum_attempts=2),
+        )
+
     async def _transcribe(
         self,
         run_id: str,
@@ -390,21 +429,37 @@ class VideoIngestWorkflow:
     ) -> Transcribed:
         """Audio to S3, a job at Amazon, then wait — on a timer, not in a call."""
         await self._enter(run_id, "fetching")
-        # Beside the resolution, not beside the workspace. A `googlevideo` URL
-        # carries the address that resolved it (`ip=…`) and answers 403 from
-        # anywhere else — measured — so the download cannot be split from the
-        # `extract_info` that produced the URL. It costs nothing to move: this
-        # activity writes no artifact, only a transient file it deletes in a
-        # `finally`, and returns an S3 URI.
-        audio = await workflow.execute_activity(
-            vid.fetch_audio,
-            args=[run_id, probe, request.tenant_id, registered.version_id],
-            task_queue=request.fetch_queue or workflow.info().task_queue,
-            schedule_to_start_timeout=FETCH_START_TIMEOUT,
-            start_to_close_timeout=AUDIO_TIMEOUT,
-            heartbeat_timeout=AUDIO_HEARTBEAT_TIMEOUT,
-            retry_policy=RetryPolicy(maximum_attempts=3),
-        )
+        if request.audio_path:
+            # The caller already downloaded it, which is the only thing that
+            # works when the caller is also who resolved the video: a
+            # `googlevideo` URL carries the address that resolved it and answers
+            # 403 anywhere else. All that is left is to put it where Transcribe
+            # can read it, and that is a job for the host holding the instance
+            # role rather than for the laptop that has the bytes.
+            audio = await workflow.execute_activity(
+                vid.stage_audio,
+                args=[run_id, request.audio_path, probe, request.tenant_id,
+                      registered.version_id],
+                start_to_close_timeout=AUDIO_TIMEOUT,
+                heartbeat_timeout=AUDIO_HEARTBEAT_TIMEOUT,
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        else:
+            # Beside the resolution, not beside the workspace. A `googlevideo`
+            # URL carries the address that resolved it (`ip=…`) and answers 403
+            # from anywhere else — measured — so the download cannot be split
+            # from the `extract_info` that produced the URL. It costs nothing to
+            # move: this activity writes no artifact, only a transient file it
+            # deletes in a `finally`, and returns an S3 URI.
+            audio = await workflow.execute_activity(
+                vid.fetch_audio,
+                args=[run_id, probe, request.tenant_id, registered.version_id],
+                task_queue=request.fetch_queue or workflow.info().task_queue,
+                schedule_to_start_timeout=FETCH_START_TIMEOUT,
+                start_to_close_timeout=AUDIO_TIMEOUT,
+                heartbeat_timeout=AUDIO_HEARTBEAT_TIMEOUT,
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
 
         await self._enter(run_id, "transcribing")
         language = _language_for(request, probe)

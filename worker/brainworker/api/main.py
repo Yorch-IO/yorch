@@ -485,6 +485,24 @@ async def start_video(
             },
         ) from e
 
+    if request.resolved is not None:
+        # A record the *caller* produced, because the caller is on an address
+        # YouTube answers and this deployment may not be. Checked here for the
+        # reason the URL is checked here — the request that asked is where an
+        # answer is useful — and checked again in `probe_video`, which is the
+        # activity that actually fetches `caption_url`.
+        try:
+            videosource.check_resolved(request.url, request.resolved)
+        except videosource.ResolutionNotTrusted as e:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "kind": "resolution_not_trusted",
+                    "message": "los datos del vídeo no corresponden al enlace",
+                    "detail": str(e),
+                },
+            ) from e
+
     client = await temporal()
     handle = await client.start_workflow(
         VideoIngestWorkflow.run,

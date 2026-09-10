@@ -85,6 +85,21 @@ pub enum AppError {
     #[error("no hay sesión iniciada en el servicio de pago")]
     NotSignedIn,
 
+    /// The bundled `yt-dlp` refused, or could not be found.
+    ///
+    /// It **carries** its kind rather than mapping to one, because the useful
+    /// distinctions here already have names on the other side of the product:
+    /// `youtube_refused_this_host` and `video_unavailable` are the two
+    /// `_download_error_kind` splits a `DownloadError` into, and they call for
+    /// opposite things. Minting a second vocabulary for the same facts would
+    /// mean a second guidance map saying the same sentences, and the two would
+    /// drift.
+    #[error("{message}")]
+    YouTube {
+        kind: &'static str,
+        message: String,
+    },
+
     #[error("{0}")]
     Config(String),
 }
@@ -104,6 +119,7 @@ impl AppError {
             Self::WorkspaceNotNative { .. } => "workspace_not_native",
             Self::Io { .. } => "io",
             Self::NotSignedIn => "not_signed_in",
+            Self::YouTube { kind, .. } => kind,
             Self::Config(_) => "config",
         }
     }

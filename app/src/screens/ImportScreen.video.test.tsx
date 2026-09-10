@@ -13,7 +13,8 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "../i18n";
-import { ImportScreen } from "./ImportScreen";
+import { DEFAULT_STAGES, type StageOptions, type VideoFetchEvent } from "../lib/api";
+import { fetchingLabel, ImportScreen } from "./ImportScreen";
 
 const { stageSource, ingestStart, ingestGate, videoStart } = vi.hoisted(() => ({
   stageSource: vi.fn(),
@@ -109,16 +110,51 @@ describe("indexing videos from links", () => {
     expect(ingestStart).not.toHaveBeenCalled();
   });
 
-  it("sends no stage switches, because the probe decides which apply", async () => {
+  it("sends the defaults, not the boxes this screen shows, because the probe decides", async () => {
     // What a video should run depends on where its transcript comes from, and
     // that is not known until the probe has looked. The gate carries a
     // `recommended` and opens with those boxes ticked.
+    //
+    // Asserted on the switches rather than on the call's **arity**, which is
+    // what this used to check. Arity was a proxy for "the screen adds nothing"
+    // and stopped being one the moment there was something else to add: cloud
+    // mode passes a progress callback, because the two YouTube calls now
+    // happen on this machine and a window would otherwise sit still for
+    // minutes. The property was always about the switches.
     const { container } = render(<ImportScreen />);
+    const correct = container.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    );
+    if (correct) fireEvent.click(correct);
+
     fireEvent.change(box(container), { target: { value: A } });
     fireEvent.click(startButton(container));
 
     await waitFor(() => expect(videoStart).toHaveBeenCalled());
-    expect(videoStart.mock.calls.map((c) => c.length)).toEqual([1]);
+    const [, options] = videoStart.mock.calls[0] as [unknown, StageOptions];
+    expect(options).toEqual(DEFAULT_STAGES);
+    expect(correct?.checked).toBe(false);
+  });
+
+  it("reports what this machine is doing while it fetches, and never a measured zero", async () => {
+    // The only thing on screen between pressing the button and the run row
+    // existing. In cloud mode that gap is seconds of resolving and, for a
+    // video with no captions, minutes of downloading audio — all of it before
+    // the workflow starts, so the queue has nothing to show.
+    //
+    // The `total` case is the one worth pinning: yt-dlp reports 0 when it has
+    // no estimate, and rendering that as "of 0 MB" or as 0% would be a
+    // measured claim about a figure nobody measured.
+    const label = (event: VideoFetchEvent) =>
+      fetchingLabel(event, i18n.t.bind(i18n) as never);
+
+    expect(label({ step: "resolving" })).toBe(i18n.t("import.fetch.resolving"));
+    expect(label({ step: "downloading", bytes: 5 * 1024 * 1024, total: 20 * 1024 * 1024 })).toBe(
+      i18n.t("import.fetch.downloadingOf", { done: "5 MB", total: "20 MB" }),
+    );
+    const unknown = label({ step: "downloading", bytes: 5 * 1024 * 1024, total: 0 });
+    expect(unknown).toContain("5 MB");
+    expect(unknown).not.toContain("0 MB");
   });
 
   it("keeps a refused link in the box beside its reason, and clears the rest", async () => {

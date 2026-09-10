@@ -109,6 +109,86 @@ def source_key(vid: str) -> str:
     return f"youtube/{vid}"
 
 
+#: Hosts a signed caption URL may name, and the one path it may have.
+#:
+#: `probe_video` fetches `VideoInfo.caption_url`, and since 2026-09-10 that
+#: record can arrive **from a client**: the desktop app resolves the video on
+#: the machine YouTube will answer and hands the result over, because the one
+#: call that is bot-checked is `extract_info` and a datacentre address is
+#: refused it. A URL a client supplies is an SSRF surface exactly as `url` is,
+#: and the allowlist inside `video_id` does not cover it — that one governs
+#: which *video* may be named, this one governs which *host* may be fetched.
+#:
+#: Measured on a real track: `https://www.youtube.com/api/timedtext?v=…&ip=0.0.0.0`.
+#: The `ip=0.0.0.0` is why the download itself does not have to move with the
+#: resolution — any host may fetch it — which is the whole reason only
+#: `caption_url` and not the caption bytes crosses the wire.
+CAPTION_HOSTS = frozenset({"www.youtube.com", "youtube.com", "m.youtube.com"})
+CAPTION_PATH = "/api/timedtext"
+
+
+class ResolutionNotTrusted(ValueError):
+    """A pre-resolved record that does not check out against the URL it claims."""
+
+
+def check_resolved(url: str, info) -> None:
+    """Refuse a `VideoInfo` that does not belong to `url`, or names a host we
+    will not fetch.
+
+    Duck-typed on purpose, like :func:`table_from_groups` and
+    :func:`uncovered_paragraphs`: this module is the pure half and importing
+    `pipeline` for one annotation would make it the impure one.
+
+    It runs on **every** path, not only the client-supplied one. A record
+    `resolve_video` produced satisfies it trivially, and one rule with one owner
+    is what keeps the trusted path from drifting away from the checked one —
+    the same doubling `retrieve.search` keeps for `tenant_id`.
+
+    Three things are checked and the first is not about safety at all:
+
+    - **The id must match the URL.** `document_id` is `digest(library,
+      source_key)` and `source_key` comes from the URL, while the transcript
+      comes from `info`. A mismatch is not an error anywhere downstream: it
+      indexes one video's words under another video's identity, with a locator
+      that deep-links to the wrong recording, and nothing ever says so.
+    - **The caption URL must be a YouTube caption URL.** This is the SSRF guard,
+      and it is needed only because the record can now come from outside.
+    - **A caption URL with no chosen track, or a chosen track with none, is
+      incoherent** — `probe_video` branches on `chosen` and reads `caption_url`,
+      so the pair has to agree or the branch fetches nothing and pays Amazon.
+    """
+    expected = video_id(url)
+    got = getattr(info, "video_id", "")
+    if got != expected:
+        raise ResolutionNotTrusted(
+            f"the resolved record is for {got!r} and the URL names {expected!r}"
+        )
+    if int(getattr(info, "duration_s", 0) or 0) <= 0:
+        raise ResolutionNotTrusted("the resolved record declares no duration")
+
+    chosen = getattr(info, "chosen", None)
+    caption_url = str(getattr(info, "caption_url", "") or "")
+    if chosen is None:
+        if caption_url:
+            raise ResolutionNotTrusted("a caption URL with no chosen track")
+        return
+    if getattr(chosen, "kind", "") not in ("manual", "auto"):
+        # `dedupe_rolling` is applied to an automatic track and not to a manual
+        # one, and `correction_default` reads the same field. A third value
+        # would silently take the manual branch of both.
+        raise ResolutionNotTrusted(
+            f"unknown caption kind {getattr(chosen, 'kind', None)!r}"
+        )
+    if not caption_url:
+        raise ResolutionNotTrusted("a chosen track with no caption URL")
+    parsed = urlparse(caption_url)
+    host = parsed.netloc.lower().split(":")[0]
+    if parsed.scheme != "https" or host not in CAPTION_HOSTS:
+        raise ResolutionNotTrusted(f"caption URL is not YouTube's: {host or caption_url!r}")
+    if parsed.path != CAPTION_PATH:
+        raise ResolutionNotTrusted(f"caption URL is not a caption: {parsed.path!r}")
+
+
 def watch_url(vid: str, start_s: float | None = None) -> str:
     """A link to the video, optionally at the second something was said.
 

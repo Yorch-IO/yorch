@@ -416,14 +416,207 @@ It is deliberately **not** in `Stack::write_env`. That writer rewrites
 is erased — and a workstation has no reason to set this at all, since a
 residential address is not the one YouTube refuses. It belongs to a hosted
 deployment, whose `.env` is rendered by `apply.sh` in the `yorch-aws-platform`
-checkout; **that file does not carry it yet**, so turning the split on in
-production is one line there.
+checkout — which **does** carry it now, as `BRAIN_FETCH_TASK_QUEUE=$FETCH_TASK_QUEUE`
+read from the `fetch_task_queue` key of the SSM config parameter. So turning the
+split on in production is one key there and a process somebody keeps running;
+this paragraph used to say the file did not carry it at all, and that was true
+when it was written.
 
 `worker/scripts/fetch_worker.py` is the process. Two activities, **no
 workflows**, no stores, and AWS credentials only for the Transcribe path. It
 reaches production Temporal through the SSM port-forward
 (`deploy-brain.sh tunnel 7333 7333`). The cost is stated in its docstring and is
 real: a video import only gets past `probing` while somebody is running it.
+
+## The client can make the call instead, and for a paying customer it has to
+
+Added 2026-09-10, after the split above met the case it cannot serve.
+
+`fetch_worker.py` is the right answer for *this* deployment: a second worker on
+an address YouTube answers, reached over the SSM port-forward. It is not an
+answer for anybody else. Production Temporal is loopback-only — the security
+group opens 443 from CloudFront and 80 for ACME, and nothing else — so serving
+`brain-fetch` means AWS credentials, `session-manager-plugin`, a tunnel and a
+process left running. A paying customer with a desktop app has none of those
+and should need none of them.
+
+So the second route is the one that needs nothing: **the desktop app makes the
+refused call itself and sends the answer.**
+
+```
+app (residential IP)                      plane + worker (datacentre IP)
+  yt-dlp extract_info  ──VideoInfo──▶  probe_video ─▶ caption download ─▶ …
+  yt-dlp bestaudio     ──file────────▶  stage_audio ─▶ S3 ─▶ Transcribe
+```
+
+- **`VideoRequest.resolved` is why this is small.** `VideoInfo` was narrowed to
+  cross a *task queue*, and it turns out to be exactly what is needed to cross a
+  *plane*: measured on `yq6uVBsVkeQ`, the whole request body is **10,599 bytes**
+  against a raw info dict of 1,656,277. Nothing else moves. The caption download
+  stays on the worker that owns the workspace, because a caption URL carries
+  `ip=0.0.0.0` and the 582,176 bytes of a 76-minute VTT have no business in a
+  payload.
+- **The workflow skips `resolve_video` when it is given one**, and calls it
+  exactly as before when it is not — which is still right for local mode, where
+  the container's egress *is* the user's egress, and for a hosted deployment
+  serving `fetch_queue`. So this adds a route rather than replacing one.
+- **It is not trusted, and the first check is not about safety.**
+  `videosource.check_resolved` runs at the route and again inside `probe_video`,
+  which is the frame that fetches `caption_url`. It refuses three things:
+  - **An id that does not match the URL.** `source_key` comes from the URL and
+    the transcript comes from the record, so a mismatch indexes one video's
+    words under another video's identity, with a locator that deep-links to the
+    wrong recording — and *nothing downstream fails*. It is the same shape of
+    damage as the `VersionNode.tenant_id` default: a document that is quietly
+    not what it says it is.
+  - **A caption URL that is not YouTube's.** This is the SSRF guard, and it is
+    needed only because the record now comes from outside. `video_id`'s
+    allowlist does not cover it: that one governs which *video* may be named,
+    this one which *host* may be read. Verified live on 2026-09-10 against the
+    free plane — `evil.example`, `youtube.com.evil.example`, plain `http`, and
+    the right host with `/watch` instead of `/api/timedtext` are all 422
+    `resolution_not_trusted`.
+  - **A `chosen` and a `caption_url` that disagree**, because `probe_video`
+    branches on one and reads the other, and the incoherent pair is the branch
+    that silently pays Amazon for a video that had captions.
+- **The audio half could not stay on the client, and could not leave it
+  either.** A `googlevideo` media URL is bound to the address that resolved it,
+  so only the app can download it; S3 needs the instance role, so only the host
+  can store it. `POST /videos/audio` is the seam: the file streams to that
+  organisation's inbox and `stage_audio` moves it to S3 from the host that holds
+  the role. It is a route of its own rather than a longer `SUPPORTED_FORMATS` on
+  `/uploads`, because that one buffers the whole body in memory at a cap chosen
+  for a 900-page PDF, and an hour of audio would not fit in the worker's
+  `mem_limit: 2g`.
+- **`stage_audio` checks containment before it looks anything up**, and the
+  order is load-bearing rather than tidy: the reuse branch **unlinks the path it
+  was given**, so an unchecked path there is a cross-tenant delete. A test names
+  the reason.
+- **The audio is downloaded before the gate, and that is the one trade here.**
+  The bytes cost nothing — no provider call — so they are not what the gate is
+  guarding. The alternative is parking the workflow after approval until this
+  machine sends the audio, which makes a run that stalls invisibly when the
+  window is closed: the `ASK_TIMEOUT` failure in a third shape.
+  What it does leave is up to a gigabyte in the inbox for a run that never
+  transcribes, because `stage_audio`'s own `finally` is the only thing that
+  deletes it and a **rejected gate** and an **already-indexed video** both
+  return before reaching it. `discard_audio` covers those two.
+  A run that *crashes* in between is not covered, and that is the existing
+  property of the inbox rather than a new one: a file uploaded through
+  `POST /uploads` whose ingest is never started stays there in the same way.
+  Three orders of magnitude is what earns audio the explicit sweep.
+
+**The app bundles yt-dlp as a Tauri `externalBin`**, resolved by
+`ytdlp::binary()` as a sibling of the executable — which is where the bundler
+puts it, verified by watching `tauri dev` stage
+`binaries/yt-dlp-x86_64-unknown-linux-gnu` to `target/debug/yt-dlp` with the
+triple stripped. It is **not committed**: 40 MB per platform and a release about
+monthly, against a whole `.git` of 104 MB. `binaries/fetch.sh` pins the version
+and checks the published sha256; a build without it fails at the bundler and a
+`tauri dev` without it fails at `binary()` with `ytdlp_missing`, which the app
+renders as a sentence telling you to run the script. Neither is silent.
+
+`ytdlp.rs` forks `_tracks`, `_choose_track` and `_download_error_kind`, each
+with a test naming the Python behaviour it reproduces — and `serde_json` is
+built with `preserve_order` for one of them: Python walks the caption
+dictionaries in insertion order and `choose_track`'s last pass returns the first
+track matching nothing in particular, so sorted keys would pick a different
+language from the server for the same video. It costs no new crate; `indexmap`
+was already locked.
+
+### The track a caller who said nothing gets
+
+Found 2026-09-10, the moment the paid plane could reach a real video's gate for
+the first time — which is the argument for closing a gap rather than recording
+it, again.
+
+`_choose_track` matched the language preference, then manual over automatic,
+and with **no** preference took the first track it saw. YouTube offers an
+automatic caption track in every language it can translate into, returns them
+**in alphabetical order by code**, and marks the source one with an `-orig`
+suffix. Measured on `yq6uVBsVkeQ`, a 76-minute talk in Spanish: 157 automatic
+tracks — `ab`, `aa`, `af`, `ak`, `sq`, … — and the real one at `es-orig`.
+
+So the gate offered to correct and index **Abkhazian**: a machine translation
+of a machine transcription, named in the panel as a two-letter code in a line
+of small print, under a heading that says nothing has been paid for yet. That
+is precisely the shape of thing that gets approved.
+
+The rule is now: **the original language before any translation of it**, as a
+stable sort so it decides ties and reorders nothing else. It holds inside a
+preference too, because `es` matches both `es` and `es-orig` by prefix and one
+of those has been round tripped through a translator; it does not overrule a
+preference that names another language; and manual still beats automatic,
+which is a different ordering and a sound one.
+
+It was not introduced by the client-side split — `_choose_track` is reached
+identically from `resolve_video` — and the Rust fork reproduced it faithfully,
+which is the parity guard working as designed. What the split changed is that
+somebody could get far enough to see it.
+
+**A refusal of *this machine* is a different kind from a refusal of the
+server.** `youtube_refused_this_host` means the datacentre was refused and the
+remedy is this whole path; `youtube_refused_this_machine` means the remedy has
+already been tried, and the advice has to be "wait a few minutes" instead.
+
+**Local mode is deliberately untouched.** The container's egress is the
+machine's egress, so `resolve_video` is already answered there; routing it
+through the bundled binary would only add a second copy of yt-dlp that goes
+stale on its own schedule.
+
+### What is verified, and the one thing that gates the rest
+
+Verified 2026-09-10:
+
+- The bundled binary resolves a real video from this machine — the exact video
+  from the bug report, `yq6uVBsVkeQ`: 4,573 s, 157 caption tracks, caption URL
+  on `www.youtube.com/api/timedtext` carrying `ip=0.0.0.0`.
+- A client-supplied record drives the whole free half end to end. On that video
+  through `POST /videos` on the free plane: 107 timed paragraphs, 62,016
+  characters, 69 previewed chunks, a $0.2223 quote — and the Temporal history
+  shows **12 activities scheduled and `resolve_video` not among them**.
+- Every guard refuses live, with `resolution_not_trusted` and the message that
+  says which rule fired.
+- In the real window, in cloud mode: the button reads
+  "Asking YouTube about this video, from this computer…" and the resolve runs
+  here.
+
+**Deployed to production the same day, and the deploy order is the thing to
+know.** The paid plane's `ValidationPipe` runs `forbidNonWhitelisted`, so a
+plane that has not been updated answers the new field with
+`422 request.property resolved should not exist` — seen in the real window
+before the deploy went out. The app change and the plane change ship together;
+neither is useful alone, and the app is no worse in that window than before it,
+since both ends in a failure and this one starts no run at all.
+
+Verified in the real window against `https://brain-api.vervux.com` on
+image `d1d51bf-8102f1c-dirty20260910T173929Z` — a tag that names the commits
+the two trees were *on* when it was built rather than the ones they became,
+because the build preceded the commit. It is the commit this paragraph arrives
+in, and `89e45db` on the paid plane. That the image really holds that code is
+checked rather than assumed, by the staleness guard's own test: no file under
+`worker/`, `docaget/`, `src/` or `prisma/` is newer than the build stamp. The
+next deploy from a clean tree names its commits itself. The video from the bug
+report
+reaches its gate reading *"YouTube's automatic captions (es-orig) — free, and
+unpunctuated"*, 1:16:13, **69 chunks and 62,016 characters** — the same figures
+the free plane produced for the same video, which is the cross-plane check that
+comes for free here. Nothing has been paid for; the gate is where that is
+decided.
+
+One thing the deploy needed that is worth keeping: **the repository had no
+`.dockerignore`, and `cmd_build` passes the repository root** as the worker's
+build context because the image installs `docaget/` as a path dependency.
+Measured 2026-09-10 that context was **12 GB**, 9.8 GB of it
+`app/src-tauri/target`, on a disk with 11 GB free — a deploy that could fill
+the volume. It is an allowlist now, matching the Dockerfile's four `COPY`
+paths, so a corpus or a target directory added anywhere else cannot silently
+re-enter it.
+
+**And the audio half has never run.** No video with no captions has been indexed
+on either plane, and nothing longer than 19 seconds has been indexed at all. It
+is covered by tests at four layers — the activity, the workflow, the DTO and the
+route — and by nothing that has spent a dollar at Amazon.
 
 ## A run that fails in its first activity is now visible
 

@@ -1,0 +1,4 @@
+# Fetched by fetch.sh, never committed: 40 MB per platform and a new
+# release about monthly. See the header of fetch.sh for the whole reason.
+yt-dlp-*
+*.part

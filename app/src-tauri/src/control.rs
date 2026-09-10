@@ -84,6 +84,14 @@ const CHAT_STREAM_IDLE: Duration = Duration::from_secs(120);
 /// that the whole rest of the pipeline then handles in seconds.
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(900);
 
+/// Uploading a video's audio, which is the same shape as above with a bigger
+/// worst case. `MAX_AUDIO_BYTES` is a gigabyte and the audio of a four-hour
+/// talk is a couple of hundred megabytes, so an hour is the budget rather than
+/// the fifteen minutes a book gets. It bounds a stalled connection; it does not
+/// bound the download, which happened before this call and reported its own
+/// progress.
+const AUDIO_UPLOAD_TIMEOUT: Duration = Duration::from_secs(3600);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceHealth {
     pub ok: bool,
@@ -179,6 +187,31 @@ pub struct VideoRequest {
     /// Caption languages to prefer, best first. Empty lets the worker choose.
     #[serde(default)]
     pub languages: Vec<String>,
+    /// What this machine already learned about the video, or `None` to let the
+    /// pipeline ask YouTube itself.
+    ///
+    /// Never sent by the webview — it is `#[serde(default)]` on the way in and
+    /// filled by `video_start`, because the whole point is that the call is
+    /// made here. It serializes under Python's own spelling; see
+    /// [`crate::ytdlp::VideoInfo`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<crate::ytdlp::VideoInfo>,
+    /// Audio this machine already downloaded and uploaded, as the path the
+    /// worker sees. Empty unless the video has no captions at all.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub audio_path: String,
+}
+
+/// Where audio the app uploaded landed, as the *worker* sees it.
+///
+/// Deliberately not `StagedSource`: that one carries a `source_key` because a
+/// document's original filename becomes its title, and audio has no title of
+/// its own — the video already supplied one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct StagedAudio {
+    pub audio_path: String,
+    pub byte_size: u64,
 }
 
 /// Where a file the app uploaded landed, as the *worker* sees it.
@@ -641,7 +674,7 @@ pub struct GateReport {
 /// `kind` is `manual` or `auto`, and the distinction is not cosmetic: an
 /// automatic track is a machine transcript with no punctuation, which is why it
 /// is the only one correction is suggested for.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase"))]
 pub struct CaptionTrack {
     pub language: String,
@@ -1856,6 +1889,37 @@ impl Control {
         .await
     }
 
+    /// Put audio this machine downloaded into the organisation's own inbox.
+    ///
+    /// The counterpart of `upload_source`, and a separate route rather than a
+    /// second use of `/uploads` for two reasons: that one refuses anything
+    /// outside `SUPPORTED_FORMATS`, which is a list of *document* extensions
+    /// and rightly so; and it buffers the whole body in memory, which is a
+    /// 200 MB cap chosen for a 900-page PDF and the wrong shape for an hour of
+    /// audio. `/videos/audio` streams to disk and answers with the path
+    /// `VideoRequest.audio_path` wants.
+    ///
+    /// Cloud mode only. In local mode the worker's own address is answered by
+    /// YouTube, so `fetch_audio` runs where it always did and no file crosses
+    /// anything.
+    pub async fn upload_audio(&self, path: &std::path::Path) -> Result<StagedAudio> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "audio.m4a".to_string());
+        let bytes = std::fs::read(path).map_err(|e| AppError::io(path.display(), e))?;
+        let part = reqwest::multipart::Part::bytes(bytes).file_name(name);
+        let form = reqwest::multipart::Form::new().part("file", part);
+        self.send(
+            self.http
+                .post(format!("{}/videos/audio", self.base))
+                .multipart(form),
+            "/videos/audio",
+            AUDIO_UPLOAD_TIMEOUT,
+        )
+        .await
+    }
+
     pub async fn start_ingest(
         &self,
         request: &IngestRequest,
@@ -2447,6 +2511,64 @@ mod request_direction {
         assert_eq!(out["library_id"], "lib_videos");
         assert!(out.get("libraryId").is_none());
         assert_eq!(out["auto_approve"], false);
+        // Absent, not null, when this machine did not resolve the video — which
+        // is every local-mode run. `VideoRequest.resolved` defaults to `None`
+        // in Python, so either would decode; absent is what says "the webview
+        // sent nothing" rather than "something decided there was nothing".
+        assert!(out.get("resolved").is_none());
+        assert!(out.get("audio_path").is_none());
+    }
+
+    #[test]
+    fn a_resolved_video_reaches_python_under_pythons_own_spelling() {
+        // The one type in this file that must **not** rename on serialize. It
+        // is nested inside a request, so it travels Rust → Python only, and
+        // `duration_s` arriving as `durationS` would be dropped by the
+        // dataclass converter without failing — the exact shape of the
+        // `style_effort` defect, which existed and was invisible because
+        // `asdict` serialises declared fields and nothing else.
+        let mut request: VideoRequest = serde_json::from_str(
+            r#"{"libraryId": "lib_videos", "url": "https://youtu.be/jNQXAC9IVRw"}"#,
+        )
+        .unwrap();
+        request.resolved = Some(crate::ytdlp::VideoInfo {
+            video_id: "jNQXAC9IVRw".into(),
+            title: "Me at the zoo".into(),
+            channel: "jawed".into(),
+            duration_s: 19,
+            upload_date: "20050424".into(),
+            format_id: "395+251".into(),
+            tracks: vec![CaptionTrack {
+                language: "en".into(),
+                kind: "manual".into(),
+                ext: "vtt".into(),
+                name: String::new(),
+            }],
+            chosen: Some(CaptionTrack {
+                language: "en".into(),
+                kind: "manual".into(),
+                ext: "vtt".into(),
+                name: String::new(),
+            }),
+            caption_url: "https://www.youtube.com/api/timedtext?v=jNQXAC9IVRw".into(),
+        });
+        request.audio_path = "/workspace/tenants/t/inbox/audio.m4a".into();
+
+        let out = serde_json::to_value(&request).unwrap();
+        let resolved = &out["resolved"];
+        assert_eq!(resolved["video_id"], "jNQXAC9IVRw");
+        assert_eq!(resolved["duration_s"], 19);
+        assert_eq!(resolved["upload_date"], "20050424");
+        assert_eq!(resolved["format_id"], "395+251");
+        assert_eq!(resolved["caption_url"], "https://www.youtube.com/api/timedtext?v=jNQXAC9IVRw");
+        assert!(resolved.get("videoId").is_none());
+        assert!(resolved.get("durationS").is_none());
+        // `CaptionTrack` renames on serialize and is unaffected only because
+        // every one of its fields is a single word. A field added to it would
+        // have to be too, or this nesting starts lying.
+        assert_eq!(resolved["chosen"]["language"], "en");
+        assert_eq!(resolved["chosen"]["kind"], "manual");
+        assert_eq!(out["audio_path"], "/workspace/tenants/t/inbox/audio.m4a");
     }
 
     #[test]

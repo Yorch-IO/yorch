@@ -22,6 +22,23 @@ export type AppErrorKind =
   | "workspace_not_native"
   | "io"
   | "not_signed_in"
+  // The bundled yt-dlp's own failures, carried rather than mapped: these are
+  // the names the *worker* already publishes for the same facts, so one
+  // guidance map serves both and the two cannot drift into saying different
+  // things about one situation.
+  //
+  // `youtube_refused_this_machine` is deliberately *not* the worker's
+  // `youtube_refused_this_host`. That one means the server was refused and the
+  // remedy is what this whole path is; being refused here means the remedy has
+  // already been tried, and the advice has to be different.
+  | "ytdlp_missing"
+  | "youtube_refused_this_machine"
+  | "youtube_timed_out"
+  | "youtube_unreadable"
+  | "video_unavailable"
+  | "video_is_live"
+  | "video_has_no_duration"
+  | "audio_unavailable"
   | "config";
 
 /**
@@ -60,7 +77,13 @@ export type ControlErrorKind =
   | "question_not_found"
   /** A level name no effort table has. Only reachable by a hand-built request:
    *  the settings screen renders one box per level it was given. */
-  | "effort_not_found";
+  | "effort_not_found"
+  /** The record this machine resolved does not match the link it was sent
+   *  with. Only reachable by a hand-built request from this app's own
+   *  `video_start`, which builds both from one URL. */
+  | "resolution_not_trusted"
+  /** Audio in a container Amazon Transcribe cannot read. */
+  | "audio_format_unsupported";
 
 export interface AppError {
   kind: AppErrorKind;
@@ -112,6 +135,12 @@ const GUIDANCE: Partial<Record<AppErrorKind, string>> = {
   control_timeout: "error.controlTimeout",
   control_stream_stalled: "error.controlStreamStalled",
   not_signed_in: "error.notSignedIn",
+  ytdlp_missing: "error.ytdlpMissing",
+  youtube_refused_this_machine: "error.youtubeRefusedThisMachine",
+  youtube_timed_out: "error.youtubeTimedOut",
+  video_unavailable: "error.videoUnavailable",
+  video_is_live: "error.videoIsLive",
+  audio_unavailable: "error.audioUnavailable",
 };
 
 /** Advice keyed on the control API's own `kind`, read out of the error body. */
@@ -132,6 +161,8 @@ const CONTROL_GUIDANCE: Partial<Record<ControlErrorKind, string>> = {
   no_membership: "error.noMembership",
   tenant_required: "error.tenantRequired",
   tenant_scope_pending: "error.tenantScopePending",
+  resolution_not_trusted: "error.resolutionNotTrusted",
+  audio_format_unsupported: "error.audioFormatUnsupported",
 };
 
 /**
@@ -256,6 +287,26 @@ export interface VideoRequest {
   libraryName?: string;
   /** Caption languages to prefer, best first. Empty lets the worker choose. */
   languages?: string[];
+}
+
+/**
+ * One step of getting a video ready, before the run exists.
+ *
+ * In cloud mode `videoStart` makes the two YouTube calls on this machine, and
+ * the second of them — only for a video with no captions at all — downloads
+ * the audio. Nothing is on screen for that yet: the run row is written by the
+ * workflow, which has not started. So these events are the only thing between
+ * pressing the button and the queue appearing.
+ *
+ * `total` is yt-dlp's own figure and is **0 when it did not offer one**, which
+ * is a different fact from "nothing to download" and must render as no
+ * percentage rather than as 0% — the rule `/project-summary` applies to a leg
+ * it could not ask, at the scale of one number.
+ */
+export interface VideoFetchEvent {
+  step: "resolving" | "downloading" | "uploading" | "starting";
+  bytes?: number;
+  total?: number;
 }
 
 export interface CaptionTrack {
@@ -1378,9 +1429,27 @@ export const api = {
   /** null while the free stages are still running — a normal first answer. */
   ingestGate: (workflowId: string) =>
     invoke<GateReport | null>("ingest_gate", { workflowId }),
-  /** Start indexing a video. No staging call precedes this: there is no file. */
-  videoStart: (request: VideoRequest, options: StageOptions = DEFAULT_STAGES) =>
-    invoke<StartedRun>("video_start", { request, options }),
+  /**
+   * Start indexing a video. No staging call precedes this: there is no file.
+   *
+   * **In cloud mode Rust asks YouTube from this machine first**, because the
+   * server is refused — measured 2026-09-05, "Sign in to confirm you're not a
+   * bot" from the EC2 egress address against 2.6 s from a residential one. So
+   * this call is no longer instant: resolving is a few seconds and, for a
+   * video with no captions at all, downloading its audio is minutes.
+   * `onFetch` is how a window says so instead of sitting still; it is optional
+   * and the channel is created either way, because Tauri cannot build an
+   * `Option<Channel<_>>` argument.
+   */
+  videoStart: (
+    request: VideoRequest,
+    options: StageOptions = DEFAULT_STAGES,
+    onFetch?: (event: VideoFetchEvent) => void,
+  ) => {
+    const channel = new Channel<VideoFetchEvent>();
+    if (onFetch) channel.onmessage = onFetch;
+    return invoke<StartedRun>("video_start", { request, options, onEvent: channel });
+  },
   /** A video run's gate. Its own route, because the report is a different
    *  shape — `preview` is null when there are no captions to preview. null here
    *  means the probe is still running, which is the ordinary first answer. */

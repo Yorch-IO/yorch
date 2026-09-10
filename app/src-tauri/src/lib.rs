@@ -11,6 +11,7 @@ mod error;
 mod keychain;
 mod ports;
 mod stack;
+mod ytdlp;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -624,13 +625,111 @@ async fn ingest_gate(state: State<'_, AppState>, workflow_id: String) -> Result<
     control.gate(&workflow_id).await
 }
 
+/// One step of getting a video ready, for a window that would otherwise sit
+/// still for minutes.
+///
+/// A Channel rather than a return value because the interesting part is the
+/// middle: resolving is three seconds and downloading an hour of audio is not.
+/// `bytes`/`total` are only ever set on `downloading`, and a `total` of zero
+/// means yt-dlp offered no estimate — rendered as no percentage rather than as
+/// 0%, the rule `/project-summary` applies to a leg it could not ask.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoFetchEvent {
+    /// `resolving`, `downloading`, `uploading`, or `starting`.
+    pub step: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
+}
+
+impl VideoFetchEvent {
+    fn step(step: &'static str) -> Self {
+        Self { step, bytes: None, total: None }
+    }
+}
+
 /// Start indexing a video. No staging call precedes this: there is no file.
+///
+/// **In cloud mode the two YouTube calls are made here, on this machine.**
+/// Measured 2026-09-05: `extract_info` is answered from a residential address
+/// in 2.6 s and refused from the EC2 egress address with "Sign in to confirm
+/// you're not a bot" — it is the player API that is bot-checked, not the
+/// network — so a paid run that asks the server to make that call fails with
+/// `youtube_refused_this_host` and the video is never indexed. Doing it here
+/// and sending the small `VideoInfo` is what makes paid mode work at all, and
+/// it needs nothing of the user: no tunnel, no second worker, no credentials.
+///
+/// **Local mode is deliberately untouched.** The container's egress is this
+/// machine's egress, so `resolve_video` is already answered there; routing it
+/// through the bundled binary instead would only add a second copy of yt-dlp
+/// that can go stale on its own schedule. The narrowest change the measurement
+/// justifies.
+///
+/// The audio half only runs for a video with **no captions at all**, and it has
+/// to run here for a different measured reason: a `googlevideo` media URL
+/// carries the address that resolved it and answers 403 anywhere else, so the
+/// download cannot be separated from the resolution. It happens before the
+/// gate, which is the one thing about this that is a trade rather than a fact:
+/// the bytes cost nothing, only time, and the alternative — parking the
+/// workflow after approval until this machine sends them — makes a run that
+/// stalls silently when the window is closed.
 #[tauri::command]
 async fn video_start(
     state: State<'_, AppState>,
     request: VideoRequest,
     options: Option<StageOptions>,
+    on_event: tauri::ipc::Channel<VideoFetchEvent>,
 ) -> Result<StartedRun> {
+    let mut request = request;
+    // Required rather than optional, because `Option<Channel<_>>` is not a
+    // command argument Tauri can build: `Channel` implements `CommandArg` and
+    // not `Deserialize`, so wrapping it asks serde for something it has no way
+    // to make. The caller always creates one; a send into a channel nobody is
+    // listening to is dropped, which is the behaviour an optional one would
+    // have had anyway.
+    let say = |event: VideoFetchEvent| {
+        // A closed channel means the window moved on. Dropped rather than
+        // treated as a failure: the run is what matters and it has not started
+        // yet.
+        let _ = on_event.send(event);
+    };
+
+    if BackendSettings::load(&state.data_dir).mode == BackendMode::Cloud {
+        say(VideoFetchEvent::step("resolving"));
+        let resolved = ytdlp::resolve(&request.url, &request.languages).await?;
+        let needs_audio = resolved.chosen.is_none();
+        let video_id = resolved.video_id.clone();
+        request.resolved = Some(resolved);
+
+        if needs_audio {
+            say(VideoFetchEvent::step("downloading"));
+            let into = state.data_dir.join("video-audio").join(&video_id);
+            // Whatever a previous attempt left. The directory is read back to
+            // find the finished file, so a stale one from an abandoned run
+            // would be uploaded instead of the new download.
+            let _ = std::fs::remove_dir_all(&into);
+            let audio = ytdlp::download_audio(&request.url, &into, |p| {
+                say(VideoFetchEvent {
+                    step: "downloading",
+                    bytes: Some(p.bytes),
+                    total: Some(p.total),
+                });
+            })
+            .await?;
+
+            say(VideoFetchEvent::step("uploading"));
+            let staged = state.control().await?.upload_audio(&audio).await;
+            // Deleted whether or not the upload worked, exactly as the worker
+            // deletes its own download in a `finally`: this is a transient on
+            // the user's own disk and can be a couple of hundred megabytes.
+            let _ = std::fs::remove_dir_all(&into);
+            request.audio_path = staged?.audio_path;
+        }
+    }
+
+    say(VideoFetchEvent::step("starting"));
     let control = state.control().await?;
     control
         .start_video(&request, &options.unwrap_or_default())

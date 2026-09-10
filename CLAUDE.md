@@ -83,7 +83,7 @@ uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # stack up: 843 passed, 78 skipped
+cd worker && uv sync && uv run pytest -q           # stack up: 988 passed
 # Measured 2026-09-06 with the stack **up**. With it down, graph/ and catalog/
 # skip instead — 637 passed / 150 skipped the last time that was actually run
 # (2026-09-05, before conversations added 20 more catalog tests). The
@@ -113,7 +113,11 @@ uv run python scripts/measure_speech_rate.py --queries "predicación" -n 12
 
 # Desktop app
 cd app && npm install
-npm run typecheck && npx vitest run && npm run build   # 471 passed
+# The bundled yt-dlp is not in git — 40 MB per platform, a release about
+# monthly. Fetch it before `tauri build`, which fails at the bundler without
+# it, or `tauri dev`, which starts and then answers `ytdlp_missing`.
+./src-tauri/binaries/fetch.sh                      # this machine's triple
+npm run typecheck && npx vitest run && npm run build   # 487 passed
 npx vitest run -t "define no key"                  # single test by name
 COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch npm run tauri dev
 
@@ -127,7 +131,10 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch \
 # and PKG_CONFIG_PATH set, or the `soup3-sys` build script fails first. No
 # `--release`: the tuned dev profile runs this gate in 60s at 412% CPU.
 export PKG_CONFIG_PATH=~/.local/tauri-sysroot/prefix/usr/lib/x86_64-linux-gnu/pkgconfig
-cd app/src-tauri && cargo test                     # 118 passed
+cd app/src-tauri && cargo test                     # 132 passed, 1 ignored
+# One test is `#[ignore]`d because it talks to YouTube; it is the only thing
+# that can say the bundled binary works at all. Run it on purpose:
+#   COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch cargo test -- --ignored
 
 # Rebuild the image the API and worker actually run. **All three overlays.**
 # Without `dev` the `--build` recreates the containers and changes nothing;
@@ -1330,8 +1337,37 @@ and `fetch_audio` can be routed to a laptop-side worker
 else — the caption download included — stays where the workspace is. **Nothing
 about that split has run outside the test suite.** `doc/VIDEO.md` has the table.
 
-**Three other things about it have never run.** `doc/VIDEO.md` is the record; what belongs in *this* list is what is
-missing. **Nobody has approved a video gate from the UI** — the panel and all
+**There is a second route since 2026-09-10, and it is the one a paying customer
+can use.** The worker split needs production Temporal, which is loopback-only —
+the security group opens 443 from CloudFront and 80 for ACME and nothing else —
+so serving `brain-fetch` costs AWS credentials, an SSM tunnel and a process
+somebody keeps running. A desktop user has none of those. So the app makes the
+refused call **itself**, with a bundled `yt-dlp`, and sends the answer:
+`VideoRequest.resolved` carries the `VideoInfo` and the workflow skips
+`resolve_video`; `VideoRequest.audio_path` carries audio the app downloaded and
+uploaded through `POST /videos/audio`, and `stage_audio` puts it in S3 from the
+host that holds the instance role. The narrowing that made `VideoInfo` fit a
+task queue is what makes it fit a plane — 10,599 bytes on the video that
+prompted this against 1,656,277 of raw info dict — and the caption download
+still never moves, because `ip=0.0.0.0`.
+Three things to know before touching it. **The record is not trusted**:
+`videosource.check_resolved` refuses an id that does not match the URL (which
+would index one video's words under another's identity, failing nowhere) and a
+caption URL that is not YouTube's (the SSRF guard — `video_id`'s allowlist
+governs which *video* may be named, not which *host* may be fetched), at the
+route and again in `probe_video`. **Local mode is deliberately untouched**,
+because the container's egress is the machine's egress. And **the app change
+requires the plane change**: `forbidNonWhitelisted` means an un-updated paid
+plane answers `422 request.property resolved should not exist`, seen in the
+real window on 2026-09-10 against production. The two ship together.
+The binary is a Tauri `externalBin` and is **not committed** — 40 MB per
+platform, a release about monthly, against a whole `.git` of 104 MB. Run
+`app/src-tauri/binaries/fetch.sh` before building; it pins the version and
+checks the published sha256.
+
+**Three other things about it have never run**, and the client-side fetch
+above closes none of them. `doc/VIDEO.md` is the record; what belongs in *this*
+list is what is missing. **Nobody has approved a video gate from the UI** — the panel and all
 three gate states were screenshotted in the real window and clicks navigate, and
 typing a URL and pressing Approve is still untested by anything but code.
 **The reason recorded here was wrong, though, and it was the blocker: synthetic
@@ -1343,6 +1379,14 @@ So this verification is unblocked and merely undone; the recipe is
 `GDK_BACKEND=x11` (so the window is an XWayland client `xdotool` and `import` can
 see at all), `xdotool search --name "Company Brain"`, `mousemove --window` to
 focus a field, then `xdotool type` with **no** `--window`.
+**And `xdotool windowactivate <client id>` first, which the recipe was missing.**
+Found 2026-09-10 typing a URL into the Import screen: a `mousemove … click 1`
+lands on the field and the caret does not go there, so `xdotool type` sends
+XTEST keystrokes to whatever has the keyboard focus and the box stays on its
+placeholder. It is the same silent shape as the coordinate offset below — the
+click reports success, the screenshot shows nothing — and the same wrong
+conclusion is available: that keystrokes do not reach the webview. Activate,
+then click, then type.
 **And take the click coordinates from `xwininfo`, not from
 `xdotool getwindowgeometry`.** The search returns two windows with this name —
 a frame and the client inside it — and for the client the two tools disagree

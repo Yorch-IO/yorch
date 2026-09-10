@@ -30,6 +30,11 @@ from brainworker.pipeline import (
 RUN = "video-test-1"
 VID = "dQw4w9WgXcQ"
 
+#: `tnt_` plus 24 hex, which is the only shape `Paths.for_tenant` accepts — a
+#: path segment built from an unchecked string is how a workspace gets escaped.
+TNT = "tnt_aaaaaaaaaaaaaaaaaaaaaaaa"
+TNT_OTHER = "tnt_bbbbbbbbbbbbbbbbbbbbbbbb"
+
 
 @pytest.fixture
 def workspace(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
@@ -346,7 +351,7 @@ async def test_starting_a_job_charges_once_for_the_audio(aws, monkeypatch):
     monkeypatch.setattr(vid, "_client", lambda s, service: client)
 
     job = await vid.start_transcription(
-        RUN, probe(False), AUDIO, "tnt_1", "ver_1", "es-ES"
+        RUN, probe(False), AUDIO, TNT, "ver_1", "es-ES"
     )
 
     assert job.job_name == "brain-ver_1"
@@ -372,7 +377,7 @@ async def test_a_retry_that_finds_the_job_already_started_does_not_charge_again(
     monkeypatch.setattr(vid, "_client", lambda s, service: client)
 
     job = await vid.start_transcription(
-        RUN, probe(False), AUDIO, "tnt_1", "ver_1", "es-ES"
+        RUN, probe(False), AUDIO, TNT, "ver_1", "es-ES"
     )
 
     assert job.job_name == "brain-ver_1"
@@ -400,5 +405,211 @@ async def test_transcribing_is_refused_when_the_deployment_has_no_bucket(
     monkeypatch.delenv("BRAIN_TRANSCRIBE_BUCKET", raising=False)
     with pytest.raises(Exception, match="transcribe_not_configured|AWS"):
         await vid.start_transcription(
-            RUN, probe(False), AUDIO, "tnt_1", "ver_1", "es-ES"
+            RUN, probe(False), AUDIO, TNT, "ver_1", "es-ES"
         )
+
+
+# --- audio the client downloaded ---------------------------------------------
+
+
+class FakeS3:
+    """S3 as `stage_audio` uses it: a listing and an upload, nothing else."""
+
+    def __init__(self, already: str | None = None):
+        self.already = already
+        self.uploaded: list[tuple[str, str]] = []
+
+    def list_objects_v2(self, Bucket, Prefix, MaxKeys):
+        if self.already is None:
+            return {}
+        return {"Contents": [{"Key": self.already, "Size": 4096}]}
+
+    def upload_file(self, Filename, Bucket, Key, **kw):
+        self.uploaded.append((Filename, Key))
+        self.callback = kw.get("Callback")
+
+
+def _staged(workspace: pathlib.Path, tenant: str, name: str = "audio.m4a") -> pathlib.Path:
+    """A file where `POST /videos/audio` puts one, for the tenant that asked."""
+    from brainworker.activities.ingest import _settings
+
+    inbox = _settings().paths.for_tenant(tenant).inbox
+    inbox.mkdir(parents=True, exist_ok=True)
+    path = inbox / name
+    path.write_bytes(b"\x00" * 4096)
+    return path
+
+
+async def test_audio_the_client_uploaded_is_put_where_transcribe_can_read_it(
+    aws, monkeypatch
+):
+    """The half of the split that could not stay on the client.
+
+    A `googlevideo` media URL carries the address that resolved it and answers
+    403 anywhere else — measured — so when the app made the `extract_info` call
+    the app is also the only thing that can download the audio. What it cannot
+    do is write to S3: that needs the instance role, which a laptop does not
+    have and must not be given. So it uploads through the plane and this
+    activity, on the host that holds the role, takes the one remaining step.
+    """
+    s3 = FakeS3()
+    monkeypatch.setattr(vid, "_client", lambda s, service: s3)
+    path = _staged(pathlib.Path(vid._settings().workspace), TNT)
+
+    staged = await vid.stage_audio(RUN, str(path), probe(False), TNT, "ver_1")
+
+    assert staged.s3_uri == f"s3://bucket/transcribe/{TNT}/ver_1.m4a"
+    assert staged.media_format == "mp4"
+    assert staged.bytes == 4096
+    assert staged.reused is False
+    assert len(s3.uploaded) == 1
+    assert callable(s3.callback), (
+        "boto3's per-part callback is what the heartbeat reports. Without it "
+        "this activity beats a progress figure of 0 for however long a "
+        "gigabyte takes, and a zero that means 'not measured' is the one shape "
+        "this codebase keeps refusing to print"
+    )
+    assert not path.exists(), (
+        "the staged file is deleted whether or not the upload worked, exactly "
+        "as `fetch_audio` deletes its own download: it is up to a gigabyte on "
+        "the same volume as the corpus"
+    )
+    assert aws == [], "moving bytes into S3 is not a provider call and books nothing"
+
+
+async def test_a_retry_finds_the_audio_already_in_s3_and_does_not_read_the_file(
+    aws, monkeypatch
+):
+    """Idempotency matters more here than in `fetch_audio`, and for a reason
+    that has no counterpart there: a retry cannot re-download, because the file
+    the client staged was deleted the first time round. The object is keyed on
+    the version, so the lookup is what makes the second attempt free."""
+    s3 = FakeS3(already=f"transcribe/{TNT}/ver_1.m4a")
+    monkeypatch.setattr(vid, "_client", lambda s, service: s3)
+    # Inside the organisation's tree and not on disk, which is exactly the
+    # state a retry finds: containment is checked **before** the reuse lookup,
+    # deliberately, because the reuse branch unlinks the path it was given and
+    # an unchecked one there would be a cross-tenant delete.
+    gone = vid._settings().paths.for_tenant(TNT).inbox / "gone.m4a"
+
+    staged = await vid.stage_audio(RUN, str(gone), probe(False), TNT, "ver_1")
+
+    assert staged.reused is True
+    assert staged.s3_uri == f"s3://bucket/transcribe/{TNT}/ver_1.m4a"
+    assert s3.uploaded == []
+
+
+async def test_a_path_outside_the_organisations_own_tree_is_refused(aws, monkeypatch):
+    """The guard `stage_source` already makes for a document import, made here
+    for the same reason: the string arrives over HTTP, and a string becomes a
+    path. The route derives the filename itself, so a well-behaved client never
+    names anything else — and a badly behaved one is refused rather than
+    reading another organisation's inbox."""
+    s3 = FakeS3()
+    monkeypatch.setattr(vid, "_client", lambda s, service: s3)
+    elsewhere = _staged(pathlib.Path(vid._settings().workspace), TNT_OTHER)
+
+    with pytest.raises(Exception) as caught:
+        await vid.stage_audio(RUN, str(elsewhere), probe(False), TNT, "ver_1")
+
+    assert caught.value.type == "audio_outside_workspace"
+    assert s3.uploaded == []
+    assert elsewhere.exists(), "a refused path is somebody else's file, not ours to delete"
+
+
+async def test_a_container_transcribe_cannot_read_is_refused_rather_than_recoded(
+    aws, monkeypatch
+):
+    """Transcoding would mean ffmpeg in the worker image — about 80 MB of apt on
+    a 60 GiB volume that also holds the corpus. The same refusal `fetch_audio`
+    makes about a format yt-dlp handed it."""
+    s3 = FakeS3()
+    monkeypatch.setattr(vid, "_client", lambda s, service: s3)
+    path = _staged(pathlib.Path(vid._settings().workspace), TNT, "audio.aiff")
+
+    with pytest.raises(Exception) as caught:
+        await vid.stage_audio(RUN, str(path), probe(False), TNT, "ver_1")
+
+    assert caught.value.type == "audio_format_unsupported"
+    assert s3.uploaded == []
+
+
+# --- a record produced somewhere else ----------------------------------------
+
+
+async def test_probing_refuses_a_resolved_record_that_is_not_for_this_url(workspace):
+    """The check runs in the activity that fetches `caption_url`, not only at
+    the route that accepted it — the same doubling `retrieve.search` keeps for
+    `tenant_id`, and for the same reason: a route is one of several ways in.
+
+    `probe_video` is where it belongs because this is the frame that makes the
+    request. A guard at the route alone protects the route.
+    """
+    from brainworker.pipeline import VideoInfo, VideoRequest
+
+    request = VideoRequest(library_id="lib_v", url=f"https://youtu.be/{VID}")
+    other = VideoInfo(
+        video_id="jNQXAC9IVRw",
+        title="otro vídeo",
+        channel="",
+        duration_s=19,
+        upload_date="20050424",
+    )
+
+    with pytest.raises(Exception) as caught:
+        await vid.probe_video(request, RUN, other)
+
+    assert caught.value.type == "resolution_not_trusted"
+    assert "jNQXAC9IVRw" in str(caught.value)
+
+
+# --- which caption track of 157 -------------------------------------------
+
+
+def _auto(*languages: str) -> list[CaptionTrack]:
+    return [CaptionTrack(language=l, kind="auto", ext="vtt") for l in languages]
+
+
+def test_the_original_language_beats_a_translation_of_it():
+    """The defect this rule exists for, with the real shape that produced it.
+
+    Measured 2026-09-10 on `yq6uVBsVkeQ`, a 76-minute talk in Spanish:
+    **157 automatic tracks, returned in alphabetical order by code** — `ab`,
+    `aa`, `af`, `ak`, `sq`, … — and the one YouTube actually heard is
+    `es-orig`. A caller expressing no preference got Abkhazian: a machine
+    translation of a machine transcription, offered at the gate as a
+    two-letter code in a line of small print.
+    """
+    tracks = _auto("ab", "aa", "af", "es", "es-orig", "sq")
+    assert vid._choose_track(tracks, []).language == "es-orig"
+
+
+def test_it_holds_inside_a_language_preference_too():
+    # `es` matches both `es` and `es-orig` by prefix, and where a video offers
+    # both, one of them has been round tripped through a translator.
+    tracks = _auto("es", "es-orig")
+    assert vid._choose_track(tracks, ["es"]).language == "es-orig"
+
+
+def test_a_preference_still_wins_over_the_original():
+    """The rule decides ties; it does not overrule the caller. A shelf of
+    English videos asking for English must not be handed the Spanish source."""
+    tracks = _auto("es-orig", "en")
+    assert vid._choose_track(tracks, ["en"]).language == "en"
+
+
+def test_a_human_transcript_still_beats_the_automatic_original():
+    # Manual over automatic is a quality ordering and this does not disturb it:
+    # an auto track has no punctuation and carries rolling duplicates.
+    tracks = [
+        CaptionTrack(language="es-orig", kind="auto", ext="vtt"),
+        CaptionTrack(language="pt", kind="manual", ext="vtt"),
+    ]
+    chosen = vid._choose_track(tracks, [])
+    assert (chosen.language, chosen.kind) == ("pt", "manual")
+
+
+def test_a_video_with_no_original_marker_is_unchanged():
+    # The sort is stable, so it reorders nothing when no track is marked.
+    tracks = _auto("ab", "aa", "af")
+    assert vid._choose_track(tracks, []).language == "ab"

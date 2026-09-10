@@ -19,7 +19,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` so `ytdlp::tracks_of` walks the caption dictionaries in the
+# order YouTube sent them, which is the order the Python it forks walks them in.
+# Sorted keys would silently choose a different caption language from the server
+# for the same video. It pulls in no new crate: `indexmap` is already locked.
+serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 tokio = { version = "1", features = ["process", "sync", "time", "macros", "rt-multi-thread"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }

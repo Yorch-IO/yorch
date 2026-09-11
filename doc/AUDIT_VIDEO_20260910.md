@@ -200,10 +200,48 @@ passages. But:
   **0 of 5 hits are this video**, for a question phrased in the video's own title.
 
 `doc/VIDEO.md` left this exactly open: *"Whether putting the video's title there would help
-retrieval is a real and measurable question, deliberately not answered by guessing."* It is
-now measured once, in the direction of yes. Two synthetic questions on one video is not a
-result — but "the document clears the dense floor by 0.001" is a number, and it is the
-number that decides whether this video is ever retrieved beside the books.
+retrieval is a real and measurable question, deliberately not answered by guessing."*
+
+**So it was measured, and the answer is not the clean yes two questions suggested.** Each
+of the 69 chunks was embedded twice — as indexed, and with the title prepended as
+`embed_text()`'s first part — and both were compared by cosine against the same six query
+vectors. Nothing was written and nothing re-indexed. Control: the computed bare cosines
+reproduce Qdrant's own dense scores to four decimals (0.6090, 0.6140), and all 69 bare
+texts came back as embedding-cache *hits*, which independently confirms the stored vectors
+correspond to the `embed_text` in `chunks.jsonl`.
+
+| question | bare | titled | Δ | best book | 5th book | over floor, bare→titled |
+|---|---|---|---|---|---|---|
+| …transformación de los gobiernos y naciones? | 0.6090 | 0.7036 | **+0.0946** | 0.6470 | 0.6243 | 5 → **69** |
+| …la posmodernidad? | 0.6140 | 0.6001 | −0.0139 | 0.7376 | 0.6773 | 1 → 1 |
+| …los cristianos y el poder político? | 0.6789 | 0.6787 | −0.0003 | 0.7640 | 0.7096 | 24 → 38 |
+| …la iglesia frente al Estado? | 0.6353 | 0.6351 | −0.0002 | 0.6864 | 0.6318 | 2 → 2 |
+| …los reinos de este mundo? | 0.6259 | 0.6288 | +0.0029 | 0.6466 | — | 2 → 1 |
+| …Darío Silva sobre las naciones? | 0.6764 | 0.7232 | **+0.0468** | 0.7305 | 0.7061 | 13 → **69** |
+
+Mean Δ **+0.0217**, range −0.0139 to +0.0946. Entering the library's top five goes from
+**1 of 6 to 3 of 6**, and the video outranks the best book on one question where before it
+outranked none.
+
+**But the gain is entirely where the question repeats the title's words.** The two large
+deltas are the two questions I phrased from the title — "transformación de los gobiernos y
+naciones" *is* the title — and the other four move by less than a thousandth. That is
+vocabulary leakage, the same effect this repository already measures deliberately: the
+synthetic eval's questions are written from the chunks they must find, and *"the gap
+between the two modes is the leakage measurement"*. I wrote these questions, so a large
+part of the two big numbers is mine.
+
+**And there is a cost the naive version hides.** On both title-matched questions, prepending
+the title takes the chunks clearing the dense floor from 5 and 13 to **all 69**. A title
+strong enough to lift the document is strong enough to make every fragment of it look
+equally relevant — and `diversify`/`PER_SECTION`, which is what would normally temper one
+source flooding a result set, **cannot help here, because a transcript has no sections**.
+
+So the honest conclusion is narrower than "add the title": a transcript is measurably
+handicapped by its empty breadcrumb, and the obvious fix buys real ground on questions
+shaped like the title while doing nothing for the rest and risking a 69-chunk monoculture
+in the top-k. Worth doing deliberately, with a real eval set rather than six questions one
+person wrote — which is the thing a video has no stage to pay for.
 
 ### F9 — the Abkhazian orphan, and the fix landing visible in the data
 
@@ -301,4 +339,6 @@ nothing (every chunk carrying a locator equal to
 
 What remains genuinely unobserved is a human clicking a citation of *this* video
 and landing at the right moment. That is one question away, and worth asking
-once F8 is acted on rather than before.
+once F8 is acted on rather than before — and F8, now that it has six questions
+behind it rather than two, is a decision about eval sets rather than a one-line
+change.

@@ -2305,9 +2305,23 @@ session's files.
   **0 of the top 5 hits are this video**, for a question phrased in the video's
   own title. `doc/VIDEO.md` left this explicitly open ("whether putting the
   video's *title* there would help retrieval is a real and measurable question,
-  deliberately not answered by guessing"); it is now measured once, in the
-  direction of yes. Two synthetic questions on one video is not a result, but
-  "clears the floor by 0.001" is a number.
+  deliberately not answered by guessing"). **It has now been measured, and the
+  obvious fix is not a clean win.** Embedding all 69 chunks a second time with
+  the title prepended and comparing cosines against six queries: mean
+  Δ **+0.0217**, range −0.0139 to +0.0946, and entry into the library's top five
+  goes from 1 of 6 questions to 3 of 6. But the whole gain sits on the two
+  questions phrased in the title's own words — the other four move by under a
+  thousandth — which is the vocabulary leakage this file already measures on
+  purpose elsewhere. And on those two questions the chunks clearing the dense
+  floor go from 5 and 13 to **all 69**: a title strong enough to lift the
+  document makes every fragment of it look equally relevant, and `diversify`
+  cannot temper that here because a transcript has no sections for
+  `PER_SECTION` to spread across. So the handicap is real and the one-line fix
+  trades it for a monoculture risk; deciding needs an eval set, which is the
+  stage a video has none of. Method and table in
+  `doc/AUDIT_VIDEO_20260910.md` — nothing was written or re-indexed to get it,
+  and the bare variant came free from the embedding cache, which is also what
+  proves the stored vectors match `chunks.jsonl`.
 - **An orphan `pending` version survives a track-selection change.**
   `ver_2c19d4975460f19198702f53` is still linked to
   `doc_34e7d656ba111ba08c930de8` and holds `captions:ab:auto` — **Abkhazian** —

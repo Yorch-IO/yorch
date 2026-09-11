@@ -863,8 +863,18 @@ locator is affected, because a locator uses `start_s`.
   `Chapter > Section`. The video's dense scores cluster at 0.6001–0.614 against
   `MIN_SCORE = 0.60`, and across the whole library **none of the top five hits
   are this video** for a question phrased in its own title. Scoped to the
-  version, retrieval is fine. Still one video and two synthetic questions — but
-  the question is no longer unmeasured.
+  version, retrieval is fine.
+
+  **The obvious fix was then measured, and it is not a clean win.** Re-embedding
+  all 69 chunks with the title prepended lifts the mean best-chunk cosine by
+  **+0.0217** over six questions and takes top-five entry from 1 of 6 to 3 of 6
+  — but the entire gain is on the two questions phrased in the title's own
+  words, and on those two the chunks clearing the dense floor go from 5 and 13
+  to **all 69**. A title strong enough to lift the document makes every fragment
+  of it look equally relevant, and `diversify` cannot temper that here precisely
+  because a transcript has no sections for `PER_SECTION` to spread across. The
+  handicap is real; the one-line fix trades it for a monoculture in the top-k.
+  Table and method in `doc/AUDIT_VIDEO_20260910.md`.
 
 ### Auditing the next one
 

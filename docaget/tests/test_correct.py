@@ -501,3 +501,52 @@ def test_a_cached_correction_the_gate_accepts_is_still_used(tmp_path):
     out, report = correct_paragraphs(_RefusesToSpend(), [original], cache_dir=root)
     assert out == [good]
     assert not report.rejected
+
+
+# --- a rejection has to be reviewable, not just counted ----------------------
+
+
+def test_a_refused_correction_keeps_what_was_refused():
+    """Without this the gate's own false-positive rate is unmeasurable.
+
+    A refused proposal is never cached — `correct_paragraphs` `continue`s before
+    `cache.put` — so the reason and the missing token were all that survived.
+    The wide audit that set `MAX_LOST_CHARS` read 2,684 corrections out of the
+    cache and therefore saw only the ones this gate had *accepted*.
+    """
+    def loses_the_name(items):
+        return [
+            {"i": it["i"], "texto": it["texto"].replace("Dooyeweerd", "el autor")}
+            for it in items
+        ]
+
+    out, report = correct_paragraphs(FakeVertex(loses_the_name), [ORIGINAL])
+    assert out[0] == ORIGINAL, "the corpus must still be unaffected"
+    assert len(report.rejected) == 1
+    rejected = report.rejected[0]
+    assert rejected.reason == "proper_noun"
+    assert "el autor" in rejected.proposed
+    assert "Dooyeweerd" not in rejected.proposed
+
+
+def test_a_cached_correction_the_gate_refuses_is_reported_with_its_text(tmp_path):
+    original = (
+        "Se negó a recibir culto. Al ocuparse del aporte griego, Dooyeweerd "
+        "identifica la relación dialéctica."
+    )
+    poisoned = original[len("Se negó a recibir culto. "):]
+    root = tmp_path / "correct"
+    root.mkdir()
+    (root / f"{correct_mod._key(original)}.txt").write_text(poisoned, encoding="utf-8")
+
+    out, report = correct_paragraphs(_RefusesToSpend(), [original], cache_dir=root)
+    assert out == [original]
+    assert report.rejected[0].proposed == poisoned
+
+
+def test_a_paragraph_that_came_back_absent_has_no_proposal_to_keep():
+    """`missing` is a different outcome from `rejected` and must stay one."""
+    out, report = correct_paragraphs(FakeVertex(lambda items: []), [ORIGINAL])
+    assert out[0] == ORIGINAL
+    assert report.missing == 1
+    assert report.rejected == []

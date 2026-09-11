@@ -359,8 +359,14 @@ async def correct_text(run_id: str, extraction: Extraction) -> Correction:
                 "missing": report.missing,
                 "cache_hits": report.cache_hits,
                 "calls": report.calls,
+                # `proposed` is the only durable copy: a refused correction
+                # is never cached, so without this the report names what went
+                # missing and never what the model would have written — which
+                # is what makes a rejection reviewable rather than merely
+                # counted. See `docagent.correct.Rejection`.
                 "rejected": [
-                    {"index": r.index, "reason": r.reason, "detail": r.detail}
+                    {"index": r.index, "reason": r.reason, "detail": r.detail,
+                     "proposed": r.proposed}
                     for r in report.rejected
                 ],
                 "summary": report.summary(),

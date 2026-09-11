@@ -180,8 +180,52 @@ The asymmetry is visible in one run: `cartel` → `Gardel` was **accepted**, bec
 captioner wrote the wrong name in lowercase; `Tilich` → `Tillich` would have been
 **rejected**, because it wrote the wrong name capitalised. So on a transcript the gate's
 behaviour turns on whether the captioner happened to capitalise its error, which is not a
-property anybody chose. Recorded, not fixed: the honest fix needs a measurement of what a
-relaxed rule costs, and this is one video.
+property anybody chose.
+
+**Read in context, all 22 are the same thing.** Every refused repair is a name the
+captioner mangled, and most of them are famous:
+
+| kept in the corpus | almost certainly | from the sentence around it |
+|---|---|---|
+| `Beaida` | Betsaida | *"como al ciego de Beaida por segunda vez para ver más claramente"* |
+| `Sawer` | Sawyer | *"las aventuras de Tom Sawer, un clásico americano"* |
+| `Bill Bray` | Bill Bright | *"el ministerio de campus Crusade, que fundó nuestro hermano Bill Bray"* |
+| `Chusa` | Chuza | *"la esposa de Chusa, superintendente del rey Herodes"* |
+| `Paul Tilich` | Paul Tillich | *"Tomando la premisa de Paul Tilich"* |
+| `la Osana` | la Lausana | *"el movimiento de la Osana, que no hay una cultura cristiana"* |
+| `La Falangeja`, `Carlos Mars` | La Falange, Carlos Marx | *"La Falangeja es una hija adulterina de Carlos Mars"* |
+| `Agustín de Foxaque` | Agustín de Foxá | *"el Conde Agustín de Foxaque tenía un estilo muy pintoresco"* |
+| `Francisco Cuyama` | Francis Fukuyama | *"en su famoso mexel fin de la historia"* |
+| `Barán Lincoln` | Abraham Lincoln | *"ese decálogo de Barán Lincoln tan hermoso"* |
+| `Honding` | Huntington | *"habla Honding donde la inmigración latinoamericana"* |
+| `FARG` | FARC | *"condenó a los comandantes de las FARG por narcotráfico"* |
+| `Madame Pompadur` | Madame Pompadour | *"ella es como Madame Pompadur"* |
+
+The corpus now holds Fukuyama as *Cuyama*, Tillich as *Tilich*, Marx as *Mars* and
+Bethsaida as *Beaida* — in a Spanish theology library — because a rule written to protect
+proper nouns protected the transcription of them instead.
+
+### F7a — and a rejection could not be reviewed at all, which is why nobody knew
+
+`correct_paragraphs` `continue`s **before** `cache.put`, so a refused proposal is never
+persisted. All that survived was the reason and the token that went missing; what the model
+would have written was discarded with it. That is why the table above had to be inferred
+from context rather than read.
+
+It also undermines a measurement this repository relies on. The wide audit that set
+`MAX_LOST_CHARS` read **2,684 corrections out of the cache** — and the cache holds only
+corrections this gate *accepted*. So that sample could not contain a false positive by
+construction: `verify`'s false-negative rate has been measured on a real corpus and its
+**false-positive rate has never been measured at all**.
+
+Fixed here: `Rejection` carries `proposed`, and `correction-report.json` records it. It is
+model output the gate judged unsafe, so it goes in the report and never into the corpus —
+the corrected stream is byte-for-byte what it was. That makes the next transcript's
+rejections reviewable, which is the precondition for relaxing the rule rather than guessing
+at it. The shape a relaxation probably wants is *"a capitalised token that was replaced by a
+near neighbour is a repair; one that simply vanished is still loss"* — `Mars`→`Marx`,
+`FARG`→`FARC`, `Tilich`→`Tillich` all pass that test and an outright deletion does not. It
+is not implemented, because on this run there is no proposal to measure it against.
 
 ### F8 — a transcript is embedded with no breadcrumb, and it is measurably expensive
 

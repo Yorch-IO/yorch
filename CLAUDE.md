@@ -2292,9 +2292,15 @@ session's files.
   `cartel` → `Gardel` was *accepted* because the captioner wrote the wrong name
   in lowercase, while the same repair capitalised would have been refused — so
   on a transcript the gate turns on whether the captioner happened to
-  capitalise its error, which is not a property anybody chose. Recorded rather
-  than fixed because the honest fix needs a measurement of what a relaxed rule
-  costs, and this is one video.
+  capitalise its error, which is not a property anybody chose. **Read in context,
+  all 22 are the same thing**: the corpus now holds Fukuyama as *Cuyama*,
+  Tillich as *Tilich*, Marx as *Mars*, Huntington as *Honding*, the FARC as
+  *FARG* and Bethsaida as *Beaida*, in a Spanish theology library, because a
+  rule written to protect proper nouns protected the transcription of them
+  instead. Table in `doc/AUDIT_VIDEO_20260910.md`. Recorded rather than fixed
+  because the shape a relaxation wants — *a capitalised token replaced by a near
+  neighbour is a repair; one that simply vanished is still loss* — cannot be
+  measured against this run, for the reason in the entry below.
 - **A transcript is embedded with no breadcrumb, and it is measurably
   expensive.** `Chunk.embed_text()` prepends `breadcrumb()`; a transcript has no
   chapter and no section, so a video chunk reaches the embeddings API as bare
@@ -2799,6 +2805,24 @@ Kept because each fix carries a rule worth not relearning. The heading used to
 count them and the count was already wrong — nine entries under "Eight" — which
 is a small demonstration of the rule this file keeps applying to code: a number
 maintained by hand drifts, and one that has drifted is worse than none.
+
+- **A refused correction kept no record of what was refused, so `verify`'s
+  false-positive rate had never been measured.** `correct_paragraphs` `continue`s
+  before `cache.put`, so the model's text was discarded along with the
+  rejection and all that survived was the reason plus the token that went
+  missing. Two consequences, both real. The wide audit that set
+  `MAX_LOST_CHARS` read **2,684 corrections out of the cache**, and the cache
+  holds only corrections the gate *accepted* — so that sample could not contain
+  a false positive by construction: the false-negative rate is measured on a
+  real corpus and the false-positive rate is not measured at all. And on the
+  first auto-caption transcript, 22 of 107 paragraphs were refused for
+  `proper_noun` loss where every "name" was one the captioner had mangled, and
+  the proposals were gone, so the table in `doc/AUDIT_VIDEO_20260910.md` had to
+  be *inferred from the surrounding sentences* rather than read. `Rejection`
+  carries `proposed` now and `correction-report.json` records it. It is model
+  output the gate judged unsafe, so it goes in the report and **never into the
+  corpus** — the corrected stream is byte-for-byte what it was. This is the
+  precondition for relaxing the rule rather than guessing at it.
 
 - **`chunk_transcript` built the warnings that matter most and dropped them on
   the way out.** It reports two conditions it cannot fix — a correction that

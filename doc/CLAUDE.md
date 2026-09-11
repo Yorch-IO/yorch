@@ -237,6 +237,14 @@ is the part that is about *this* engine, and the rules worth not relearning.
   title, and **not one was rejected by the gate as it stood**. `MAX_LOST_CHARS`
   is an absolute floor beside the ratio because the ratio is the wrong shape:
   on "pág 33." → "pág. 33." a single character is 14%.
+  **A limit of that measurement, found later and worth stating here:** the cache
+  holds only corrections this gate *accepted*, because a rejection `continue`s
+  before `cache.put`. So those 2,684 could not contain a false positive by
+  construction — the measurement bounds what `verify` lets through and says
+  nothing about what it wrongly stops. `Rejection.proposed` exists so the next
+  such audit can look at both halves; the first transcript it would have
+  covered refused 22 of 107 paragraphs, every one a name the captioner had
+  mangled.
 - **A cache hit skipped `verify` entirely**, so the gate's rules could be
   tightened and the entries written under the old ones would still be applied for
   ever. The cache is the output of a gate that changes; it is verified on read

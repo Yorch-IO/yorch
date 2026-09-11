@@ -145,9 +145,33 @@ def _fold(s: str) -> str:
 
 @dataclass
 class Rejection:
+    """One correction the gate refused, and **what it refused**.
+
+    `proposed` exists because without it a rejection is unreviewable, and that
+    turned out to matter. A refused proposal is never cached — `correct_paragraphs`
+    `continue`s before `cache.put` — so the model's text was simply gone, and all
+    a reader had was the reason plus the token that went missing.
+
+    Two consequences, both real. The wide audit that set `MAX_LOST_CHARS` measured
+    2,684 corrections out of the cache, and **every one of them was a correction
+    this gate had accepted** — so `verify`'s false-*positive* rate has never been
+    measured at all, only its false-negative one. And on the first auto-caption
+    transcript indexed, 22 of 107 paragraphs were refused for `proper_noun` loss
+    where the "names" were what the captioner misheard — `Tilich` for Tillich,
+    `Mars` for Marx, `Cuyama` for Fukuyama, `FARG` for FARC — and nobody could
+    see whether the model had proposed the right repair, because the proposal was
+    discarded along with it.
+
+    It is model output the gate judged unsafe, so it goes in the *report* and
+    never into the corpus. The corrected stream is unaffected.
+    """
+
     index: int
     reason: str
     detail: str
+    #: What the model returned and `verify` refused. Empty when the paragraph
+    #: came back absent rather than wrong.
+    proposed: str = ""
 
 
 @dataclass
@@ -258,7 +282,9 @@ def correct_paragraphs(
             if ok:
                 out[i] = hit
             else:
-                report.rejected.append(Rejection(index=i, reason=reason, detail=detail))
+                report.rejected.append(
+                    Rejection(index=i, reason=reason, detail=detail, proposed=hit)
+                )
 
         if not pending:
             if progress:
@@ -297,7 +323,10 @@ def correct_paragraphs(
                 continue
             ok, reason, detail = verify(original, proposed)
             if not ok:
-                report.rejected.append(Rejection(index=i, reason=reason, detail=detail))
+                report.rejected.append(
+                    Rejection(index=i, reason=reason, detail=detail,
+                              proposed=proposed.strip())
+                )
                 continue
             # Persisted here rather than after the batch. Correction is the
             # most expensive step in the pipeline and the slowest; saving only

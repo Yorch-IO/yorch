@@ -248,3 +248,57 @@ any other run of this video, and no video without captions has been indexed on e
 - **Whether the chosen track is Spanish as spoken** rather than a round trip through a
   translator. The probe says `es-orig` and the rule now prefers the original before any
   translation of it; nothing in the artifacts proves the text itself.
+
+---
+
+## Verified after the fixes shipped
+
+Production image `da6df10-9ebe0a1` — a tag naming the two commits it actually
+contains, rather than the ones the trees became, because for once the build
+followed the commit.
+
+`worker/scripts` now ships in the image, so the audit above reproduces itself
+from the installed script rather than from something piped over stdin:
+
+```
+docker exec company-brain-worker-1 \
+  python /app/worker/scripts/audit_version.py ver_7005ed82817384c5dfa03062
+```
+
+Its `video` leg agrees with every figure in this document, independently:
+`content_sha256_rederives: true`, `chunked: "corrected"` at 69/69 spans against
+`transcript` at 0/69, `correction_fallback_fired: false`, `aligned: true`,
+`uncovered_paragraphs: []`, `distinct_ranges: 69` of 69,
+`derivation_disagreements: []`, and `rejected_by_reason: {"proper_noun": 22}`.
+
+The two user-visible fixes, read back off the live trail:
+
+```
+stage=probing      artifacts=['captions', 'video_probe']
+stage=grouping     artifacts=['evidence', 'transcript', 'transcript_text']
+stage=previewing   artifacts=['preview_chunks']
+stage=correcting   artifacts=['corrected_text', 'correction_report']
+stage=chunking     artifacts=['chunks']
+trailing "no stage" row present: False
+total_cost: usd 0.154545, unpriced_entries 0
+```
+
+`evidence` sits on `grouping`, the stage that writes it; the trailing
+`stage: null` heading is gone; and the ledger still totals to the cent, so
+nothing was moved out of the bill to tidy the table. `citation_title_prefixes`
+reads `null` rather than 69 clocks.
+
+## One authorised check not made
+
+A question asked end to end **from the desktop app** was in scope and was not
+spent. The retrieval probe replaced it, and it is the better instrument for what
+was actually in doubt: F8 says a library-wide question returns books rather than
+this video, so an ask would most likely have cited the books and demonstrated
+nothing about the video's locators — while B2 and B3, read straight off the
+graph, already establish the condition under which `answer._verify` drops
+nothing (every chunk carrying a locator equal to
+`hhmmss(start_s) · watch_url(vid, start_s)`).
+
+What remains genuinely unobserved is a human clicking a citation of *this* video
+and landing at the right moment. That is one question away, and worth asking
+once F8 is acted on rather than before.

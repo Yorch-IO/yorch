@@ -344,7 +344,7 @@ class IngestWorkflow:
 
         estimate: Estimate = await workflow.execute_activity(
             act.estimate_cost,
-            args=[preview, options, decision],
+            args=[preview, options, decision, run_id],
             start_to_close_timeout=WRITE_TIMEOUT,
             retry_policy=_RETRY,
         )

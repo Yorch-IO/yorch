@@ -277,7 +277,8 @@ class VideoIngestWorkflow:
         recommended = _recommended(options, probe)
         estimate: Estimate = await workflow.execute_activity(
             vid.estimate_video,
-            args=[probe, recommended, characters, chunk_count, characters_high],
+            args=[probe, recommended, characters, chunk_count, characters_high,
+                  run_id],
             start_to_close_timeout=WRITE_TIMEOUT,
             retry_policy=_RETRY,
         )
@@ -334,6 +335,19 @@ class VideoIngestWorkflow:
             start_to_close_timeout=FREE_TIMEOUT,
             retry_policy=_RETRY,
         )
+
+        # A second `chunking` row, carrying what chunking found. The two
+        # conditions it reports — a correction that moved the paragraph count,
+        # so the *uncorrected* stream was indexed, and a paragraph that reached
+        # no chunk — used to exist only in the worker's stderr, which is not
+        # somewhere a reader of the run looks and not somewhere a replaced
+        # container keeps. Scheduled only when there is something to say, which
+        # is also what makes it replay-safe: a history from before `Chunked`
+        # carried warnings decodes to none and this command is never issued.
+        if chunked.warnings:
+            await self._enter(
+                run_id, "chunking", detail=" · ".join(chunked.warnings)
+            )
 
         await self._enter(run_id, "projecting")
         projected: dict[str, int] = await workflow.execute_activity(
@@ -578,17 +592,24 @@ class VideoIngestWorkflow:
         )
         self._registered = True
 
-    async def _enter(self, run_id: str, stage: str, state: str = "running") -> None:
+    async def _enter(
+        self,
+        run_id: str,
+        stage: str,
+        state: str = "running",
+        detail: str | None = None,
+    ) -> None:
         self._stage = stage
         self._seq += 1
         if not self._registered:
             self._pending.append(
-                {"seq": self._seq, "at": workflow.now(), "stage": stage}
+                {"seq": self._seq, "at": workflow.now(), "stage": stage,
+                 "detail": detail}
             )
             return
         await workflow.execute_activity(
             act.set_run_stage,
-            args=[run_id, stage, state, self._seq, workflow.now()],
+            args=[run_id, stage, state, self._seq, workflow.now(), detail],
             start_to_close_timeout=WRITE_TIMEOUT,
             retry_policy=_RETRY,
         )

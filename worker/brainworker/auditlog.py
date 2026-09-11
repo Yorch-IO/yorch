@@ -97,7 +97,9 @@ def build(
     by_artifact_stage: dict[str, list[dict[str, Any]]] = {}
     loose_artifacts: list[dict[str, Any]] = []
     for artifact in artifacts:
-        stage = stage_vocab.stage_of_artifact(str(artifact.get("name", "")))
+        stage = stage_vocab.stage_of_artifact(
+            str(artifact.get("name", "")), run.kind
+        )
         if stage is None:
             loose_artifacts.append(artifact)
         else:

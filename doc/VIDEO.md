@@ -809,3 +809,85 @@ through terraform and `apply.sh` on a branch of its own in the
 `yorch-aws-platform` checkout and **has not been applied**. Nor has any of this
 been driven from the desktop window: every queue row above was read from
 `GET /runs`, not looked at.
+
+---
+
+## What the first substantial video actually did
+
+Indexed on production 2026-09-10, audited read-only 2026-09-11:
+`La Transformacion de los Gobiernos y Naciones - Dario Silva`, `yq6uVBsVkeQ`,
+1:16:13, 107 timed paragraphs, 62,016 characters, **69 chunks**, `$0.154545`.
+Full account in `doc/AUDIT_VIDEO_20260910.md`; what belongs here is the part
+that changes what this document claims.
+
+**Three of the "not verified" items above are now verified.** A video longer
+than 19 seconds went end to end; a gate was approved from the UI (15 seconds
+between `awaiting_approval` and `correcting`, by a person, in the real window);
+and correction ran on a transcript and *is* the stream the index holds —
+`corrected.txt` verifies 69 of 69 spans and `transcript.txt` 0 of 69, so the
+fallback did not fire. The audio half still has not run and still has no
+`transcription` cost row anywhere.
+
+**The gate over-quoted by 1.46×**, which is the permitted direction: $0.2257767
+against $0.154545, almost entirely output tokens (25,839 projected, 16,733
+spent). It named only `correction` and `embedding`, so the narrowing that fixed
+the 2,300× over-quote is holding. Note that the `$0.2223` recorded above for
+this video is the **correction line**, not the total.
+
+**`_choose_track` is confirmed against the case that motivated it, from the
+data.** The document carries two versions. The indexed one is `es-orig`; the
+other holds `captions:ab:auto` — **Abkhazian** — and its run started 17:27:34Z
+against a fixed image built 17:39:29Z, with the next run at 17:48:27Z choosing
+`es-orig`. The deploy is legible in the catalog to the minute. What it leaves is
+an orphan `pending` version row, recorded in root `CLAUDE.md`.
+
+### `covered_s` is unclamped, and `end_s ≤ duration_s` is not an invariant
+
+The cue table ends at **4574.699 s** against a probed `duration_s` of **4573**,
+so the gate reported coverage *above* 100% and the last chunk ends 1.699 s after
+the video does. This is not a grouping bug: YouTube reports duration as a
+truncated integer while the caption track legitimately runs to the true end. An
+audit that asserted `end_s <= duration_s` would mark every auto-captioned video
+defective, so `auditversion.time_report` **reports** the overshoot instead. No
+locator is affected, because a locator uses `start_s`.
+
+### Two things this measured that were left open above
+
+- **Correction's proper-noun gate inverts on auto-captions.** 22 of 107
+  paragraphs rejected, every one for a name the captioner got wrong. Recorded in
+  root `CLAUDE.md` under known defects, with the `cartel` → `Gardel` asymmetry
+  that shows the mechanism.
+- **"Whether putting the video's *title* in the breadcrumb would help retrieval"
+  now has a number.** A transcript has no chapter and no section, so
+  `embed_text()` sends bare speech while every book chunk carries
+  `Chapter > Section`. The video's dense scores cluster at 0.6001–0.614 against
+  `MIN_SCORE = 0.60`, and across the whole library **none of the top five hits
+  are this video** for a question phrased in its own title. Scoped to the
+  version, retrieval is fine. Still one video and two synthetic questions — but
+  the question is no longer unmeasured.
+
+### Auditing the next one
+
+`worker/scripts/audit_version.py` has a sixth leg, `video`, gated on
+`run.kind == 'video'`, and `worker/scripts` now ships in the worker image — so
+the audit runs where the artifacts are:
+
+```bash
+# on the host, over SSM; the container already has all three store URLs
+docker exec company-brain-worker-1 \
+  python /app/worker/scripts/audit_version.py ver_… --json /workspace/audit.json
+```
+
+The **retrieval** leg is unreachable for a video and says so rather than
+reporting zeros: `_recommended` switches `generate_evalset` off, so there is no
+eval set, and `--measure` returns `unavailable` before it constructs an
+embedder. A video has no recall figure and cannot be given one without paying
+for a stage this workflow does not have.
+
+**A rejected local run is a free reference fixture for a paid remote one.** The
+same video rejected at the gate on a laptop left `captions.vtt`,
+`transcript.txt`, `transcript.json`, `evidence.json` and `chunks.preview.jsonl`
+**byte-identical** to production's recorded hashes — the identity basis carries
+the video id, not the URL, so the `?si=` parameter that differs between two
+pastes cannot fork it. Every free-half check was made against those bytes for
+nothing, which is worth remembering before tunnelling anything.

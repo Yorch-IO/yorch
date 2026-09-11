@@ -425,6 +425,18 @@ class Chunked:
     chunks: ArtifactRef
     count: int
     kinds: list["ChunkKindCount"] = field(default_factory=list)
+    #: What chunking noticed and could not fix, in the caller's language.
+    #:
+    #: `Transcribed` and `Preview` both carry one of these and `Chunked` did
+    #: not, so `chunk_transcript` built its warnings and dropped them on the
+    #: way out — including the one that says a paid correction was *not* the
+    #: stream indexed. That reached the worker's stderr and nothing else, and
+    #: a container replaced three minutes after a run took the only copy with
+    #: it. Defaulting to empty is what keeps replay safe: a `Chunked` decoded
+    #: from a history written before this field existed has no warnings, so
+    #: the workflow's conditional event is not scheduled and the command
+    #: sequence is unchanged.
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass

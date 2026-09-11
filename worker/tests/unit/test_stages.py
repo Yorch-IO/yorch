@@ -149,3 +149,58 @@ def test_an_unknown_stage_sorts_last_rather_than_first() -> None:
     assert stages.order_of("staging") == 0
     assert stages.order_of("done") == len(stages.INGEST_STAGES) - 1
     assert stages.order_of("a stage from the future") == len(stages.INGEST_STAGES)
+
+
+def test_an_override_names_a_stage_the_path_it_overrides_actually_has() -> None:
+    """The property that makes the override map worth having.
+
+    `ARTIFACT_STAGES` is keyed by artifact name alone, so it can name only one
+    writer per artifact — and for `evidence`, which both paths write, it named
+    `extracting`, a stage no video run has. `auditlog.build` then found nothing
+    to attach it to and rendered it under the trailing `stage: null` heading,
+    beside charges that belong to nobody. This asserts the fix for every
+    override rather than for the one that was reported.
+    """
+    lists = {
+        "video": stages.VIDEO_STAGES,
+        "rebuild": stages.REBUILD_STAGES,
+        "index": stages.INGEST_STAGES,
+        "preview": stages.INGEST_STAGES,
+        "reindex": stages.INGEST_STAGES,
+    }
+    for kind, overrides in stages.ARTIFACT_STAGE_OVERRIDES.items():
+        assert kind in lists, f"no stage list known for run kind {kind!r}"
+        for artifact, stage in overrides.items():
+            assert stage in lists[kind], (
+                f"{kind}/{artifact} is attributed to {stage!r}, "
+                f"which is not a stage a {kind} run has"
+            )
+
+
+def test_the_artifacts_a_video_writes_all_land_on_stages_a_video_has() -> None:
+    """`evidence` is the one that did not, and it was visible in the UI."""
+    written_by_the_video_path = (
+        "video_probe", "captions", "transcript", "transcript_text",
+        "evidence", "preview_chunks", "estimate", "corrected_text",
+        "correction_report", "chunks",
+    )
+    for name in written_by_the_video_path:
+        stage = stages.stage_of_artifact(name, "video")
+        assert stage in stages.VIDEO_STAGES, f"{name} -> {stage}"
+
+
+def test_an_override_does_not_leak_into_the_path_it_was_not_written_for() -> None:
+    assert stages.stage_of_artifact("evidence", "video") == "grouping"
+    assert stages.stage_of_artifact("evidence", "index") == "extracting"
+    assert stages.stage_of_artifact("evidence") == "extracting"
+
+
+def test_the_overrides_are_dumped_for_the_typescript_fork_to_compare() -> None:
+    """`stages.parity.spec.ts` compares this map with exact equality, so an
+    override added here and not there is a cross-repo defect, not a follow-up."""
+    import json
+
+    dumped = json.loads(stages.as_json())
+    assert dumped["artifact_stage_overrides"] == {
+        k: dict(v) for k, v in stages.ARTIFACT_STAGE_OVERRIDES.items()
+    }

@@ -352,9 +352,10 @@ async def set_run_stage(
     state: str | None = None,
     seq: int | None = None,
     at: datetime | None = None,
+    detail: str | None = None,
 ) -> None:
     if seq is not None:
-        EVENTS.append((seq, stage, None))
+        EVENTS.append((seq, stage, detail))
     return None
 
 

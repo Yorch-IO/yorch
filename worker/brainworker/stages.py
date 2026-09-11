@@ -215,8 +215,44 @@ def stage_of_cost(cost_stage: str) -> str | None:
     return STAGE_FOR_COST.get(cost_stage)
 
 
-def stage_of_artifact(name: str) -> str | None:
-    """Which workflow stage wrote this artifact, or ``None`` if unrecognised."""
+#: Where `ARTIFACT_STAGES` is wrong because the artifact has two writers.
+#:
+#: `evidence` is the one artifact both paths produce: `extract` writes it for a
+#: document and `group_transcript` writes it for a video. The map above is keyed
+#: by artifact name alone, so it can only name one of them — and it names
+#: `extracting`, which is **not a stage a video run has**. The consequence was
+#: visible in every video's run detail: `auditlog.build` found no `extracting`
+#: row to attach it to and rendered it under the trailing `stage: null`
+#: heading, beside charges that belong to nobody.
+#:
+#: That is precisely the lie `grouping` was made a stage of its own to avoid —
+#: "an artifact attributed to two stages would make this map a lie on one of
+#: the two paths". The map was right to refuse to hold both; what was missing
+#: was somewhere for the second one to live.
+#:
+#: Keyed by `run.kind`, because that is what a client already branches on to
+#: know which gate shape to expect, and it is on the row the ledger is built
+#: from.
+ARTIFACT_STAGE_OVERRIDES: dict[str, dict[str, str]] = {
+    "video": {"evidence": "grouping"},
+    # `estimate` is written by whichever stage quotes, and that stage is named
+    # `previewing` on the ingest path and `estimating` on the rebuild one. Found
+    # by adding the writer: the artifact had never been written, so the
+    # mismatch could not have shown up before there was a file to misplace.
+    "rebuild": {"estimate": "estimating"},
+}
+
+
+def stage_of_artifact(name: str, kind: str | None = None) -> str | None:
+    """Which workflow stage wrote this artifact, or ``None`` if unrecognised.
+
+    ``kind`` is the run's kind. Optional so that every existing caller keeps
+    working, and consulted first so that a path which writes an artifact from
+    somewhere else than the default gets the right answer rather than a
+    plausible one.
+    """
+    if kind and name in (over := ARTIFACT_STAGE_OVERRIDES.get(kind, {})):
+        return over[name]
     return ARTIFACT_STAGES.get(name)
 
 
@@ -254,6 +290,9 @@ def as_json() -> str:
             "cost_stages": {k: list(v) for k, v in COST_STAGES.items()},
             "ask_cost_stages": list(ASK_COST_STAGES),
             "artifact_stages": dict(ARTIFACT_STAGES),
+            "artifact_stage_overrides": {
+                k: dict(v) for k, v in ARTIFACT_STAGE_OVERRIDES.items()
+            },
         },
         indent=2,
         sort_keys=True,

@@ -312,3 +312,154 @@ def test_no_stream_verifying_is_reported_as_the_finding_it_is():
 
 def test_a_run_with_no_stream_at_all_chooses_nothing():
     assert av.choose_stream({}, [])["chosen"] is None
+
+
+# ---------------------------------------------------------------------------
+# The video path's stream, and the locator that carries no title
+# ---------------------------------------------------------------------------
+
+
+def test_the_uncorrected_transcript_is_a_stream_this_can_choose():
+    """The case the audit most needs and could not see.
+
+    `chunk_transcript` falls back to the uncorrected stream when correction
+    moves the paragraph count, so the offsets index `transcript.txt`. Before it
+    was listed, `choose_stream` had only `corrected.txt` to crown and reported
+    a byte-exact index as broken — which is the failure `choose_stream`'s own
+    docstring exists to prevent, reached from the video direction.
+    """
+    assert ("transcript.txt", "transcript") in av.STREAMS
+    transcript = "Primero. Segundo.".encode("utf-8")
+    corrected = "Primero, y luego. Segundo.".encode("utf-8")
+    chunks = [_chunk(0, 0, 8, "Primero."), _chunk(1, 9, 17, "Segundo.")]
+    picked = av.choose_stream(
+        {"corrected": corrected, "transcript": transcript}, chunks
+    )
+    assert picked["chosen"] == "transcript"
+    assert picked["unanimous"] is True
+    assert picked["streams"]["corrected"]["spans_verified"] == 0
+
+
+def test_the_corrected_stream_still_wins_when_it_is_the_one_indexed():
+    """The healthy video, so the entry above cannot be a thumb on the scale."""
+    transcript = "primero segundo".encode("utf-8")
+    corrected = "Primero. Segundo.".encode("utf-8")
+    chunks = [_chunk(0, 0, 8, "Primero."), _chunk(1, 9, 17, "Segundo.")]
+    picked = av.choose_stream(
+        {"corrected": corrected, "transcript": transcript}, chunks
+    )
+    assert picked["chosen"] == "corrected"
+    assert picked["unanimous"] is True
+
+
+def test_a_timed_locator_reports_no_titles_because_it_carries_none():
+    """A healthy 69-chunk video reported 69 distinct "titles" before this.
+
+    `_locator` returns early for a timed source and carries no title at all, so
+    the leading segment is a clock. A check that fires on every correct video
+    teaches a reader to skip the field.
+    """
+    assert av.title_prefixes([
+        "0:00 · https://youtu.be/yq6uVBsVkeQ?t=0",
+        "1:14 · https://youtu.be/yq6uVBsVkeQ?t=74",
+        "1:16:13 · https://youtu.be/yq6uVBsVkeQ?t=4573",
+    ]) is None
+
+
+def test_a_document_locator_still_reports_the_titles_it_was_written_for():
+    assert av.title_prefixes([
+        "Hermenéutica · Cap. 4 · [0:100]",
+        "Hermenéutica · Cap. 5 · [100:200]",
+    ]) == ["Hermenéutica"]
+
+
+def test_two_titles_on_one_version_is_still_the_defect_it_always_was():
+    assert av.title_prefixes([
+        "El reto de Dios · [0:100]",
+        "El Reto de Dios · [100:200]",
+    ]) == ["El Reto de Dios", "El reto de Dios"]
+
+
+def test_a_locator_with_no_separator_is_not_mistaken_for_a_clock():
+    assert av.title_prefixes(["", "algo"]) == ["", "algo"]
+
+
+# ---------------------------------------------------------------------------
+# A chunk's span as a moment
+# ---------------------------------------------------------------------------
+
+
+def _timed(index, para_from, para_to, start_s, end_s):
+    return {"index": index, "para_from": para_from, "para_to": para_to,
+            "start_s": start_s, "end_s": end_s}
+
+
+def _table(*spans):
+    from brainworker.videosource import ParagraphTime
+
+    return [ParagraphTime(i, a, b) for i, (a, b) in enumerate(spans)]
+
+
+def test_a_healthy_timed_run_re_derives_every_span():
+    table = _table((0.0, 10.0), (10.0, 20.0), (20.0, 30.0))
+    chunks = [_timed(0, 0, 1, 0.0, 20.0), _timed(1, 2, 2, 20.0, 30.0)]
+    rep = av.time_report(chunks, table, duration_s=30)
+    assert rep["derivation_disagreements"] == []
+    assert rep["all_timed"] is True
+    assert rep["starts_non_decreasing"] is True
+    assert rep["covered_s"] == 30.0
+    assert rep["ends_past_duration"] == []
+
+
+def test_a_span_that_disagrees_with_the_cue_table_is_named():
+    """The failure that produces a citation which looks verifiable and is not."""
+    table = _table((0.0, 10.0), (10.0, 20.0))
+    chunks = [_timed(0, 0, 0, 0.0, 99.0)]
+    rep = av.time_report(chunks, table)
+    assert rep["derivation_disagreement_total"] == 1
+    assert rep["derivation_disagreements"][0]["index"] == 0
+    assert rep["derivation_disagreements"][0]["want"] == [0.0, 10.0]
+
+
+def test_a_paragraph_range_the_table_cannot_hold_is_reported_not_clamped():
+    """`span_for` raises on purpose; the raise is the finding, not a crash."""
+    table = _table((0.0, 10.0))
+    rep = av.time_report([_timed(0, 0, 7, 0.0, 10.0)], table)
+    assert "raised" in rep["derivation_disagreements"][0]
+    assert "table of 1" in rep["derivation_disagreements"][0]["raised"]
+
+
+def test_a_cue_table_ending_past_the_duration_is_reported_and_not_failed():
+    """Measured on the real 76-minute talk: 4574.699 against a probed 4573.
+
+    YouTube reports duration as a truncated integer while the caption track runs
+    to the true end, so asserting `end_s <= duration_s` would mark every
+    auto-captioned video defective.
+    """
+    table = _table((0.0, 4543.199), (4543.199, 4574.699))
+    chunks = [_timed(0, 0, 0, 0.0, 4543.199), _timed(1, 1, 1, 4543.199, 4574.699)]
+    rep = av.time_report(chunks, table, duration_s=4573)
+    assert rep["derivation_disagreements"] == []
+    assert rep["ends_past_duration"] == [1]
+    assert rep["covered_s"] == 4574.699
+
+
+def test_no_duration_means_the_question_was_not_asked():
+    rep = av.time_report([_timed(0, 0, 0, 0.0, 1.0)], _table((0.0, 1.0)))
+    assert rep["ends_past_duration"] is None
+
+
+def test_each_chunk_covering_its_own_paragraphs_is_the_healthy_answer():
+    chunks = [_timed(0, 0, 1, 0.0, 2.0), _timed(1, 2, 2, 2.0, 3.0)]
+    rep = av.para_ranges_unique(chunks)
+    assert rep["unique"] is True and rep["shared_by"] == {}
+
+
+def test_two_chunks_reporting_one_time_span_are_named():
+    """`_split_oversized` gives every piece of a split paragraph the same index,
+    so several chunks would claim one span. `GROUP_HARD_CAP` keeps it
+    unreachable; this says so about a run rather than about the constant."""
+    chunks = [_timed(0, 3, 3, 1.0, 2.0), _timed(1, 3, 3, 1.0, 2.0)]
+    rep = av.para_ranges_unique(chunks)
+    assert rep["unique"] is False
+    assert list(rep["shared_by"].values()) == [[0, 1]]

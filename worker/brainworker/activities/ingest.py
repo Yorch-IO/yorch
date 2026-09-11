@@ -749,9 +749,27 @@ async def preview_chunks(
     )
 
 
+def _persist_estimate(run_id: str, estimate: "Estimate") -> "Estimate":
+    """Write the quote the gate is about to show. See the video path's copy of
+    this for why the artifact kind existed for so long with no writer; the
+    reasoning is identical and the gap was the same on both gates."""
+    if not run_id:
+        return estimate
+    try:
+        settings = _settings()
+        store = ArtifactStore(settings.workspace, run_id)
+        _record(run_id, "estimate", store.write_json("estimate", asdict(estimate)))
+    except Exception:  # noqa: BLE001 — never fail a gate over its own receipt
+        log.warning("run %s: could not persist the estimate", run_id, exc_info=True)
+    return estimate
+
+
 @activity.defn(name="estimate_cost")
 async def estimate_cost(
-    preview: Preview, options: StageOptions, decision: ProfileDecision | None = None
+    preview: Preview,
+    options: StageOptions,
+    decision: ProfileDecision | None = None,
+    run_id: str = "",
 ) -> Estimate:
     """Project the work from a preview's character and chunk counts.
 
@@ -761,7 +779,10 @@ async def estimate_cost(
     about and no `Preview` to put them in, and a gate whose numbers were
     computed twice would eventually quote two different bills for one pipeline.
     """
-    return estimate_for(preview.characters, preview.chunk_count, options, decision)
+    return _persist_estimate(
+        run_id,
+        estimate_for(preview.characters, preview.chunk_count, options, decision),
+    )
 
 
 def estimate_for(
@@ -1556,10 +1577,16 @@ async def set_run_stage(
     state: str | None = None,
     seq: int | None = None,
     at: datetime | None = None,
+    detail: str | None = None,
 ) -> None:
+    """`detail` is optional and trails the signature deliberately: a history
+    written before it existed decodes against the default, so replay is
+    unaffected."""
     settings = _settings()
     with Catalog(settings.database_url) as catalog:
-        catalog.set_run_stage(run_id, stage, state=state, seq=seq, at=at)
+        catalog.set_run_stage(
+            run_id, stage, state=state, seq=seq, at=at, detail=detail
+        )
 
 
 @activity.defn(name="record_run_events")

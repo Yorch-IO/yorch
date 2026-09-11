@@ -1165,6 +1165,7 @@ class Catalog:
         state: str | None = None,
         seq: int | None = None,
         at: datetime | None = None,
+        detail: str | None = None,
     ) -> None:
         """Move the run's cursor, and — when told where it sits — record it.
 
@@ -1183,7 +1184,8 @@ class Catalog:
                 (stage, state, run_id),
             )
             if seq is not None and at is not None:
-                self._insert_event(conn, run_id, seq=seq, at=at, stage=stage)
+                self._insert_event(conn, run_id, seq=seq, at=at, stage=stage,
+                                   detail=detail)
 
     @staticmethod
     def _insert_event(

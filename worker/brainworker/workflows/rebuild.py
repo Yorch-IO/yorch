@@ -126,6 +126,7 @@ class RebuildWorkflow:
                     generate_evalset=False,
                 ),
                 None,
+                run_id,
             ],
             start_to_close_timeout=FREE_TIMEOUT,
             retry_policy=_RETRY,

@@ -32,6 +32,15 @@ COPY worker/pyproject.toml /app/worker/
 COPY worker/brainworker /app/worker/brainworker
 RUN uv pip install --system --no-cache --no-sources /app/worker
 
+# The read-only operational scripts, after the install so that editing one does
+# not invalidate the dependency layer. They are here because the data they
+# inspect is here: `audit_version.py` reads a run's artifacts off this disk,
+# which no port-forward reaches, and it needs the three store URLs that this
+# container already has and a laptop has to assemble by hand. Auditing a
+# production version used to mean piping a script into `docker exec` because
+# the image had no copy of one.
+COPY worker/scripts /app/worker/scripts
+
 # docagent resolves profiles/, cache/ and state/ relative to the working
 # directory, so the mounted workspace volume becomes their home with no change
 # to its code. config.configure() chdirs here too, for the host dev mode where

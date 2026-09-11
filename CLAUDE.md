@@ -2280,6 +2280,40 @@ that are missing. Each was found by running the thing, and each is recorded
 rather than fixed because the fix is somebody's decision or sits in another
 session's files.
 
+- **On an auto-caption transcript, `correct.verify`'s proper-noun rule protects
+  the transcription error.** Measured on the first real video import
+  (`doc/AUDIT_VIDEO_20260910.md`): **22 of 107 paragraphs — 20.6% — had their
+  correction rejected, every one for `proper_noun` loss**, and the lost "names"
+  are what the captioner misheard — `Tilich` for Tillich, plus `Beaida`,
+  `Sawer`, `Bray`, `Chusa`, `Osana`, `Falangeja`, `Foxaque`, `Cuyama`. The rule
+  is right on the corpus it was measured on, where a capitalised word is a real
+  name and losing one is data loss. On speech a machine transcribed, refusing
+  the repair **keeps the mistake**. The asymmetry is visible inside one run:
+  `cartel` → `Gardel` was *accepted* because the captioner wrote the wrong name
+  in lowercase, while the same repair capitalised would have been refused — so
+  on a transcript the gate turns on whether the captioner happened to
+  capitalise its error, which is not a property anybody chose. Recorded rather
+  than fixed because the honest fix needs a measurement of what a relaxed rule
+  costs, and this is one video.
+- **A transcript is embedded with no breadcrumb, and it is measurably
+  expensive.** `Chunk.embed_text()` prepends `breadcrumb()`; a transcript has no
+  chapter and no section, so a video chunk reaches the embeddings API as bare
+  speech while every book chunk carries `Chapter > Section` ahead of its text.
+  Measured on the same import: the video's dense scores cluster at
+  **0.6001–0.614 against `MIN_SCORE = 0.60`** — the whole document sits a
+  hundredth of a cosine above the floor — and asked across the whole library,
+  **0 of the top 5 hits are this video**, for a question phrased in the video's
+  own title. `doc/VIDEO.md` left this explicitly open ("whether putting the
+  video's *title* there would help retrieval is a real and measurable question,
+  deliberately not answered by guessing"); it is now measured once, in the
+  direction of yes. Two synthetic questions on one video is not a result, but
+  "clears the floor by 0.001" is a number.
+- **An orphan `pending` version survives a track-selection change.**
+  `ver_2c19d4975460f19198702f53` is still linked to
+  `doc_34e7d656ba111ba08c930de8` and holds `captions:ab:auto` — **Abkhazian** —
+  from the run that preceded the `_choose_track` fix by twelve minutes. Nothing
+  indexes it, nothing charged for it, and nothing cleans it up either.
+
 - **`DocumentGraph` shows a label where it means a count.** `DocumentGraph.tsx:671`
   renders `t("graph.shared", { count: item.sharedConcepts })` under every outer
   document card. `graph.shared` is `"Concepts in"` / `"Conceptos en"` and carries
@@ -2751,6 +2785,54 @@ Kept because each fix carries a rule worth not relearning. The heading used to
 count them and the count was already wrong — nine entries under "Eight" — which
 is a small demonstration of the rule this file keeps applying to code: a number
 maintained by hand drifts, and one that has drifted is worse than none.
+
+- **`chunk_transcript` built the warnings that matter most and dropped them on
+  the way out.** It reports two conditions it cannot fix — a correction that
+  moved the paragraph count, so the *uncorrected* transcript was indexed, and a
+  paragraph that reached no chunk — and returned
+  `Chunked(chunks=, count=, kinds=)`. `Chunked` had **no warnings field**,
+  unlike `Transcribed` and `Preview`, which both do. So "the correction was paid
+  for and not indexed" reached the worker's stderr and nothing else. Not
+  hypothetical: the container that ran the first real video import was replaced
+  three minutes after it finished, and by the time anyone looked the log held
+  **zero** mentions of the run. `Chunked` carries them now and the workflow
+  writes them as the `run_event.detail` on a second `chunking` row. The fix is
+  replay-safe for free — a history from before the field decodes to no warnings,
+  so the conditional command is never issued and the sequence is unchanged.
+- **`auditversion.STREAMS` could not see a video's own stream.**
+  `corrected.txt / extracted.txt / raw.txt`, and a video's uncorrected stream is
+  `transcript.txt`. On the fallback path `choose_stream` would therefore crown
+  `corrected` with near-zero verified spans: a byte-exact index reported as
+  broken, by the tool whose only job is to be believed — the exact failure that
+  function's docstring exists to prevent, reached from the video direction.
+- **`evidence` was attributed to a stage the video path does not have, and
+  `estimate` to one the rebuild path does not.** `ARTIFACT_STAGES` is keyed by
+  artifact name alone, so it can name one writer per artifact; `evidence` has
+  two (`extract` for a document, `group_transcript` for a video) and it named
+  `extracting`, which is not in `VIDEO_STAGES`. `auditlog.build` then rendered
+  it under the trailing `stage: null` heading beside charges that belong to
+  nobody — the "no stage · evidence" row visible in every video's run detail.
+  `ARTIFACT_STAGE_OVERRIDES`, keyed by `run.kind`, is where a second writer
+  lives now; a property test asserts every override names a stage that path
+  actually has, and the `stages.parity.spec.ts` fork compares the map with exact
+  equality, so it was a cross-repo commit. The `estimate` half was found *by
+  writing the artifact*: the mismatch could not show up while there was no file
+  to misplace.
+- **The `estimate` artifact kind was declared, mapped to a stage, and written by
+  nothing.** Those two lines were its only references in the repository, so no
+  run's quote was ever persisted and the only copy lived in the Temporal
+  workflow — which retains for 72 hours, after which "did the gate over-report
+  or under-report?" is permanently unanswerable for that run. That is the one
+  question a gate exists to let somebody check. Both gates write it now,
+  best-effort, because a gate that failed over its own receipt would be the
+  worse trade. Same "declared and used by nothing" shape as `ChunkNode.sheet`
+  and `SPEECH_RATE_SPREAD`, and found the same way: by auditing a real run.
+- **`citation_title_prefixes` fired on every correct video.** It splits a
+  locator on `" · "` and takes `[0]` to catch a re-projection under a changed
+  title, but `_locator` returns early for a timed source and carries no title at
+  all — the leading segment is a clock. A healthy 69-chunk video reported 69
+  distinct "titles". `auditversion.title_prefixes` returns `None` there, because
+  a check that fires on every correct run teaches a reader to skip the field.
 
 - **An answering call spent its entire output ceiling on reasoning, returned no
   text, and was reported as "not enough evidence".** Measured on the real corpus

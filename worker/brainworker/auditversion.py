@@ -251,6 +251,17 @@ STREAMS: tuple[tuple[str, str], ...] = (
     ("extracted.txt", "extracted"),
     # Extraction before any rule was applied.
     ("raw.txt", "raw"),
+    # The video path's uncorrected stream. It is a stream like any other here,
+    # and it has to be listed or the one case that most needs auditing is the
+    # one this cannot see: `chunk_transcript` falls back to the uncorrected
+    # transcript when correction moves the paragraph count, so the offsets index
+    # this file and no other. Without it `choose_stream` crowns `corrected` with
+    # near-zero verified spans — a byte-exact index reported as broken, which is
+    # the exact failure the function's own docstring exists to prevent. It sorts
+    # last because a video run holds only this and `corrected.txt`, so its
+    # position relative to the document streams cannot matter, and on a tie the
+    # corrected stream is the one the pipeline meant to index.
+    ("transcript.txt", "transcript"),
 )
 
 
@@ -291,6 +302,123 @@ def choose_stream(
         },
         "report": scored[chosen],
     }
+
+
+# ---------------------------------------------------------------------------
+# A timed source: the chunk's span is a moment, not a byte offset
+# ---------------------------------------------------------------------------
+
+
+def para_ranges_unique(chunks: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Does each chunk cover a paragraph range of its own?
+
+    `_split_oversized` gives every piece of a split paragraph the *same*
+    `para_idx`, so a cue group at the chunker's `hard_cap_chars` would make
+    several chunks report one time span — confident timestamps that are wrong
+    for all but one of them. `GROUP_HARD_CAP` is 900 against the chunker's 2000
+    to keep that path unreachable; this is what says so about a finished run
+    rather than about the constants.
+    """
+    ranges = [(c.get("para_from"), c.get("para_to")) for c in chunks]
+    seen: dict[tuple[Any, Any], list[int]] = {}
+    for c, r in zip(chunks, ranges):
+        seen.setdefault(r, []).append(c.get("index"))
+    shared = {str(r): idx for r, idx in seen.items() if len(idx) > 1}
+    return {
+        "unique": not shared,
+        "chunks": len(ranges),
+        "distinct_ranges": len(seen),
+        "shared_by": dict(list(shared.items())[:10]),
+    }
+
+
+def time_report(
+    chunks: Sequence[dict[str, Any]],
+    table: Sequence[Any],
+    duration_s: "float | None" = None,
+) -> dict[str, Any]:
+    """Every chunk's span, re-derived from the run's own cue table.
+
+    `videosource.span_for` is the deriver and it **raises rather than clamping**
+    on a range the table does not hold, so a clamped answer cannot reach here
+    wearing the shape of a right one. What the caller gets is the disagreement
+    list, which is empty for a healthy run.
+
+    **`end_s` past the duration is reported, not failed.** Measured on a real
+    76-minute talk: the cue table ends at 4574.699 s against a probed
+    `duration_s` of 4573, because YouTube reports duration as a truncated
+    integer while the caption track runs to the true end. An audit that
+    asserted `end_s <= duration_s` would mark every auto-captioned video
+    defective. No locator is affected — a locator uses `start_s`.
+    """
+    from . import videosource
+
+    disagreements: list[dict[str, Any]] = []
+    for c in chunks:
+        try:
+            want = videosource.span_for(
+                int(c["para_from"]), int(c["para_to"]), list(table)
+            )
+        except Exception as e:  # noqa: BLE001 — the raise *is* the finding
+            disagreements.append({"index": c.get("index"), "raised": str(e)})
+            continue
+        got = (c.get("start_s"), c.get("end_s"))
+        if got != want:
+            disagreements.append(
+                {"index": c.get("index"), "want": list(want), "found": list(got)}
+            )
+
+    starts = [c.get("start_s") for c in chunks]
+    ends = [c.get("end_s") for c in chunks]
+    timed = [s for s in starts if s is not None]
+    covered = max((e for e in ends if e is not None), default=None)
+    return {
+        "chunks": len(chunks),
+        "all_timed": len(timed) == len(chunks),
+        "untimed": [c.get("index") for c in chunks if c.get("start_s") is None][:10],
+        "derivation_disagreements": disagreements[:10],
+        "derivation_disagreement_total": len(disagreements),
+        "starts_non_decreasing": all(b >= a for a, b in zip(timed, timed[1:])),
+        "start_at_or_before_end": all(
+            c["start_s"] <= c["end_s"] for c in chunks
+            if c.get("start_s") is not None and c.get("end_s") is not None
+        ),
+        "covered_s": covered,
+        "duration_s": duration_s,
+        # Reported, never judged. See the docstring.
+        "ends_past_duration": (
+            [c.get("index") for c in chunks
+             if duration_s is not None and (c.get("end_s") or 0) > duration_s][:10]
+            if duration_s is not None else None
+        ),
+    }
+
+
+#: A locator's leading segment when the source is timed: `0:00`, `1:14`,
+#: `1:16:13`.
+_CLOCK_RE = re.compile(r"^\d+:[0-5]\d(?::[0-5]\d)?$")
+
+
+def title_prefixes(locators: Sequence[str]) -> list[str] | None:
+    """The distinct titles a version's citations were built under, or ``None``.
+
+    More than one distinct prefix means a re-projection under a changed title
+    left the old citations beside the new, which is the defect this exists to
+    catch on a document.
+
+    ``None`` for a timed source, and that is the whole point of the function
+    rather than an edge case. `projection._locator` returns early for a video
+    and carries **no title at all** — the leading segment is `hhmmss(start_s)`,
+    because a YouTube title is mutable by its uploader and putting it in a
+    locator forked every citation on a real rebuild. So splitting on the
+    separator yields one "title" per chunk, and a healthy 69-chunk video
+    reported 69 of them. A check that fires on every correct video is worse
+    than no check: it trains a reader to skip the field.
+    """
+    prefixes = sorted({(loc or "").split(" · ")[0] for loc in locators})
+    if prefixes and all(_CLOCK_RE.match(x) for x in prefixes):
+        return None
+    return prefixes
 
 
 def chunk_sequence(chunks: Sequence[dict[str, Any]], total_bytes: int) -> dict[str, Any]:

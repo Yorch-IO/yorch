@@ -20,7 +20,7 @@ the others still answer. That is the point of the split, not a nicety — "the
 graph is stopped" and "this version has no concepts" are the two readings a
 single failure would collapse into one.
 
-Five legs, each with its own `available` flag:
+Six legs, each with its own `available` flag:
 
 1. **artifacts** — do the files still back the `run_artifact` rows, at the
    recorded sha256, under the workspace this process is pointed at?
@@ -31,7 +31,15 @@ Five legs, each with its own `available` flag:
 4. **trail** — every run against this version: stages, durations, what each one
    billed, and what was paid for more than once.
 5. **retrieval** — `--measure` only: re-run the recorded measurement against the
-   index as it stands today.
+   index as it stands today. **Unreachable for a video**, and that is not a gap
+   here: `_recommended` switches `generate_evalset` off for a video, so there is
+   no eval set to measure against and the leg says so before it constructs an
+   embedder. A video has no recall figure and cannot be given one without paying
+   for a stage its workflow does not have.
+6. **video** — `run.kind == 'video'` only: which stream the offsets actually
+   index, the cue table against the chunks, and what correction was allowed to
+   change. The fact a reader wants back from a video is a time, and no other leg
+   checks one.
 
 Why it lives under `worker/` and imports rather than reimplements: a point id, a
 payload scope and a claim id are the things being checked, so an audit that
@@ -388,7 +396,9 @@ def _audit_graph(
     # `_locator` builds "<title> · <breadcrumb> · [a:b]", so the title is the
     # part before the first separator. More than one distinct value means a
     # re-projection under a changed title left the old citations beside the new.
-    titles = sorted({(c.get("locator") or "").split(" · ")[0] for c in citations})
+    # `None` for a timed source, which carries no title in its locator at all —
+    # see `auditversion.title_prefixes`.
+    titles = av.title_prefixes([c.get("locator") or "" for c in citations])
     return {
         "available": True,
         "version": {k: node[0].get(k) for k in ("id", "tenant_id", "title", "documents")},
@@ -402,8 +412,9 @@ def _audit_graph(
         "citations": len(citations),
         # The locator embeds the version's title, which can outlive the document
         # that supplied it. More than one distinct prefix means a re-projection
-        # under a changed title left the old citations behind.
-        "citation_title_prefixes": titles[:10],
+        # under a changed title left the old citations behind. `null` means the
+        # question does not apply: a timed locator holds a clock, not a title.
+        "citation_title_prefixes": None if titles is None else titles[:10],
         "wrong_tenant": wrong_tenant[:20],
         "wrong_tenant_total": len(wrong_tenant),
     }
@@ -767,6 +778,146 @@ def _served_params() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
+# Leg 6 — video
+# ---------------------------------------------------------------------------
+
+
+def audit_video(settings: config.Settings, *, run_id: str) -> dict:
+    """What a timed source has that a document does not, and what that costs.
+
+    Only for `run.kind == 'video'`. Everything here reads the run's own
+    artifacts and re-derives through the functions the pipeline used, because
+    the fact a reader wants back from a video — *where in the video was this
+    said* — is not checkable from the index alone: the Qdrant payload carries
+    no `start_s`, so a wrong timestamp is an unverifiable citation that looks
+    verifiable, and the only person who finds out is the one who clicks it.
+
+    The load-bearing entry is `stream`. `chunk_transcript` falls back to the
+    *uncorrected* transcript when correction moves the paragraph count, and
+    until `Chunked` carried its warnings that fact reached the worker's stderr
+    and nowhere else. Scoring both streams is what makes "the correction was
+    paid for and not indexed" answerable after the log is gone — which, on the
+    first real video import, it already was.
+    """
+    store = ArtifactStore(settings.workspace, run_id)
+    d = store.run_dir
+
+    def load(name: str):
+        path = d / name
+        return path if path.is_file() else None
+
+    if not (chunks_path := load("chunks.jsonl")):
+        return av.unavailable("video", f"no chunks.jsonl under {d}")
+    if not (cues_path := load("transcript.json")):
+        return av.unavailable("video", f"no transcript.json under {d}")
+
+    from brainworker import videosource
+
+    chunks = [json.loads(line) for line in
+              chunks_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    cues = json.loads(cues_path.read_text(encoding="utf-8"))
+    table = [videosource.ParagraphTime(r["para"], r["start_s"], r["end_s"])
+             for r in cues.get("paragraphs", [])]
+    probe = json.loads(p.read_text(encoding="utf-8")) if (
+        p := load("video-probe.json")) else {}
+
+    report: dict[str, Any] = {
+        "source": cues.get("source"),
+        "video_id": probe.get("video_id") or cues.get("video_id"),
+        "cues": cues.get("cues"),
+        "timed_paragraphs": len(table),
+        "chosen_track": probe.get("chosen"),
+    }
+
+    # Identity, re-derived rather than trusted. On the caption path the basis's
+    # last line is the digest of bytes that were free to fetch, so this is a
+    # true content hash and not the proxy the Transcribe path leaves.
+    if (basis := probe.get("identity_basis")) and probe.get("content_sha256"):
+        report["identity"] = {
+            "content_sha256_rederives": hashlib.sha256(
+                basis.encode("utf-8")
+            ).hexdigest() == probe["content_sha256"],
+            "captions_digest_matches_basis": (
+                load("captions.vtt") is not None
+                and _sha256(d / "captions.vtt")[0] == basis.split("\n")[-1]
+            ),
+        }
+
+    streams = {
+        label: path.read_bytes()
+        for label, path in (("corrected", load("corrected.txt")),
+                            ("transcript", load("transcript.txt")))
+        if path is not None
+    }
+    if streams:
+        picked = av.choose_stream(streams, chunks)
+        report["stream"] = {
+            "chunked": picked["chosen"],
+            "verifies_completely": picked.get("unanimous"),
+            "scored": picked["streams"],
+            # The whole reason this leg exists. `corrected` means the paid
+            # correction is what a reader retrieves; `transcript` means the
+            # fallback fired and the correction was bought and discarded.
+            "correction_fallback_fired": picked["chosen"] == "transcript",
+        }
+        if (data := streams.get(picked["chosen"])) is not None:
+            from docagent.chunk import split_paragraphs
+
+            try:
+                videosource.assert_aligned(
+                    [para.text for para in split_paragraphs(data)], table
+                )
+                report["stream"]["aligned"] = True
+            except Exception as e:  # noqa: BLE001
+                report["stream"]["aligned"] = f"{type(e).__name__}: {e}"
+
+    report["paragraph_ranges"] = av.para_ranges_unique(chunks)
+    report["times"] = av.time_report(chunks, table, probe.get("duration_s"))
+    report["uncovered_paragraphs"] = videosource.uncovered_paragraphs(
+        [_ParaRange(c.get("para_from"), c.get("para_to")) for c in chunks], table
+    )
+    report["kinds"] = {
+        k: sum(1 for c in chunks if c.get("kind") == k)
+        for k in sorted({c.get("kind") for c in chunks})
+    }
+    if preview := load("chunks.preview.jsonl"):
+        report["preview_vs_final"] = {
+            "preview": sum(1 for line in
+                           preview.read_text(encoding="utf-8").splitlines()
+                           if line.strip()),
+            "final": len(chunks),
+        }
+    if rep := load("correction-report.json"):
+        data = json.loads(rep.read_text(encoding="utf-8"))
+        rejected = data.get("rejected") or []
+        by_reason: dict[str, int] = {}
+        for row in rejected:
+            by_reason[str(row.get("reason"))] = by_reason.get(str(row.get("reason")), 0) + 1
+        report["correction"] = {
+            k: data.get(k) for k in
+            ("paragraphs", "changed", "unchanged", "missing", "cache_hits", "calls")
+        }
+        # Measured on the first real video: 22 of 107 paragraphs rejected, every
+        # one for a proper noun the *captioner* got wrong. The rule was measured
+        # on books, where a capitalised word is a real name; on speech a machine
+        # transcribed it keeps the machine's mistake.
+        report["correction"]["rejected"] = len(rejected)
+        report["correction"]["rejected_by_reason"] = by_reason
+        report["correction"]["rejected_indices"] = [r.get("index") for r in rejected][:30]
+
+    return av.leg("video", report)
+
+
+@dataclasses.dataclass(frozen=True)
+class _ParaRange:
+    """The two fields `uncovered_paragraphs` reads, so a jsonl row can be passed
+    to the same function the activity passes real chunks to."""
+
+    para_from: int
+    para_to: int
+
+
+# ---------------------------------------------------------------------------
 
 
 def audit(version: str, *, measure: bool = False) -> dict[str, Any]:
@@ -826,6 +977,12 @@ def audit(version: str, *, measure: bool = False) -> dict[str, Any]:
             tenant_id=tenant_id, version=version,
         ),
     )
+    if newest.kind == "video":
+        # Gated on the kind rather than on a file being present: "this run has
+        # no transcript" and "this is not a video" are different findings, and
+        # a leg that appeared for a document would be the second wearing the
+        # first's clothes.
+        legs.append(audit_video(settings, run_id=newest.id))
     legs.append(
         audit_retrieval(
             settings,

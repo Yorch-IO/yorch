@@ -38,7 +38,7 @@ import shutil
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 from .. import videosource
 from ..artifacts import ArtifactRef, ArtifactStore
@@ -570,6 +570,38 @@ async def preview_transcript(run_id: str, transcribed: Transcribed) -> Preview:
     )
 
 
+
+def _persist_estimate(run_id: str, estimate: "Estimate") -> "Estimate":
+    """Write the quote the gate is about to show, and hand it straight back.
+
+    The `estimate` artifact kind has been declared in `artifacts.KINDS` and
+    mapped to `previewing` in `ARTIFACT_STAGES` since both were written, and
+    **nothing has ever written the file** — those two lines were its only
+    references in the repository. The consequence is not cosmetic: a quote is
+    the number a person approved a bill against, and with nothing on disk the
+    only copy lives in the Temporal workflow, which retains for 72 hours. After
+    that, "did the gate over-report or under-report?" is permanently
+    unanswerable for that run — which is the one question the gate exists to
+    let somebody check.
+
+    `run_id` trails the caller's signature with a default so an activity input
+    recorded before this existed still decodes, and a blank one writes nothing:
+    the estimator stays callable from a test with no workspace.
+
+    Best-effort, like every other `_record`: a gate that failed because its
+    receipt could not be written would be a worse trade than a missing receipt.
+    """
+    if not run_id:
+        return estimate
+    try:
+        settings = _settings()
+        store = ArtifactStore(settings.workspace, run_id)
+        _record(run_id, "estimate", store.write_json("estimate", asdict(estimate)))
+    except Exception:  # noqa: BLE001 — never fail a gate over its own receipt
+        log.warning("run %s: could not persist the estimate", run_id, exc_info=True)
+    return estimate
+
+
 @activity.defn(name="estimate_video")
 async def estimate_video(
     probe: VideoProbe,
@@ -577,6 +609,7 @@ async def estimate_video(
     characters: int,
     chunk_count: int,
     characters_high: int = 0,
+    run_id: str = "",
 ) -> Estimate:
     """What this video will cost, transcription included.
 
@@ -614,7 +647,8 @@ async def estimate_video(
         )
 
     if probe.chosen is not None:
-        return estimate  # captions are free; nothing to add
+        # Captions are free; nothing to add.
+        return _persist_estimate(run_id, estimate)
 
     usd = videosource.transcribe_usd(probe.duration_s, settings.aws.usd_per_minute)
     row = StageEstimate(
@@ -635,12 +669,15 @@ async def estimate_video(
     stages = [row, *estimate.stages]
     priced = [s.usd for s in stages if s.usd is not None]
     priced_high = [s.usd_high for s in stages if s.usd_high is not None]
-    return Estimate(
-        stages=stages,
-        total_usd=sum(priced) if priced else None,
-        total_usd_high=sum(priced_high) if priced_high else None,
-        price_source=estimate.price_source,
-        unpriced_stages=[s.stage for s in stages if s.usd is None],
+    return _persist_estimate(
+        run_id,
+        Estimate(
+            stages=stages,
+            total_usd=sum(priced) if priced else None,
+            total_usd_high=sum(priced_high) if priced_high else None,
+            price_source=estimate.price_source,
+            unpriced_stages=[s.stage for s in stages if s.usd is None],
+        ),
     )
 
 
@@ -1166,4 +1203,5 @@ async def chunk_transcript(
         chunks=ref,
         count=len(rows),
         kinds=[ChunkKindCount(k, n) for k, n in sorted(kinds.items())],
+        warnings=warnings,
     )

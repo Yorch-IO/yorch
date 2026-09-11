@@ -173,8 +173,10 @@ async def record_run_events(run_id: str, pending: list) -> None:
 
 
 @activity.defn(name="set_run_stage")
-async def set_run_stage(run_id: str, stage: str, state: str, seq, at) -> None:
-    CALLED.append(f"stage:{stage}")
+async def set_run_stage(
+    run_id: str, stage: str, state: str, seq, at, detail: str | None = None
+) -> None:
+    CALLED.append(f"stage:{stage}" + (f"|{detail}" if detail else ""))
 
 
 @activity.defn(name="record_run_outcome")
@@ -225,6 +227,10 @@ async def preview_transcript(run_id: str, t: Transcribed) -> Preview:
 
 
 QUOTED: list[StageOptions] = []
+#: What `chunk_transcript` should report this time. A list rather than a flag
+#: because the activity carries whatever it found, and a test that could only
+#: switch warnings on would not show that both of them travel.
+CHUNK_WARNINGS: list[str] = []
 
 
 @activity.defn(name="estimate_video")
@@ -234,8 +240,12 @@ async def estimate_video(
     characters: int,
     chunk_count: int,
     characters_high: int,
+    run_id: str = "",
 ) -> Estimate:
     assert isinstance(p, VideoProbe), f"got {type(p).__name__}"
+    # The gate's quote is persisted as an artifact now, so the activity has to
+    # be told which run it belongs to.
+    assert run_id, "estimate_video was not told its run"
     QUOTED.append(options)
     # With captions the text is counted, not projected, so there is no range to
     # draw around it; without them there must be one, because that count is the
@@ -348,7 +358,8 @@ async def chunk_transcript(
     # that moved the paragraph count has nowhere safe to land.
     assert fallback is not None and fallback.kind == "transcript_text"
     return Chunked(chunks=CHUNKS_REF, count=13,
-                   kinds=[ChunkKindCount("transcripcion", 13)])
+                   kinds=[ChunkKindCount("transcripcion", 13)],
+                   warnings=list(CHUNK_WARNINGS))
 
 
 @activity.defn(name="project_structure")
@@ -399,8 +410,10 @@ async def env():
 @pytest.fixture(autouse=True)
 def _clear():
     SPENT.clear(); CALLED.clear(); POLLS.clear(); QUOTED.clear(); OPENED.clear()
+    CHUNK_WARNINGS.clear()
     yield
     SPENT.clear(); CALLED.clear(); POLLS.clear(); QUOTED.clear(); OPENED.clear()
+    CHUNK_WARNINGS.clear()
 
 
 async def _start(env: WorkflowEnvironment, req: VideoRequest, opts: StageOptions):
@@ -896,3 +909,47 @@ async def test_the_estimate_quotes_only_the_stages_that_can_actually_run(env):
     assert not quoted.tune
     # And it still quotes what *does* run.
     assert quoted.embed is True
+
+
+async def test_what_chunking_noticed_reaches_the_trail_and_not_only_the_log(env):
+    """The one thing this pipeline must never do quietly.
+
+    `chunk_transcript` reports two conditions it cannot fix — a correction that
+    moved the paragraph count, so the *uncorrected* stream was indexed, and a
+    paragraph that reached no chunk. `Chunked` had no field for them, so they
+    reached the worker's stderr and nothing else; the container that ran the
+    first real video import was replaced three minutes later and took the only
+    copy with it. A run that silently indexed an uncorrected transcript after
+    paying for the correction has to be legible from the run itself.
+    """
+    CHUNK_WARNINGS.extend([
+        "la corrección desalineó los párrafos; se indexó el transcript sin "
+        "corregir para no mover las marcas de tiempo",
+        "2 párrafo(s) del transcript no llegaron a ningún fragmento",
+    ])
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow], activities=activities()):
+        handle = await _start(env, request(), StageOptions())
+        await _wait_for_gate(handle)
+        await handle.signal(VideoIngestWorkflow.approve, Approval(approved=True))
+        result = await handle.result()
+
+    assert result.state == "indexed"
+    noted = [c for c in CALLED if c.startswith("stage:chunking|")]
+    assert len(noted) == 1, CALLED
+    assert "desalineó" in noted[0] and "no llegaron" in noted[0]
+
+
+async def test_a_run_with_nothing_to_report_schedules_no_extra_event(env):
+    """Which is also why the fix is replay-safe: a history from before
+    `Chunked` carried warnings decodes to none, so the command is never
+    issued and the sequence is unchanged."""
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow], activities=activities()):
+        handle = await _start(env, request(), StageOptions())
+        await _wait_for_gate(handle)
+        await handle.signal(VideoIngestWorkflow.approve, Approval(approved=True))
+        await handle.result()
+
+    assert [c for c in CALLED if c.startswith("stage:chunking|")] == []
+    assert "stage:chunking" in CALLED

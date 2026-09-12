@@ -2280,6 +2280,33 @@ that are missing. Each was found by running the thing, and each is recorded
 rather than fixed because the fix is somebody's decision or sits in another
 session's files.
 
+- **A rejected correction is re-bought on every import, for ever, and re-rejected
+  identically.** Measured when the first video was re-imported
+  (`doc/AUDIT_VIDEO_20260910.md`, F7b): 85 of 107 paragraphs came back from the
+  cache free, the **same 22** rejected ones were re-sent to the model, and the
+  run produced `corrected.txt` and `chunks.jsonl` **byte-identical** to what was
+  already on disk — `75c97c33…` and `ca7132f8…` both times. So `$0.031821` of a
+  `$0.031821` bill bought nothing, and will be spent again next time. The
+  embedding half shows the correct behaviour in the same run: every vector a
+  cache hit, `$0.000000`. The whole asymmetry is `cache.put` being skipped on
+  rejection. Same shape as the `$1.1965` of `$3.7572` the `trail` leg was built
+  to find — 31.8% there, **100%** here. Caching the refusal is the fix and it is
+  now possible, because `Rejection.proposed` records what was refused; what it
+  needs first is a decision about re-verifying a cached *rejection* when the
+  rules tighten, which is the same argument that made accepted entries
+  verify-on-read.
+- **The gate quotes a re-import as though it were a first import.** Visible only
+  once `estimate.json` was persisted, which is how it was found within an hour of
+  that fix shipping: quote `$0.2257767` against a bill of `$0.031821`, an
+  over-report of **7.1x**, where a first import of the same video over-reported
+  by 1.46x. `estimate_for` works from character counts and knows nothing about
+  `cache/correct` or `docagent.embedcache`, so it quoted 107 paragraphs of
+  correction when 85 were already paid for and 17,226 embedding tokens when the
+  real figure was zero. Over-reporting misleads a user into declining affordable
+  work exactly as much as under-reporting misleads them into approving expensive
+  work, and a 7x over-quote on a re-import is the case most likely to be met
+  with "that is too much for something I already have".
+
 - **On an auto-caption transcript, `correct.verify`'s proper-noun rule protects
   the transcription error.** Measured on the first real video import
   (`doc/AUDIT_VIDEO_20260910.md`): **22 of 107 paragraphs — 20.6% — had their

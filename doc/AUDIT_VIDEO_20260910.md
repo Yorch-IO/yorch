@@ -3,6 +3,15 @@
 `La Transformacion de los Gobiernos y Naciones - Dario Silva`, audited 2026-09-11,
 read-only, against production.
 
+> **The run ids below no longer resolve.** The catalog was cleared and the video
+> re-imported at 2026-09-11 11:20:58Z as `video-1789125657944-27203a97`. The
+> version id, the content digest and every artifact hash are **unchanged** —
+> identity is derived, so a re-import of the same captions lands on the same
+> `ver_7005ed82817384c5dfa03062` — and `corrected.txt` and `chunks.jsonl` come
+> back byte-identical, so every structural finding here still describes what is
+> indexed today. What changed is the bill, and that turned out to be the most
+> interesting thing in this document: see **F7b**.
+
 The run is `video-1789084274929-508b1c52` on `tnt_f489b4a62220158ef6790c07` /
 `lib_teologia`: `youtu.be/yq6uVBsVkeQ`, 1:16:13, indexed as
 `ver_7005ed82817384c5dfa03062` between 23:51:15 and 23:52:50 UTC on 2026-09-10 for
@@ -226,6 +235,49 @@ at it. The shape a relaxation probably wants is *"a capitalised token that was r
 near neighbour is a repair; one that simply vanished is still loss"* — `Mars`→`Marx`,
 `FARG`→`FARC`, `Tilich`→`Tillich` all pass that test and an outright deletion does not. It
 is not implemented, because on this run there is no proposal to measure it against.
+
+### F7b — and the rejected paragraphs are re-bought on every import, for ever
+
+The re-import measured this by accident, and it is the sharpest form of the defect.
+
+| | first import | re-import |
+|---|---|---|
+| correction | 17,215 in / 16,733 out / **$0.151320** | 4,324 in / 3,378 out / **$0.031821** |
+| embedding | 16,125 in / $0.003225 | 0 in / **$0.000000** |
+| `cache_hits` / `calls` | 0 / 3 | **85** / 2 |
+| rejected | 22, all `proper_noun` | **the same 22, at the same indices** |
+| `corrected.txt` | `75c97c33…` | **`75c97c33…`** |
+| `chunks.jsonl` | `ca7132f8…` | **`ca7132f8…`** |
+
+85 of 107 paragraphs came back free, because an *accepted* correction is cached. The
+remaining 22 are exactly the rejected ones: re-sent to the model, re-corrected, and
+**re-rejected for the same reason at the same indices**, producing output byte-identical
+to what was already on disk.
+
+So **$0.031821 of a $0.031821 bill bought nothing**, and it will be spent again on the
+next re-import, and the one after that. The embedding half shows what the right behaviour
+looks like — every vector a cache hit, **$0.000000**. The whole asymmetry is `cache.put`
+being skipped on rejection.
+
+Same shape as the `$1.1965` of `$3.7572` that the `trail` leg exists to find: 31.8%
+there, **100% here**. `Rejection.proposed` does not fix it; caching the refusal would, and
+that is now possible precisely because the refusal is recorded.
+
+### F4a — the gate cannot see the cache, so it quotes a re-import as a first import
+
+Visible only because `estimate.json` is now persisted. The fix landed six minutes before
+this run and found a defect within the hour.
+
+The quote was **$0.2257767** against a bill of **$0.031821** — an over-report of **7.1×**,
+where a *first* import of the same video over-reported by 1.46×. `estimate_for` works from
+character counts and knows nothing about `cache/correct` or `docagent.embedcache`, so it
+quoted 107 paragraphs of correction when 85 were already paid for, and 17,226 tokens of
+embedding when the real figure was zero.
+
+Over-reporting misleads a user into declining affordable work exactly as much as
+under-reporting misleads them into approving expensive work — this product's own rule —
+and a 7× over-quote on a re-import is the case most likely to be met with *"that is too
+much for something I already have."*
 
 ### F8 — a transcript is embedded with no breadcrumb, and it is measurably expensive
 

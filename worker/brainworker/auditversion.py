@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 # ---------------------------------------------------------------------------
 # The read-only guarantee
@@ -94,7 +94,7 @@ RETURN v.id AS id, v.tenant_id AS tenant_id, v.title AS title,
 #: chunk holds now.
 CHUNK_NODES = assert_read_only(
     """
-MATCH (v:DocumentVersion {id: $version_id})-[:HAS_CHUNK]->(c:Chunk)
+MATCH (v:DocumentVersion {id: $version_id, tenant_id: $tenant_id})-[:HAS_CHUNK]->(c:Chunk)
 RETURN c.id AS id, c.ordinal AS ordinal, c.tenant_id AS tenant_id,
        c.char_start AS char_start, c.char_end AS char_end, c.kind AS kind,
        c.text AS text, c.qdrant_point_id AS qdrant_point_id
@@ -122,7 +122,8 @@ RETURN cit.id AS id, cit.locator AS locator, cit.tenant_id AS tenant_id,
 #: chunk. A claim this misses is one no read surface can return.
 CLAIM_NODES = assert_read_only(
     """
-MATCH (cl:Claim)-[:DERIVED_FROM]->(c:Chunk)<-[:HAS_CHUNK]-(:DocumentVersion {id: $version_id})
+MATCH (cl:Claim)-[:DERIVED_FROM]->(c:Chunk)
+     <-[:HAS_CHUNK]-(:DocumentVersion {id: $version_id, tenant_id: $tenant_id})
 RETURN cl.id AS id, cl.text AS text, cl.quote AS quote, cl.status AS status,
        cl.tenant_id AS tenant_id, cl.source_chunk_id AS source_chunk_id
 """
@@ -142,7 +143,8 @@ RETURN cl.id AS id, cl.source_chunk_id AS source_chunk_id, cl.text AS text
 
 MENTION_EDGES = assert_read_only(
     """
-MATCH (:DocumentVersion {id: $version_id})-[:HAS_CHUNK]->(c:Chunk)-[m:MENTIONS]->(k:Concept)
+MATCH (:DocumentVersion {id: $version_id, tenant_id: $tenant_id})
+      -[:HAS_CHUNK]->(c:Chunk)-[m:MENTIONS]->(k:Concept)
 RETURN c.id AS source_id, k.id AS target_id, m.confidence AS confidence
 """
 )
@@ -153,7 +155,7 @@ RETURN c.id AS source_id, k.id AS target_id, m.confidence AS confidence
 #: exactly the concepts that route exists to reach.
 CONCEPTS_REACHED = assert_read_only(
     """
-MATCH (:DocumentVersion {id: $version_id})-[:HAS_CHUNK]->(c:Chunk)
+MATCH (:DocumentVersion {id: $version_id, tenant_id: $tenant_id})-[:HAS_CHUNK]->(c:Chunk)
 OPTIONAL MATCH (c)-[:MENTIONS]->(mentioned:Concept)
 OPTIONAL MATCH (c)<-[:DERIVED_FROM]-(:Claim)-[:ABOUT]->(claimed:Concept)
 OPTIONAL MATCH (c)<-[:DERIVED_FROM]-(:Claim)-[:INVOLVES]->(involved:Concept)
@@ -171,12 +173,26 @@ RETURN k.id AS id, k.name AS name, k.tenant_id AS tenant_id
 # ---------------------------------------------------------------------------
 
 
-def leg(name: str, data: dict[str, Any], *, detail: str = "") -> dict[str, Any]:
-    """A leg that answered."""
-    return {"leg": name, "available": True, "detail": detail, **data}
+def leg(
+    name: str | None, data: dict[str, Any], *, detail: str = ""
+) -> dict[str, Any]:
+    """A leg that answered.
+
+    `name` is `None` for a caller that keys its legs **by name already** — the
+    statistics route puts them under `structure`, `semantics` and so on, where a
+    `leg` field would say a second time what the key says once. The audit script
+    passes one because its legs travel in a *list*, and there the name is the
+    only thing identifying a row.
+
+    The distinction is not tidiness. A field no client declares is one every
+    client silently drops, which is the shape this codebase already records as a
+    defect on the other side of the same hop.
+    """
+    named = {"leg": name} if name is not None else {}
+    return {**named, "available": True, "detail": detail, **data}
 
 
-def unavailable(name: str, reason: str) -> dict[str, Any]:
+def unavailable(name: str | None, reason: str) -> dict[str, Any]:
     """A leg that could not answer, which is not the same as one that found zero.
 
     `/project-summary`'s rule, applied per leg: a stopped Memgraph must render as
@@ -184,7 +200,8 @@ def unavailable(name: str, reason: str) -> dict[str, Any]:
     would have carried is absent rather than zeroed, so a reader cannot quote one
     by accident.
     """
-    return {"leg": name, "available": False, "detail": reason}
+    named = {"leg": name} if name is not None else {}
+    return {**named, "available": False, "detail": reason}
 
 
 # ---------------------------------------------------------------------------
@@ -649,4 +666,222 @@ def floor_verdict(min_score: float, noise_floor: float) -> dict[str, Any]:
         "noise_floor": noise_floor,
         "headroom": round(min_score - noise_floor, 4),
         "honest": min_score > noise_floor,
+    }
+
+
+# ---------------------------------------------------------------------------
+# What a version cost, across every run that touched it
+# ---------------------------------------------------------------------------
+
+
+def cost_by_stage(runs: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Fold a version's charges by stage across *all* the runs that made them.
+
+    **A version's bill is not one run's bill**, and that is the whole reason
+    this exists. `/runs/{id}/audit` answers "what did this run spend"; grouping
+    across the version is what makes a stage charged in more than one run
+    visible at all. On `ver_0cde0e3196d06e4259a32a52` the eval set was generated
+    twice, for **$0.5753 + $0.5710**, the first of them inside a run that was
+    cancelled — **$1.1965 of that document's $3.7572, 31.8%**. Nothing in the
+    code was wrong about it; cancelling costs what it costs. There was simply no
+    way to see it.
+
+    `usd_by_run_state` is what reproduces that finding, and it is deliberately a
+    *split* rather than a figure called "wasted". Which spend bought something
+    is a judgement the rows cannot make: a cancelled run bought nothing durable,
+    but a **failed** one can still have left a complete index behind — the
+    2026-08-31 semantics failure billed $10.017265 and left 600 points and 5 001
+    claims in the stores under a version the catalog still calls `pending`. So
+    the states are reported and the reader draws the line.
+
+    Rows are plain mappings rather than catalog dataclasses so that this stays
+    assertable without a Postgres, and so the TypeScript fork can be handed the
+    same shape:
+    ``[{"run_id": str, "state": str | None, "costs": [{"stage": str, "usd": float | None}]}]``
+    """
+    totals: dict[str, dict[str, Any]] = {}
+    by_state: dict[str, float] = {}
+    for run in runs:
+        run_id = str(run["run_id"])
+        state = run.get("state") or "unknown"
+        for charge in run.get("costs") or ():
+            stage = str(charge["stage"])
+            entry = totals.setdefault(stage, {"usd": 0.0, "runs": [], "unpriced": 0})
+            usd = charge.get("usd")
+            if usd is None:
+                # "Not priced" is not zero. A missing price means the model id
+                # is absent from the table, which under-reports the bill rather
+                # than describing a free call, and it must never look like one.
+                entry["unpriced"] += 1
+            else:
+                entry["usd"] += float(usd)
+                by_state[state] = by_state.get(state, 0.0) + float(usd)
+            if run_id not in entry["runs"]:
+                entry["runs"].append(run_id)
+
+    return {
+        "by_stage": {
+            stage: {
+                "usd": round(data["usd"], 6),
+                "runs": data["runs"],
+                "unpriced_entries": data["unpriced"],
+            }
+            for stage, data in sorted(totals.items())
+        },
+        "total_usd": round(sum(d["usd"] for d in totals.values()), 6),
+        "charged_in_more_than_one_run": sorted(
+            stage for stage, data in totals.items() if len(data["runs"]) > 1
+        ),
+        "usd_by_run_state": {
+            state: round(usd, 6) for state, usd in sorted(by_state.items())
+        },
+    }
+
+
+def claim_shape(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Fold `version_claim_shape`'s rows into what the document *does* with its
+    claims, and how many of them anybody can check.
+
+    `sin_estado` is carried through as its own key rather than merged into
+    `afirma`: a text expounding the doctrine it is about to rebut enunciates it
+    in the same words as one who holds it, so "the extractor did not say" and
+    "the document asserts this" are different facts and only one of them is a
+    claim about the document. Measured on a real document, **14% of claims were
+    not plain assertions** — 10 `atribuido` and 1 `niega` out of 79.
+
+    `with_a_quote` is the count of claims carrying a span the code located in
+    the chunk's own text. A claim nobody can check must not look like one that
+    can, which is why the two travel together.
+    """
+    by_status: dict[str, int] = {}
+    claims = 0
+    with_a_quote = 0
+    for row in rows:
+        status = str(row.get("status") or "sin_estado")
+        count = int(row.get("claims") or 0)
+        by_status[status] = by_status.get(status, 0) + count
+        claims += count
+        with_a_quote += int(row.get("with_quote") or 0)
+    return {
+        "claims": claims,
+        "with_a_quote": with_a_quote,
+        "by_status": dict(sorted(by_status.items())),
+    }
+
+
+# ---------------------------------------------------------------------------
+# What a run produced, against what the graph still holds
+# ---------------------------------------------------------------------------
+#
+# **Keyed on the pre-images of the derived ids, never on the ids themselves**,
+# and that is a decision rather than a convenience. `claim_id` is
+# `digest(source_chunk_id, collapse_space(text))` and `concept_id` folds a name
+# through `canonical_concept` and salts it with the tenant — so a second
+# implementation of this comparison, in TypeScript for the paid plane, would
+# have to fork the **tenant-salted id contract** into another language. That is
+# the one fork this codebase must not take: a drift in `_salt()` is a silently
+# wrong graph, not a wrong number.
+#
+# It is not needed. The graph stores both pre-images of a `claim_id`
+# (`cl.source_chunk_id`, `cl.text`, written verbatim by `_MERGE_CLAIMS`), and
+# `semantics.json` already carries derived `con_…` ids on its **edges** —
+# measured on a real artifact: `MENTIONS` 3 497, `ABOUT` 3 055, `INVOLVES`
+# 1 336, which are exactly the three routes `CONCEPTS_REACHED` walks. So the
+# partition is identical and nothing is derived on either side.
+
+_CONCEPT_EDGES: frozenset[str] = frozenset({"MENTIONS", "ABOUT", "INVOLVES"})
+
+
+def collapse_space(text: str) -> str:
+    """`schema._collapse_space`, which is what `claim_id` hashes.
+
+    Applied to both sides of the claim key. Without it two claims whose texts
+    differ only in whitespace are one node in the graph — they share a
+    `claim_id` — and two keys here, which would report a claim as `missing` that
+    is sitting right there.
+    """
+    return _SPACE_RUN.sub(" ", text or "").strip()
+
+
+_SPACE_RUN = re.compile(r"\s+")
+
+
+def claim_key(row: Mapping[str, Any]) -> str:
+    """The pre-image of this claim's `claim_id`, from either side.
+
+    A **string** rather than a tuple, and that is not cosmetic: `stale_diff`
+    renders its samples with `str()`, so a tuple key reaches the wire as
+    `"('chk_9', 'De un run anterior.')"` — Python's repr — while the paid
+    plane's fork of this produces plain text for the same claim. One field, two
+    shapes, depending on which plane answered. A chunk id contains no space, so
+    the first one is an unambiguous separator.
+    """
+    chunk = str(row.get("source_chunk_id") or "")
+    return f"{chunk} {collapse_space(str(row.get('text') or ''))}"
+
+
+def concepts_produced(doc: Mapping[str, Any]) -> set[str]:
+    """Every concept id the run's own artifact reaches, by all three routes.
+
+    Read off the edges rather than recomputed from `concepts[].name`: the
+    artifact's edges already carry the derived target id, so nothing here has to
+    know what a tenant salt is. A concept the run listed but attached to nothing
+    is deliberately not counted — `CONCEPTS_REACHED` could not see it either,
+    and the two sides have to be asking the same question.
+    """
+    return {
+        str(e["target_id"])
+        for e in doc.get("edges") or ()
+        if e.get("type") in _CONCEPT_EDGES and e.get("target_id")
+    }
+
+
+def stale_claims(
+    doc: Mapping[str, Any], claims: Sequence[Mapping[str, Any]]
+) -> list[Mapping[str, Any]]:
+    """The graph's claims that this run did not produce.
+
+    Not debris: `claim_id` keys on `(chunk_id, text)` and `chunk_id` keys on
+    `(version_id, index)`, so re-chunking keeps every id *alive* while the text
+    underneath moves. A stale claim stays attached to a chunk that no longer
+    contains the quote it carries, and is indistinguishable from a good one at
+    read time.
+    """
+    produced = {claim_key(c) for c in doc.get("claims") or ()}
+    return [c for c in claims if claim_key(c) not in produced]
+
+
+def semantic_diff(
+    doc: Mapping[str, Any],
+    *,
+    claims: Sequence[Mapping[str, Any]],
+    concepts: Sequence[Mapping[str, Any]],
+    mentions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """The three set differences between a run's semantics and the graph's."""
+    return {
+        "claims": stale_diff(
+            (claim_key(c) for c in doc.get("claims") or ()),
+            (claim_key(c) for c in claims),
+        ),
+        "concepts": {
+            # The names the run extracted, before `concept_id` folds them.
+            # Reported beside the diff because the two differ legitimately:
+            # `canonical_concept` strips accents and punctuation, so "Espíritu
+            # Santo" and "Espiritu santo" are one node and two names, and a
+            # reader comparing `produced` against `semantics.json` would
+            # otherwise read the fold as a loss.
+            "names_extracted": len(doc.get("concepts") or ()),
+            **stale_diff(concepts_produced(doc), (str(c["id"]) for c in concepts)),
+        },
+        # Strings here for the same reason `claim_key` is one: a tuple reaches
+        # the wire as its own repr, and only from this plane.
+        "mentions": stale_diff(
+            (
+                f"{e['source_id']} {e['target_id']}"
+                for e in doc.get("edges") or ()
+                if e.get("type") == "MENTIONS"
+            ),
+            (f"{m['source_id']} {m['target_id']}" for m in mentions),
+        ),
     }

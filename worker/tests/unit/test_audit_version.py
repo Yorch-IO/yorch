@@ -463,3 +463,159 @@ def test_two_chunks_reporting_one_time_span_are_named():
     rep = av.para_ranges_unique(chunks)
     assert rep["unique"] is False
     assert list(rep["shared_by"].values()) == [[0, 1]]
+
+
+# --- what a version cost, across every run that touched it -------------------
+
+
+def _charge(stage, usd):
+    return {"stage": stage, "usd": usd}
+
+
+def test_a_stage_charged_in_two_runs_is_named():
+    """The finding: on `ver_0cde3e…` the eval set was generated twice, for
+    $0.5753 + $0.5710, the first of them inside a run that was cancelled —
+    $1.1965 of that document's $3.7572, 31.8%. Nothing in the code was wrong
+    about it; there was simply no way to see it."""
+    out = av.cost_by_stage(
+        [
+            {"run_id": "a", "state": "cancelled", "costs": [_charge("evalset", 0.5753)]},
+            {"run_id": "b", "state": "succeeded", "costs": [_charge("evalset", 0.5710)]},
+        ]
+    )
+    assert out["charged_in_more_than_one_run"] == ["evalset"]
+    assert out["by_stage"]["evalset"]["runs"] == ["a", "b"]
+    assert out["total_usd"] == pytest.approx(1.1463)
+
+
+def test_the_split_is_by_run_state_rather_than_a_figure_called_wasted():
+    """Which spend bought something is a judgement the rows cannot make. A
+    cancelled run bought nothing durable; a **failed** one can still have left a
+    complete index behind — the 2026-08-31 semantics failure billed $10.017265
+    and left 600 points and 5 001 claims under a version the catalog still calls
+    `pending`. So the states are reported and the reader draws the line."""
+    out = av.cost_by_stage(
+        [
+            {"run_id": "a", "state": "cancelled", "costs": [_charge("evalset", 1.0)]},
+            {"run_id": "b", "state": "failed", "costs": [_charge("semantics", 2.0)]},
+            {"run_id": "c", "state": "succeeded", "costs": [_charge("semantics", 3.0)]},
+        ]
+    )
+    assert out["usd_by_run_state"] == {
+        "cancelled": 1.0,
+        "failed": 2.0,
+        "succeeded": 3.0,
+    }
+
+
+def test_an_unpriced_charge_is_counted_and_never_totalled_as_zero():
+    """A missing price means the model id is absent from the table, which
+    under-reports the bill rather than describing a free call."""
+    out = av.cost_by_stage(
+        [{"run_id": "a", "state": "succeeded", "costs": [_charge("semantics", None)]}]
+    )
+    assert out["by_stage"]["semantics"]["unpriced_entries"] == 1
+    assert out["total_usd"] == 0.0
+    assert out["usd_by_run_state"] == {}
+
+
+def test_a_run_that_spent_nothing_still_appears_in_no_stage():
+    out = av.cost_by_stage([{"run_id": "a", "state": "succeeded", "costs": []}])
+    assert out == {
+        "by_stage": {},
+        "total_usd": 0.0,
+        "charged_in_more_than_one_run": [],
+        "usd_by_run_state": {},
+    }
+
+
+# --- what the document does with its claims ----------------------------------
+
+
+def test_a_claim_with_no_status_keeps_its_own_key():
+    """`sin_estado` must never render as `afirma`: a text expounding the
+    doctrine it is about to rebut enunciates it in the same words as one who
+    holds it. Measured on a real document, 14% of claims were not plain
+    assertions — 10 `atribuido` and 1 `niega` out of 79."""
+    out = av.claim_shape(
+        [
+            {"status": "afirma", "claims": 68, "with_quote": 66},
+            {"status": None, "claims": 1, "with_quote": 0},
+        ]
+    )
+    assert out["by_status"] == {"afirma": 68, "sin_estado": 1}
+    assert (out["claims"], out["with_a_quote"]) == (69, 66)
+
+
+# --- the set difference, keyed on the pre-images ------------------------------
+#
+# The whole reason these keys are not the derived ids: the paid plane has to
+# make the same comparison, and keying on `claim_id`/`concept_id` would fork the
+# tenant-salted id contract into TypeScript. A drift in `_salt()` is a silently
+# wrong graph, not a wrong number.
+
+
+def test_the_claim_key_partitions_exactly_as_claim_id_does():
+    """`claim_id` is `digest(source_chunk_id, collapse_space(text))`, so equal
+    keys and equal ids are the same relation — including the whitespace fold,
+    without which two claims that are one node in the graph would be two keys
+    here and one of them would read as `missing`."""
+    from brainworker.graph.schema import claim_id
+
+    rows = [
+        {"source_chunk_id": "chk_1", "text": "hola  mundo"},
+        {"source_chunk_id": "chk_1", "text": "hola mundo"},
+        {"source_chunk_id": "chk_2", "text": "hola mundo"},
+    ]
+    keys = {av.claim_key(r) for r in rows}
+    ids = {claim_id(r["source_chunk_id"], r["text"]) for r in rows}
+    assert len(keys) == len(ids) == 2
+
+
+def test_concepts_come_off_the_edges_by_all_three_routes():
+    """`MENTIONS`, a claim's `ABOUT` and a claim's `INVOLVES` — deliberately the
+    same three `CONCEPTS_REACHED` walks. A concept reached only as a claim's
+    subject carries no `MENTIONS` edge from any chunk, and following the first
+    route alone is how claim-only concepts were orphaned once already."""
+    doc = {
+        "edges": [
+            {"type": "MENTIONS", "source_id": "chk_1", "target_id": "con_a"},
+            {"type": "ABOUT", "source_id": "clm_1", "target_id": "con_b"},
+            {"type": "INVOLVES", "source_id": "clm_1", "target_id": "con_c"},
+            {"type": "SUPPORTS", "source_id": "clm_1", "target_id": "clm_2"},
+        ]
+    }
+    assert av.concepts_produced(doc) == {"con_a", "con_b", "con_c"}
+
+
+def test_a_re_index_that_left_the_previous_extraction_behind_is_visible():
+    """Measured on `ver_0b71d21eeb3228f54437d9cf`, re-indexed with a corrected
+    profile that took it from 600 chunks to 631: 5 001 claims where the run
+    extracted 3 055 — 4 988 left behind, and not inert, because `claim_id` keys
+    on `(chunk_id, text)` while the text underneath moved."""
+    doc = {"claims": [{"source_chunk_id": "chk_1", "text": "nuevo"}], "edges": []}
+    graph = [
+        {"source_chunk_id": "chk_1", "text": "nuevo"},
+        {"source_chunk_id": "chk_1", "text": "viejo"},
+    ]
+    out = av.semantic_diff(doc, claims=graph, concepts=[], mentions=[])
+    assert out["claims"]["produced"] == 1
+    assert out["claims"]["left_behind"] == 1
+    assert out["claims"]["converged"] == 1
+    assert [c["text"] for c in av.stale_claims(doc, graph)] == ["viejo"]
+
+
+def test_the_names_a_run_extracted_are_reported_beside_the_folded_count():
+    """`canonical_concept` strips accents and punctuation, so "Espíritu Santo"
+    and "Espiritu santo" are one node and two names. A reader comparing
+    `produced` against `semantics.json` would otherwise read the fold as a
+    loss. Measured on a real artifact: 2 634 names, 2 517 concepts."""
+    doc = {
+        "claims": [],
+        "concepts": [{"name": "Espíritu Santo"}, {"name": "Espiritu santo"}],
+        "edges": [{"type": "MENTIONS", "source_id": "chk_1", "target_id": "con_a"}],
+    }
+    out = av.semantic_diff(doc, claims=[], concepts=[{"id": "con_a"}], mentions=[])
+    assert out["concepts"]["names_extracted"] == 2
+    assert out["concepts"]["produced"] == 1
+    assert out["concepts"]["converged"] == 1

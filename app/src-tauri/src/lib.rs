@@ -30,7 +30,7 @@ use control::{
     GateReport, Health, IngestRequest, Libraries, Library, LibraryGraph, Outline, PingResult,
     ProjectSummary, Question, RebuildReport, RelatedDocuments, Removal, RunAudit,
     RunEventPage, RunListPage, SectionChunks,
-    RunState, StageOptions, StagedSource, StartedRun, VersionConcepts,
+    RunState, StageOptions, StagedSource, StartedRun, VersionConcepts, VersionStatistics,
     VideoGateReport, VideoRequest,
 };
 use error::{AppError, Result};
@@ -905,6 +905,21 @@ async fn document_detail(
         .await
 }
 
+/// What one indexed version holds, what it cost, and what still agrees.
+///
+/// Proxied like everything else rather than fetched by the webview, which is
+/// what lets the CSP stay `default-src 'self'` with no localhost exception.
+/// Read-only: nothing behind this writes and nothing behind it spends.
+#[tauri::command]
+async fn version_statistics(
+    state: State<'_, AppState>,
+    library_id: String,
+    version_id: String,
+) -> Result<VersionStatistics> {
+    let control = state.control().await?;
+    control.version_statistics(&library_id, &version_id).await
+}
+
 /// Permanent removal, across Qdrant, Memgraph and the catalog.
 ///
 /// No confirmation happens here. The screen confirms, because only the screen
@@ -1249,6 +1264,7 @@ pub fn run() {
             provider_settings,
             set_provider_project,
             document_detail,
+            version_statistics,
             document_remove,
             version_remove,
             version_activate,

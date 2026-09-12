@@ -56,6 +56,14 @@ const RUNS_TIMEOUT: Duration = Duration::from_secs(10);
 /// point of it: it answers for a run whose history has aged out.
 const AUDIT_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Three stores and two artifact reads, so it is given more room than the
+/// catalog-only audit beside it — but not much more, because it is measured:
+/// **0.52 s** on the biggest version here (631 chunks, 3 055 claims, a 4.2 MB
+/// `semantics.json`), of which 0.29 s is the semantics diff. 30 s is the
+/// allowance for a cold page cache and a contended Memgraph, not for a shape
+/// anybody has seen.
+const STATISTICS_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// The raw history is fetched from Temporal, page by page, and a run with many
 /// retries has a long one. Longer than the ledger because this is the call that
 /// can actually be slow, and it is made once, when a person expands the panel.
@@ -1227,6 +1235,338 @@ pub struct DocumentDetail {
     pub versions: Vec<VersionRow>,
 }
 
+// ---------------------------------------------------------------------------
+// One version's statistics
+// ---------------------------------------------------------------------------
+//
+// Five legs, and **every data field on every leg is optional**, because
+// `available: false` carries none of them. That is not defensive typing: a leg
+// that could not answer must be unable to supply a figure, and making the
+// fields non-optional would force a default — which is how "the graph is
+// stopped" becomes "this version has no concepts".
+
+/// One leg's verdict: `available: false` plus the URL or reason it failed on.
+///
+/// The data fields live on each leg beside this rather than inside a nested
+/// object, because that is the shape Python emits — `auditversion.leg` splats
+/// its payload next to the three bookkeeping keys — and a translation struct
+/// here would be a second opinion about the wire format.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionCatalogLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub content_sha256: Option<String>,
+    #[serde(default)]
+    pub byte_size: Option<u64>,
+    /// A column nothing writes: `register_version` runs before extraction, so
+    /// the page count is not knowable there. `None` is the measurement, not a
+    /// zero, and the field starts working the day something fills it.
+    #[serde(default)]
+    pub page_count: Option<u32>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub active: Option<bool>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub activated_at: Option<String>,
+    #[serde(default)]
+    pub failed_reason: Option<String>,
+    #[serde(default)]
+    pub runs: Option<u32>,
+    #[serde(default)]
+    pub rebuild_run_id: Option<String>,
+    #[serde(default)]
+    pub profile_warnings: Vec<VersionProfileWarning>,
+}
+
+/// A profile collision raised at a gate, and whether its figure means anything.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionProfileWarning {
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    #[serde(default)]
+    pub collides_with: Option<String>,
+    #[serde(default)]
+    pub similarity: Option<f64>,
+    #[serde(default)]
+    pub detail: Option<String>,
+    /// `_topical_overlap` returns 0.0 by construction for a plain-text
+    /// document, and 0.0 is documented as the *most dangerous* case — same
+    /// structure, unrelated subject matter. `false` means the figure beside it
+    /// is not a measurement and must not be rendered as one.
+    #[serde(default)]
+    pub comparable: bool,
+}
+
+/// The graph's own count of what this version projected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionGraphLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub chunks: Option<u32>,
+    #[serde(default)]
+    pub sections: Option<u32>,
+    #[serde(default)]
+    pub citations: Option<u32>,
+    #[serde(default)]
+    pub claims: Option<u32>,
+    /// Keyed by the chunk kind as stored — `cuerpo`, `preguntas`, `nota` —
+    /// which stays Spanish on the wire because these are Qdrant payload values
+    /// used in filters. `rename_all` renames struct fields and never map keys,
+    /// so these survive the hop unchanged and the UI maps them.
+    #[serde(default)]
+    pub kinds: std::collections::BTreeMap<String, u32>,
+    #[serde(default)]
+    pub section_levels: std::collections::BTreeMap<String, u32>,
+}
+
+/// How many points Qdrant holds for this version, exactly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionQdrantLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub points: Option<u32>,
+}
+
+/// The run's own `chunks.jsonl`, against the byte stream it indexed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionArtifactsLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    /// Which stream the `char_span`s actually index. Nothing records it, so it
+    /// is chosen by scoring every stream present — measured on one version,
+    /// `raw.txt` verifies 8 of 600 spans where `extracted.txt` verifies 600.
+    #[serde(default)]
+    pub stream: Option<String>,
+    #[serde(default)]
+    pub stream_verifies_completely: Option<bool>,
+    #[serde(default)]
+    pub streams_considered: std::collections::BTreeMap<String, VersionStreamScore>,
+    #[serde(default)]
+    pub spans: Option<VersionSpans>,
+    #[serde(default)]
+    pub sequence: Option<VersionSequence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStreamScore {
+    pub bytes: u64,
+    pub spans_verified: u32,
+    pub spans_mismatched: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionSpans {
+    pub chunks: u32,
+    pub spans_verified: u32,
+    pub spans_mismatched: u32,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionSequence {
+    pub indices: u32,
+    pub contiguous: bool,
+    #[serde(default)]
+    pub missing_indices: Vec<u32>,
+    #[serde(default)]
+    pub duplicate_indices: Vec<u32>,
+    pub bytes_covered: u64,
+    pub bytes_total: u64,
+    pub coverage: f64,
+}
+
+/// How big this version is, in all three stores at once.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStructureLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub source_run: Option<String>,
+    pub graph: VersionGraphLeg,
+    pub qdrant: VersionQdrantLeg,
+    pub artifacts: VersionArtifactsLeg,
+    /// `None` is "could not compare" and only `Some(false)` is the claim that
+    /// the stores disagree. Always present on the wire so a reader never has to
+    /// tell an absent key from a null one.
+    #[serde(default)]
+    pub counts_agree: Option<bool>,
+}
+
+/// What the graph holds of this version's semantics right now.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionSemanticsInStore {
+    pub claims: u32,
+    /// Claims carrying a quote the code located in their own chunk. A claim
+    /// nobody can check must not look like one that can.
+    pub with_a_quote: u32,
+    /// `afirma`, `niega`, `atribuido`, `sin_estado` — Spanish on the wire like
+    /// the chunk kinds, and `sin_estado` is never folded into `afirma`.
+    #[serde(default)]
+    pub by_status: std::collections::BTreeMap<String, u32>,
+    pub concepts: u32,
+}
+
+/// One three-way split between what a run made and what is there now.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStaleDiff {
+    pub produced: u32,
+    pub in_store: u32,
+    pub converged: u32,
+    /// The defect: something the graph holds that this run did not make. Not
+    /// inert — a stale claim stays attached to a chunk whose text has moved and
+    /// reads exactly like a good one.
+    pub left_behind: u32,
+    /// Its mirror, and it matters as much: something the run produced and the
+    /// graph lacks is a projection that did not finish.
+    pub missing: u32,
+    #[serde(default)]
+    pub stale_share: Option<f64>,
+    #[serde(default)]
+    pub names_extracted: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStaleQuotes {
+    pub with_a_quote: u32,
+    pub quote_no_longer_locates: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionSemanticsDiff {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub claims: Option<VersionStaleDiff>,
+    #[serde(default)]
+    pub concepts: Option<VersionStaleDiff>,
+    #[serde(default)]
+    pub mentions: Option<VersionStaleDiff>,
+    #[serde(default)]
+    pub stale_claim_quotes: Option<VersionStaleQuotes>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionSemanticsLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub source_run: Option<String>,
+    #[serde(default)]
+    pub extractor_model: Option<String>,
+    #[serde(default)]
+    pub in_store: Option<VersionSemanticsInStore>,
+    #[serde(default)]
+    pub diff: Option<VersionSemanticsDiff>,
+}
+
+/// Whether the dense floor sits above what a wrong chunk scores.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionFloor {
+    pub min_score: f64,
+    pub noise_floor: f64,
+    pub headroom: f64,
+    /// `false` means the floor admits exactly what it was measured to exclude —
+    /// and it looks like an improvement, because every eval question has a right
+    /// answer to find and none of them is off-corpus.
+    pub honest: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionRetrievalLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub source_run: Option<String>,
+    /// Absent means **nobody measured**, which is not a recall of zero.
+    #[serde(default)]
+    pub scores: Option<RunScores>,
+    #[serde(default)]
+    pub floor: Option<VersionFloor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStageCost {
+    pub usd: f64,
+    /// Every run that charged this stage. More than one is the finding.
+    #[serde(default)]
+    pub runs: Vec<String>,
+    /// A missing price under-reports the bill rather than describing a free
+    /// call, so it is counted and never totalled as zero.
+    #[serde(default)]
+    pub unpriced_entries: u32,
+}
+
+/// What this **version** cost, across every run that touched it.
+///
+/// Not one run's bill: on `ver_0cde…` the eval set was generated twice, the
+/// first time inside a run that was cancelled. Grouping by run answers only
+/// half of it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionLedgerLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    /// Keyed by stage name as the ledger stores it — a map, so `rename_all`
+    /// leaves the keys alone.
+    #[serde(default)]
+    pub by_stage: std::collections::BTreeMap<String, VersionStageCost>,
+    #[serde(default)]
+    pub total_usd: f64,
+    #[serde(default)]
+    pub charged_in_more_than_one_run: Vec<String>,
+    /// Split by the terminal state of the run that incurred it. A *split*
+    /// rather than a figure called "wasted": a cancelled run bought nothing
+    /// durable, but a failed one can still have left a complete index behind.
+    #[serde(default)]
+    pub usd_by_run_state: std::collections::BTreeMap<String, f64>,
+}
+
+/// Everything one indexed version holds, cost, and still agrees with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStatistics {
+    pub library_id: String,
+    pub document_id: String,
+    pub version_id: String,
+    pub catalog: VersionCatalogLeg,
+    pub structure: VersionStructureLeg,
+    pub semantics: VersionSemanticsLeg,
+    pub retrieval: VersionRetrievalLeg,
+    pub ledger: VersionLedgerLeg,
+}
+
 /// What a removal destroyed, and what it deliberately did not.
 ///
 /// Both halves cross the boundary because an irreversible act reported only as
@@ -2094,6 +2434,24 @@ impl Control {
 
     // -- Library verbs -----------------------------------------------------
 
+    /// What one indexed version holds, what it cost, and what still agrees.
+    ///
+    /// Read-only across all three stores. Every leg degrades on its own, so a
+    /// stopped Memgraph comes back as a leg saying so rather than as an error —
+    /// which is why this returns a body where another read would return a
+    /// status code.
+    pub async fn version_statistics(
+        &self,
+        library_id: &str,
+        version_id: &str,
+    ) -> Result<VersionStatistics> {
+        self.get(
+            &format!("/libraries/{library_id}/versions/{version_id}/statistics"),
+            STATISTICS_TIMEOUT,
+        )
+        .await
+    }
+
     pub async fn document_detail(
         &self,
         library_id: &str,
@@ -2418,6 +2776,151 @@ mod tests {
                                      "mentions": 1, "confidence": 0.7}]}"#;
         let parsed: VersionConcepts = serde_json::from_str(json).unwrap();
         assert!(parsed.concepts[0].r#type.is_none());
+    }
+
+    // --- one version's statistics -----------------------------------------
+    //
+    // Both directions matter here more than anywhere else in this file: the
+    // route's whole contract is that a leg which could not answer carries *no
+    // figures*, and a `#[serde(default)]` that quietly supplies a zero would
+    // turn "the graph is stopped" into "this version has no concepts" at
+    // exactly the layer nothing else checks.
+
+    /// Trimmed from a real response for `ver_0ebf4f0b50a27202db3fcca6`.
+    const STATS: &str = r#"{
+        "library_id": "lib_pruebas",
+        "document_id": "doc_0b797166a685ce47ff7dc859",
+        "version_id": "ver_0ebf4f0b50a27202db3fcca6",
+        "catalog": {"available": true, "detail": "",
+            "content_sha256": "0ebf4f0b", "byte_size": 3177305, "page_count": null,
+            "state": "indexed", "active": true, "created_at": "2026-08-31T18:16:19Z",
+            "activated_at": null, "failed_reason": null, "runs": 4,
+            "rebuild_run_id": "ingest-1788215710194-a367fb3a",
+            "profile_warnings": [{"id": 41, "profile_id": "01-retodedios",
+                "collides_with": "libro", "similarity": 0.0, "detail": "…",
+                "comparable": false}]},
+        "structure": {"available": true, "detail": "",
+            "source_run": "ingest-1788215710194-a367fb3a",
+            "scope": {"tenant_id": "tnt_1", "version_id": "ver_x"},
+            "graph": {"available": true, "detail": "",
+                "chunks": 600, "sections": 38, "citations": 600, "claims": 0,
+                "kinds": {"cuerpo": 502, "preguntas": 98},
+                "section_levels": {"1": 38}},
+            "qdrant": {"available": true, "detail": "", "points": 600},
+            "artifacts": {"available": true, "detail": "",
+                "stream": "extracted", "stream_verifies_completely": true,
+                "streams_considered": {
+                    "extracted": {"bytes": 484856, "spans_verified": 600, "spans_mismatched": 0},
+                    "raw": {"bytes": 487032, "spans_verified": 8, "spans_mismatched": 592}},
+                "spans": {"chunks": 600, "spans_verified": 600, "spans_mismatched": 0,
+                          "bytes": 484856},
+                "sequence": {"indices": 600, "contiguous": true, "missing_indices": [],
+                             "duplicate_indices": [], "bytes_covered": 482321,
+                             "bytes_total": 484856, "coverage": 0.9948}},
+            "counts_agree": true},
+        "semantics": {"available": true, "detail": "",
+            "source_run": "reindex-1", "extractor_model": "gemini-3.6-flash",
+            "in_store": {"claims": 3055, "with_a_quote": 3044,
+                "by_status": {"afirma": 2635, "atribuido": 373, "niega": 47},
+                "concepts": 2519},
+            "diff": {"available": true, "detail": "",
+                "claims": {"produced": 3055, "in_store": 3055, "converged": 3055,
+                           "left_behind": 0, "missing": 0, "stale_share": 0.0},
+                "concepts": {"names_extracted": 2634, "produced": 2517,
+                             "in_store": 2519, "converged": 2517, "left_behind": 2,
+                             "missing": 0, "stale_share": 0.0008},
+                "mentions": {"produced": 3497, "in_store": 3497, "converged": 3497,
+                             "left_behind": 0, "missing": 0, "stale_share": 0.0},
+                "stale_claim_quotes": {"with_a_quote": 0, "quote_no_longer_locates": 0}}},
+        "retrieval": {"available": true, "detail": "",
+            "source_run": "ingest-1", "scores": {"recall_at_1": 0.5375,
+                "recall_at_5": 0.825, "mrr_at_10": 0.6742,
+                "recall_at_5_dense_only": 0.8625, "noise_floor": 0.5142,
+                "chunks": 600, "eval_questions": 80, "margin": 0.041,
+                "leakage": "no sign", "misses": 14},
+            "floor": {"min_score": 0.6, "noise_floor": 0.5142, "headroom": 0.0858,
+                      "honest": true}},
+        "ledger": {"available": true, "detail": "",
+            "by_stage": {"embedding": {"usd": 0.035484,
+                "runs": ["ingest-a", "ingest-b"], "unpriced_entries": 0}},
+            "total_usd": 14.927211,
+            "charged_in_more_than_one_run": ["embedding", "semantics"],
+            "usd_by_run_state": {"failed": 9.992302, "succeeded": 4.909946}}
+    }"#;
+
+    #[test]
+    fn version_statistics_survive_the_round_trip_to_the_webview() {
+        let parsed: VersionStatistics = serde_json::from_str(STATS).unwrap();
+        let out = serde_json::to_value(&parsed).unwrap();
+
+        assert_eq!(out["libraryId"], "lib_pruebas");
+        assert_eq!(out["structure"]["graph"]["sectionLevels"]["1"], 38);
+        assert_eq!(out["structure"]["artifacts"]["streamVerifiesCompletely"], true);
+        assert_eq!(out["semantics"]["inStore"]["withAQuote"], 3044);
+        assert_eq!(out["ledger"]["usdByRunState"]["failed"], 9.992302);
+        // The snake_case spellings must be gone, or the webview reads both and
+        // one of them silently wins.
+        assert!(out["structure"]["counts_agree"].is_null());
+        assert!(out["semantics"]["in_store"].is_null());
+        assert_eq!(out["structure"]["countsAgree"], true);
+    }
+
+    #[test]
+    fn the_map_keys_are_never_renamed_with_the_fields() {
+        // Chunk kinds and claim statuses are Qdrant payload values and graph
+        // properties. `rename_all` renames struct fields and not map keys, and
+        // this is what says so — a camelCased `sinEstado` would match nothing
+        // the UI has a label for, and renaming them in the store would break
+        // every existing collection.
+        let parsed: VersionStatistics = serde_json::from_str(STATS).unwrap();
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(out["structure"]["graph"]["kinds"]["preguntas"], 98);
+        assert_eq!(out["semantics"]["inStore"]["byStatus"]["atribuido"], 373);
+    }
+
+    #[test]
+    fn a_leg_that_could_not_answer_carries_no_figures() {
+        // The property the whole route is built on, checked at the hop that
+        // would otherwise invent a default. A stopped Memgraph is not a version
+        // with no concepts, and a run nobody measured is not a recall of zero.
+        let json = r#"{
+            "library_id": "l", "document_id": "d", "version_id": "v",
+            "catalog": {"available": false, "detail": "sin fila"},
+            "structure": {"available": true, "detail": "",
+                "graph": {"available": false,
+                          "detail": "bolt://127.0.0.1:7789: refused"},
+                "qdrant": {"available": false, "detail": "6433: refused"},
+                "artifacts": {"available": false,
+                              "detail": "ningún run conserva chunks.jsonl"},
+                "counts_agree": null},
+            "semantics": {"available": false, "detail": "refused"},
+            "retrieval": {"available": false,
+                          "detail": "ningún run midió esta versión"},
+            "ledger": {"available": true, "detail": ""}
+        }"#;
+        let parsed: VersionStatistics = serde_json::from_str(json).unwrap();
+
+        assert!(parsed.structure.graph.chunks.is_none());
+        assert!(parsed.structure.qdrant.points.is_none());
+        assert!(parsed.structure.artifacts.spans.is_none());
+        assert!(parsed.semantics.in_store.is_none());
+        assert!(parsed.retrieval.scores.is_none());
+        assert!(parsed.catalog.page_count.is_none());
+        // "Could not compare" and "they disagree" are different claims.
+        assert!(parsed.structure.counts_agree.is_none());
+        // An empty ledger is a real answer: this version spent nothing.
+        assert!(parsed.ledger.available && parsed.ledger.by_stage.is_empty());
+        assert_eq!(parsed.structure.graph.detail, "bolt://127.0.0.1:7789: refused");
+    }
+
+    #[test]
+    fn a_page_count_nothing_wrote_stays_absent_rather_than_zero() {
+        // `register_version` runs before extraction, so the column is never
+        // filled. A `u32` with a serde default would render "0 pages" on every
+        // document in the catalog.
+        let parsed: VersionStatistics = serde_json::from_str(STATS).unwrap();
+        assert!(parsed.catalog.page_count.is_none());
+        assert_eq!(parsed.catalog.byte_size, Some(3177305));
     }
 
     #[test]

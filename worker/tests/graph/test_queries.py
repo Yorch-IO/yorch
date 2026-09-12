@@ -232,6 +232,22 @@ def test_the_catalogue_omits_the_overview_templates():
         "graph_edge_counts",
         "library_documents",
         "library_mentions",
+        # The five a version's statistics pane draws. Listed by hand rather
+        # than derived, like the rest of this set: a template hidden from the
+        # planner is a decision, and one that becomes hidden by accident should
+        # fail this rather than pass it.
+        "version_counts",
+        "version_chunk_kinds",
+        "version_section_levels",
+        "version_claim_shape",
+        "version_concepts_reached",
+        # The four whose rows are keys for the set difference against a run's
+        # own artifact. Each raises its own ceiling, so each must be hidden —
+        # `Param.cap` and `planner_visible=False` are one decision.
+        "version_claim_keys",
+        "version_concept_ids",
+        "version_mention_pairs",
+        "chunk_texts",
     }
     assert offered.isdisjoint(hidden)
     assert offered  # and it did not empty itself

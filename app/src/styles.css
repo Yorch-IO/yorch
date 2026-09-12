@@ -2234,6 +2234,58 @@ button.link.active {
   font-size: 1.05rem;
 }
 
+/* One version's statistics.
+
+   Deliberately *not* a new grid: the figure rows reuse `.scores`, which already
+   has its own `@media (max-width: 76rem)` override below the shared query, and
+   the tables reuse `.audit-table`. A grid declared here would need to repeat
+   that query below its own rule — a media query is not a stronger rule, only a
+   conditional one — and the cheapest way not to get that wrong is not to add
+   one. */
+.stats {
+  display: flow-root;
+  margin: 0.5rem 0 0;
+}
+
+.stats-block {
+  margin: 0 0 1.1rem;
+}
+
+.stats-block h5 {
+  margin: 0 0 0.2rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stats-block p {
+  margin: 0.35rem 0 0;
+}
+
+/* Wraps rather than scrolls: a histogram of six chunk kinds is a sentence, and
+   a reader who has to drag it sideways will read the first two and stop. */
+.stats-counts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  vertical-align: middle;
+}
+
+/* A figure that is not what it should be. Deliberately not `.warn`, which is a
+   block rule — border-left, padding and a margin — and drew a stray bar inside
+   the cell. */
+.stats-diff td.off {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.stats-diff th[scope="row"] {
+  font-weight: 500;
+  text-align: left;
+}
+
 .scores .basis {
   /* Spans every column, because it is the caption for all five figures and not
      for the last one. */
@@ -2370,11 +2422,19 @@ button.link.active {
     grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
   }
 
-  /* The two columns a narrow cell can afford to lose: the ledger's point is the
+  /* The column a narrow cell can afford to lose: the ledger's point is the
      stage, its duration and its cost, and the timestamp is recoverable from the
-     raw log below. */
-  .audit-table th:nth-child(2),
-  .audit-table td:nth-child(2) {
+     raw log below.
+
+     **Scoped to `.audit`, which is the run ledger's own wrapper.** It was
+     written against `.audit-table` alone, and the moment a second table reused
+     that class the rule deleted whatever happened to sit in *its* second
+     column — which for the statistics pane's cost table is the cost. A
+     nth-child rule is a statement about one table's column order, so it has to
+     name that table. Found by screenshotting at 900px; nothing in the suite can
+     see a hidden column. */
+  .audit th:nth-child(2),
+  .audit td:nth-child(2) {
     display: none;
   }
 }

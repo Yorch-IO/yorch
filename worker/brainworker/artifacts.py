@@ -224,6 +224,23 @@ class ArtifactStore:
     def read_json(self, ref: ArtifactRef, *, verify: bool = True) -> Any:
         return json.loads(self.read_text(ref, verify=verify))
 
+    def read_jsonl(self, ref: ArtifactRef, *, verify: bool = True) -> list[Any]:
+        """Every row of a JSONL artifact, digest checked.
+
+        The sibling of :meth:`read_json` rather than of :meth:`iter_jsonl`, and
+        the difference is the verification: `iter_jsonl` opens the file to
+        stream a window of it for a UI and cannot hash what it does not read,
+        while a caller comparing a run's own output against what is in the
+        stores has to know it is holding the bytes the reference recorded. An
+        artifact rewritten since would make the comparison a statement about a
+        different run, and the set difference would read as debris.
+        """
+        return [
+            json.loads(line)
+            for line in self.read_text(ref, verify=verify).splitlines()
+            if line.strip()
+        ]
+
     def iter_jsonl(self, ref: ArtifactRef, *, offset: int = 0, limit: int | None = None) -> Iterator[Any]:
         """Stream rows without loading the file.
 

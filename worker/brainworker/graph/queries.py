@@ -698,6 +698,248 @@ TEMPLATES: tuple[Template, ...] = (
         uses_semantic_edges=True,
         planner_visible=False,
     ),
+    # -- One version's statistics ------------------------------------------
+    #
+    # Five templates rather than one, and the split is arithmetic rather than
+    # taste. The counts below all hang off the same 631 chunks on the biggest
+    # version here, and `OPTIONAL MATCH` materialises a cross product before
+    # `count(DISTINCT …)` folds it: chunks x citations x claims is what
+    # `projection._COUNT_VERSION_SUBGRAPH` already does in the removal path and
+    # is proven at this scale, but adding the three concept routes to it
+    # multiplies 3 055 claims by 3 497 `MENTIONS` for a single number.
+    #
+    # All five are `planner_visible=False`. They answer "draw me this screen",
+    # not "answer this question" — and every token of `catalogue()` is a token
+    # not spent on the question a planner was actually asked.
+    Template(
+        id="version_counts",
+        summary="Cuántos nodos deterministas y cuántas afirmaciones tiene una versión.",
+        # `projection._COUNT_VERSION_SUBGRAPH` with the tenant predicate it
+        # lacks — it is reached only through `Graph.write` by removal and by the
+        # audit script, both of which already hold the tenant. A template is
+        # named by id over HTTP, so the predicate has to be in the query.
+        cypher="""
+            MATCH (v:DocumentVersion {id: $version_id, tenant_id: $tenant_id})
+            OPTIONAL MATCH (v)-[:HAS_CHUNK]->(c:Chunk)
+            OPTIONAL MATCH (v)-[:HAS_SECTION]->(s:Section)
+            OPTIONAL MATCH (c)-[:CITES]->(cit:Citation)
+            OPTIONAL MATCH (cl:Claim)-[:DERIVED_FROM]->(c)
+            RETURN count(DISTINCT c) AS chunks, count(DISTINCT s) AS sections,
+                   count(DISTINCT cit) AS citations, count(DISTINCT cl) AS claims
+            LIMIT 1
+        """,
+        params=(Param("version_id", "id"), _TENANT),
+        # False, following `graph_node_counts`, which counts the Claim and
+        # Concept labels under the same flag. The flag tracks whether a *result*
+        # rests on a model-proposed edge, and `DERIVED_FROM` is not one: it is
+        # the structural link from a claim to the chunk it came from. That the
+        # claim itself is model output is true and is labelled per claim, where
+        # a reader can see the quote.
+        planner_visible=False,
+    ),
+    Template(
+        id="version_chunk_kinds",
+        summary="Cuántos fragmentos de cada tipo tiene una versión.",
+        # The vocabulary is six — cuerpo, preguntas, nota, tabla_fila,
+        # tabla_resumen, diapositiva — so the LIMIT is the formality the
+        # validator requires rather than a real truncation. The values stay
+        # Spanish on the wire because they are stored in Qdrant payloads and
+        # used in filters; the UI maps them to localised labels.
+        #
+        # `ORDER BY` names the returned aliases and not the pattern variables:
+        # the RETURN aggregates, so `c` is out of scope by then and ordering by
+        # `c.kind` fails at *query* time with `Unbound variable`. The validator
+        # reads labels and keywords, not scope — only a real Memgraph catches it.
+        cypher="""
+            MATCH (:DocumentVersion {id: $version_id, tenant_id: $tenant_id})
+                  -[:HAS_CHUNK]->(c:Chunk)
+            RETURN c.kind AS kind, count(c) AS chunks
+            ORDER BY chunks DESC, kind
+            LIMIT 25
+        """,
+        params=(Param("version_id", "id"), _TENANT),
+        planner_visible=False,
+    ),
+    Template(
+        id="version_section_levels",
+        summary="Cuántas secciones de cada nivel tiene una versión.",
+        # Separate from the kinds histogram because it walks `HAS_SECTION` and
+        # that one walks `HAS_CHUNK`: folding them would multiply 631 chunks by
+        # 56 sections to produce two independent histograms.
+        cypher="""
+            MATCH (:DocumentVersion {id: $version_id, tenant_id: $tenant_id})
+                  -[:HAS_SECTION]->(s:Section)
+            RETURN s.level AS level, count(s) AS sections
+            ORDER BY level
+            LIMIT 25
+        """,
+        params=(Param("version_id", "id"), _TENANT),
+        planner_visible=False,
+    ),
+    Template(
+        id="version_claim_shape",
+        summary="Qué hace el documento con cada afirmación, y cuántas llevan cita.",
+        # `status` says what the document *does* with a claim, and there is no
+        # safe default: a text expounding the doctrine it is about to rebut
+        # enunciates it in the same words as one who holds it, so a claim
+        # extracted before the field existed must render as `sin_estado` and
+        # never as `afirma`. `coalesce` is what makes the absent case explicit
+        # instead of dropping the row.
+        #
+        # `count(cl.quote)` rather than a `WHERE`: Cypher's count skips nulls,
+        # so this is "how many of these carry a quote the code found in the
+        # chunk" in the same pass — and a claim nobody can check must not look
+        # like one that can.
+        cypher="""
+            MATCH (cl:Claim)-[:DERIVED_FROM]->(:Chunk)
+                  <-[:HAS_CHUNK]-(:DocumentVersion {id: $version_id, tenant_id: $tenant_id})
+            RETURN coalesce(cl.status, 'sin_estado') AS status,
+                   count(cl) AS claims, count(cl.quote) AS with_quote
+            ORDER BY claims DESC, status
+            LIMIT 25
+        """,
+        params=(Param("version_id", "id"), _TENANT),
+        planner_visible=False,
+    ),
+    Template(
+        id="version_concepts_reached",
+        summary="Cuántos conceptos distintos alcanza una versión, por las tres rutas.",
+        # **All three routes, deliberately the same ones
+        # `projection._CANDIDATE_CONCEPTS` and `auditversion.CONCEPTS_REACHED`
+        # walk.** A chunk reaches a concept by `MENTIONS`; a claim names one as
+        # its subject by `ABOUT` and a second by `INVOLVES`, neither of which
+        # carries a `MENTIONS` edge from any chunk. Following only the first is
+        # how claim-only concepts were orphaned once already, and a fourth route
+        # added there and not here makes this figure blind to exactly the
+        # concepts that route exists to reach.
+        #
+        # This is the one that has to stand alone: the three OPTIONAL MATCHes
+        # are over the same chunks, so folding it into `version_counts` would
+        # multiply 3 497 mentions by 3 055 claims for one integer.
+        cypher="""
+            MATCH (:DocumentVersion {id: $version_id, tenant_id: $tenant_id})
+                  -[:HAS_CHUNK]->(c:Chunk)
+            OPTIONAL MATCH (c)-[:MENTIONS]->(mentioned:Concept)
+            OPTIONAL MATCH (c)<-[:DERIVED_FROM]-(:Claim)-[:ABOUT]->(claimed:Concept)
+            OPTIONAL MATCH (c)<-[:DERIVED_FROM]-(:Claim)-[:INVOLVES]->(involved:Concept)
+            WITH collect(DISTINCT mentioned) + collect(DISTINCT claimed)
+                 + collect(DISTINCT involved) AS nodes
+            UNWIND nodes AS k
+            WITH DISTINCT k WHERE k IS NOT NULL
+            RETURN count(k) AS concepts
+            LIMIT 1
+        """,
+        params=(Param("version_id", "id"), _TENANT),
+        uses_semantic_edges=True,
+        planner_visible=False,
+    ),
+    # -- the set difference against a run's own artifact ----------------------
+    #
+    # Three reads whose rows are *keys*, not content, plus one that fetches text
+    # only for the chunks a stale claim named. They exist as templates rather
+    # than as `auditversion`'s literals because both planes serve this route and
+    # the paid one has no raw-Cypher path at all — deliberately, since a read
+    # surface a caller can name by id is the whole reason `validate_template`
+    # runs at import. The literals stay where they are: the audit script asks
+    # more of them than this does (wrong tenants, orphan claims), and it holds a
+    # write session anyway.
+    #
+    # Each raises its own ceiling and is therefore hidden from the planner —
+    # `Param.cap` and `planner_visible=False` are one decision, and a test keeps
+    # them from being separated.
+    Template(
+        id="version_claim_keys",
+        summary="Las claves de las afirmaciones que el grafo tiene de una versión.",
+        # `source_chunk_id` and `text` are the two inputs `claim_id` hashes, so
+        # the pair *is* the claim's identity without anything here deriving one.
+        # That is what keeps the tenant-salted id contract out of the fork this
+        # route needs on the paid plane.
+        cypher="""
+            MATCH (cl:Claim)-[:DERIVED_FROM]->(:Chunk)
+                  <-[:HAS_CHUNK]-(:DocumentVersion {id: $version_id, tenant_id: $tenant_id})
+            RETURN cl.source_chunk_id AS source_chunk_id, cl.text AS text,
+                   cl.quote AS quote
+            LIMIT $claim_limit
+        """,
+        params=(
+            Param("version_id", "id"),
+            _TENANT,
+            # 20 000 against 3 055 on the biggest version measured here, and
+            # 5 001 on the worst case ever recorded — a re-index that left the
+            # previous extraction behind. The ceiling has to clear the *stale*
+            # count, not the healthy one, because the stale rows are the finding.
+            Param("claim_limit", "int", required=False, default=20000, cap=20000),
+        ),
+        planner_visible=False,
+    ),
+    Template(
+        id="version_concept_ids",
+        summary="Los conceptos que el grafo tiene de una versión, por las tres rutas.",
+        # The same three routes as `version_concepts_reached` and
+        # `projection._CANDIDATE_CONCEPTS`. A fourth route added there and not
+        # here makes the difference blind to exactly the concepts it reaches.
+        cypher="""
+            MATCH (:DocumentVersion {id: $version_id, tenant_id: $tenant_id})
+                  -[:HAS_CHUNK]->(c:Chunk)
+            OPTIONAL MATCH (c)-[:MENTIONS]->(mentioned:Concept)
+            OPTIONAL MATCH (c)<-[:DERIVED_FROM]-(:Claim)-[:ABOUT]->(claimed:Concept)
+            OPTIONAL MATCH (c)<-[:DERIVED_FROM]-(:Claim)-[:INVOLVES]->(involved:Concept)
+            WITH collect(DISTINCT mentioned) + collect(DISTINCT claimed)
+                 + collect(DISTINCT involved) AS nodes
+            UNWIND nodes AS k
+            WITH DISTINCT k WHERE k IS NOT NULL
+            RETURN k.id AS id
+            LIMIT $concept_limit
+        """,
+        params=(
+            Param("version_id", "id"),
+            _TENANT,
+            Param("concept_limit", "int", required=False, default=20000, cap=20000),
+        ),
+        uses_semantic_edges=True,
+        planner_visible=False,
+    ),
+    Template(
+        id="version_mention_pairs",
+        summary="Las aristas MENTIONS que el grafo tiene de una versión.",
+        cypher="""
+            MATCH (:DocumentVersion {id: $version_id, tenant_id: $tenant_id})
+                  -[:HAS_CHUNK]->(c:Chunk)-[:MENTIONS]->(k:Concept)
+            RETURN c.id AS source_id, k.id AS target_id
+            LIMIT $mention_pair_limit
+        """,
+        params=(
+            Param("version_id", "id"),
+            _TENANT,
+            # 3 497 on the biggest version here; 7 554 in the recorded case
+            # where a re-index left 4 057 of them behind.
+            Param("mention_pair_limit", "int", required=False, default=60000, cap=60000),
+        ),
+        uses_semantic_edges=True,
+        planner_visible=False,
+    ),
+    Template(
+        id="chunk_texts",
+        summary="El texto que los fragmentos nombrados tienen ahora.",
+        # Named chunks only, never a whole version: this exists to check a stale
+        # claim's quote against the chunk it points at *now*, and the chunks a
+        # stale claim names are a handful where the version's are hundreds. The
+        # difference matters — every chunk's text is the whole document.
+        cypher="""
+            MATCH (c:Chunk)<-[:HAS_CHUNK]-(:DocumentVersion {id: $version_id,
+                                                             tenant_id: $tenant_id})
+            WHERE c.id IN $chunk_ids
+            RETURN c.id AS id, c.text AS text
+            LIMIT $limit
+        """,
+        params=(
+            Param("version_id", "id"),
+            _TENANT,
+            Param("chunk_ids", "id_list"),
+            _LIMIT,
+        ),
+        planner_visible=False,
+    ),
 )
 
 BY_ID: dict[str, Template] = {t.id: t for t in TEMPLATES}

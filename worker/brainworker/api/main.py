@@ -29,7 +29,7 @@ from fastapi.responses import StreamingResponse
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client
 
-from .. import auditlog, config
+from .. import auditlog, auditversion as av, config
 from ..artifacts import ArtifactRef, ArtifactStore
 from ..catalog import Catalog, MigrationError, current_version, require_schema
 from ..graph import DEFAULT_CONFIDENCE_FLOOR, Graph, GraphError
@@ -46,6 +46,8 @@ from ..chat.types import (
 )
 from ..graph.schema import LEGACY_TENANT_ID, SEMANTIC_EDGES
 from ..activities.rebuild import REQUIRED_ARTIFACT
+from ..answering.retrieve import MIN_SCORE
+from ..indexing import version_scope
 
 #: The artifact a measured run leaves behind. Named here rather than written as a
 #: literal at the two call sites, for the reason `REQUIRED_ARTIFACT` exists: the
@@ -1647,6 +1649,531 @@ async def activate_version_route(library_id: str, version_id: str) -> dict[str, 
             status_code=404, detail={"kind": e.kind, "message": str(e)}
         ) from e
     return result.as_dict()
+
+
+# ---------------------------------------------------------------------------
+# One version's statistics
+# ---------------------------------------------------------------------------
+#
+# `document_detail` answers "what versions does this document have". This
+# answers the question underneath it — **how big is this thing, what did the
+# extractor find in it, is the index still coherent with what the run produced,
+# and what did it cost** — which until now was answerable only through
+# `scripts/audit_version.py`, a CLI, whose first real use found that $1.1965 of
+# one document's $3.7572 (31.8%) bought nothing because a cancelled run
+# generated the eval set twice.
+#
+# Five legs, each with its own `available` flag. `/project-summary`'s rule and
+# not `/libraries/{id}/graph`'s: a stopped Memgraph must render as "could not
+# ask", naming the URL it tried, never as a 503 and never as a version with no
+# concepts. **A leg that could not answer carries no figures at all**, so one
+# cannot be quoted by accident.
+#
+# Every comparison is `auditversion`'s. `choose_stream`, `verify_spans`,
+# `chunk_sequence`, `semantic_diff`, `quote_still_locates`, `floor_verdict`,
+# `cost_by_stage` and `claim_shape` are pure and have tests that need no store,
+# and a second implementation here would be a second opinion about the same
+# rows — which is exactly what `scripts/audit_version.py` now does *not* have,
+# because it calls the same functions.
+
+#: How many distinct chunks a stale claim may name before the quote check stops
+#: sampling. `chunk_texts` is clamped to `MAX_LIMIT` anyway; naming the number
+#: here says the check is a *sample* when a version is badly stale, rather than
+#: letting the clamp silently decide. The recorded worst case — 4 988 claims
+#: left behind — touched far fewer chunks than that, because a stale claim names
+#: a chunk that still exists.
+STALE_CHUNK_SAMPLE = 200
+
+#: The templates this route runs, named once so the one-session helper cannot
+#: drift from them.
+_STATISTICS_TEMPLATES = (
+    "version_counts",
+    "version_chunk_kinds",
+    "version_section_levels",
+    "version_claim_shape",
+    "version_concepts_reached",
+)
+
+
+def _iso(value: Any) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _graph_detail(memgraph_url: str, error: Exception) -> str:
+    """The URL that was tried, and Memgraph's own `kind` when it has one.
+
+    `graph_unreachable` and `graph_refused` are different problems — a stopped
+    container against a query the database rejected — and both reach a caller as
+    the same exception type. A leg that says only "unavailable" sends the reader
+    to restart something that is already running.
+    """
+    kind = getattr(error, "kind", None)
+    return f"{memgraph_url}: {f'[{kind}] ' if kind else ''}{error}"
+
+
+def _statistics_counts(
+    memgraph_url: str, version_id: str, tenant_id: str
+) -> tuple[dict[str, list[dict[str, Any]]] | None, str]:
+    """Run the five statistics templates in **one** session.
+
+    Not `_explore`, and the difference is why this exists: `_explore` turns a
+    `GraphError` into a 503, which is right for a screen whose entire content is
+    the graph and wrong for a pane where the graph is one leg of five. Returning
+    `None` with the detail lets each caller render `auditversion.unavailable`
+    rather than failing the whole request.
+
+    One session rather than five, because five connections to answer five counts
+    is five handshakes for reads measured at 2 ms each.
+    """
+    args = {"version_id": version_id, "tenant_id": tenant_id}
+    try:
+        with Graph(memgraph_url) as graph:
+            return {
+                name: [dict(row.data) for row in graph.query(name, args)]
+                for name in _STATISTICS_TEMPLATES
+            }, ""
+    except GraphError as e:
+        return None, _graph_detail(memgraph_url, e)
+
+
+def _statistics_streams(store: ArtifactStore) -> dict[str, bytes]:
+    """Every extracted stream this run left on disk, by label.
+
+    A `char_span` indexes one of `raw.txt`, `extracted.txt`, `corrected.txt` or
+    a video's `transcript.txt`, and **nothing records which** — no artifact, no
+    column, no event. Choosing by precedence reads as obvious and fails in the
+    expensive direction: measured on `ver_0ebf4f0b50a27202db3fcca6`, `raw.txt`
+    verifies 8 of 600 spans where `extracted.txt` verifies 600 of 600. So every
+    stream present is scored and `choose_stream` picks by the numbers.
+    """
+    out: dict[str, bytes] = {}
+    for name, label in av.STREAMS:
+        path = store.run_dir / name
+        if path.is_file():
+            out[label] = path.read_bytes()
+    return out
+
+
+def _artifact_ref(artifacts: list[dict[str, Any]], name: str) -> ArtifactRef | None:
+    row = next((a for a in artifacts if a.get("name") == name), None)
+    if row is None:
+        return None
+    return ArtifactRef(
+        kind=name,
+        path=row["rel_path"],
+        sha256=row["sha256"],
+        bytes=row["size_bytes"],
+    )
+
+
+def _structure_leg(
+    s: config.Settings,
+    *,
+    run_id: str | None,
+    tenant_id: str,
+    version_id: str,
+    artifacts: list[dict[str, Any]],
+    rows: dict[str, list[dict[str, Any]]] | None,
+    graph_detail: str,
+) -> dict[str, Any]:
+    """How big this version is, in the graph, in Qdrant, and against the bytes."""
+    if rows is None:
+        graph_leg: dict[str, Any] = av.unavailable(None, graph_detail)
+    else:
+        counts = (rows["version_counts"] or [{}])[0]
+        graph_leg = av.leg(
+            None,
+            {
+                "chunks": int(counts.get("chunks") or 0),
+                "sections": int(counts.get("sections") or 0),
+                "citations": int(counts.get("citations") or 0),
+                "claims": int(counts.get("claims") or 0),
+                # Spanish on the wire, like everywhere else these travel: chunk
+                # kinds are stored in Qdrant payloads and used in filters, so
+                # renaming them breaks every existing collection. The UI maps
+                # them to localised labels.
+                "kinds": {
+                    str(r["kind"]): int(r["chunks"])
+                    for r in rows["version_chunk_kinds"]
+                    if r.get("kind") is not None
+                },
+                "section_levels": {
+                    str(r["level"]): int(r["sections"])
+                    for r in rows["version_section_levels"]
+                    if r.get("level") is not None
+                },
+            },
+        )
+
+    scope = version_scope(tenant_id, version_id)
+    try:
+        from docagent.qdrant import Qdrant
+
+        with Qdrant(s.qdrant_url, s.qdrant_collection) as q:
+            # `count`, not `scroll`: exact, one round trip, and no payloads. The
+            # kind histogram the audit gets by scrolling comes from the graph
+            # here, which already holds `c.kind` — a page of JSON for two
+            # histograms is not a trade worth making on an interactive read.
+            qdrant_leg: dict[str, Any] = av.leg(None, {"points": q.count(scope)})
+    except Exception as e:  # noqa: BLE001 — any store failure degrades this leg
+        qdrant_leg = av.unavailable(
+            None, f"{s.qdrant_url}/{s.qdrant_collection}: {e}"
+        )
+
+    report: dict[str, Any] = {
+        "source_run": run_id,
+        "scope": scope,
+        "graph": graph_leg,
+        "qdrant": qdrant_leg,
+        # **Always present, and `None` until all three have answered.** A
+        # verdict that is sometimes absent and sometimes null is two spellings
+        # of the same fact, and a client reading `undefined` has to know which
+        # one it is looking at. `None` is "could not compare" throughout; only
+        # `False` is the claim that they disagree.
+        "counts_agree": None,
+    }
+
+    ref = _artifact_ref(artifacts, REQUIRED_ARTIFACT) if run_id else None
+    if run_id is None or ref is None:
+        # No `chunks.jsonl` is the same fact `document_detail.can_rebuild`
+        # reports. The graph and Qdrant halves still answer, so this is a leg
+        # with one half missing rather than a leg that could not run.
+        report["artifacts"] = av.unavailable(
+            None,
+            "ningún run conserva chunks.jsonl para esta versión, así que no hay "
+            "con qué comparar los tramos",
+        )
+        return av.leg(None, report)
+
+    try:
+        store = ArtifactStore(s.workspace, run_id)
+        chunks = store.read_jsonl(ref)
+        streams = _statistics_streams(store)
+    except Exception as e:  # noqa: BLE001
+        report["artifacts"] = av.unavailable(None, str(e))
+        return av.leg(None, report)
+
+    if not streams:
+        report["artifacts"] = av.unavailable(
+            None,
+            f"no hay flujo extraído bajo {store.run_dir}; se buscó "
+            + ", ".join(name for name, _ in av.STREAMS),
+        )
+        return av.leg(None, report)
+
+    picked = av.choose_stream(streams, chunks)
+    report["artifacts"] = av.leg(
+        None,
+        {
+            "stream": picked["chosen"],
+            "stream_verifies_completely": picked["unanimous"],
+            "streams_considered": picked["streams"],
+            "spans": picked["report"],
+            "sequence": av.chunk_sequence(chunks, len(streams[picked["chosen"]])),
+        },
+    )
+    if graph_leg["available"] and qdrant_leg["available"]:
+        report["counts_agree"] = (
+            graph_leg["chunks"] == picked["report"]["chunks"] == qdrant_leg["points"]
+        )
+    return av.leg(None, report)
+
+
+def _semantics_leg(
+    s: config.Settings,
+    *,
+    run_id: str | None,
+    tenant_id: str,
+    version_id: str,
+    artifacts: list[dict[str, Any]],
+    rows: dict[str, list[dict[str, Any]]] | None,
+    graph_detail: str,
+) -> dict[str, Any]:
+    """What the extractor found, and what the graph still holds of it."""
+    if rows is None:
+        return av.unavailable(None, graph_detail)
+
+    shape = av.claim_shape(rows["version_claim_shape"])
+    concepts_row = (rows["version_concepts_reached"] or [{}])[0]
+    report: dict[str, Any] = {
+        "source_run": run_id,
+        "in_store": {
+            "claims": shape["claims"],
+            # A claim carrying a quote the code located in its own chunk is one
+            # somebody can check; one without is not. They must not render
+            # alike, which is the whole reason `claims_verified` exists.
+            "with_a_quote": shape["with_a_quote"],
+            # `sin_estado` is its own key and never folded into `afirma`: a text
+            # expounding the doctrine it is about to rebut enunciates it in the
+            # same words as one who holds it.
+            "by_status": shape["by_status"],
+            "concepts": int(concepts_row.get("concepts") or 0),
+        },
+    }
+
+    ref = _artifact_ref(artifacts, "semantics") if run_id else None
+    if run_id is None or ref is None:
+        # The graph's own counts stand. What is absent is the *comparison*, and
+        # saying so is not the same as reporting convergence.
+        report["diff"] = av.unavailable(
+            None,
+            "ningún run conserva semantics.json para esta versión, así que no se "
+            "puede saber qué quedó de más o de menos",
+        )
+        return av.leg(None, report)
+
+    try:
+        doc = ArtifactStore(s.workspace, run_id).read_json(ref)
+    except Exception as e:  # noqa: BLE001
+        report["diff"] = av.unavailable(None, str(e))
+        return av.leg(None, report)
+
+    scope = {"version_id": version_id, "tenant_id": tenant_id}
+    try:
+        with Graph(s.memgraph_url) as graph:
+            # Templates rather than `auditversion`'s literals, and one session
+            # for all of them. The literals stay where they are — the audit
+            # script asks more of them than this does — but this route is served
+            # by both planes, and the paid one has no raw-Cypher path at all.
+            claims = [r.data for r in graph.query("version_claim_keys", scope)]
+            concepts = [r.data for r in graph.query("version_concept_ids", scope)]
+            mentions = [r.data for r in graph.query("version_mention_pairs", scope)]
+            stale = av.stale_claims(doc, claims)
+            # Text for the chunks a *stale* claim named, and no others. Every
+            # chunk's text is the whole document, and a converged version — the
+            # ordinary case — reads none of it.
+            chunk_rows = (
+                [
+                    r.data
+                    for r in graph.query(
+                        "chunk_texts",
+                        {
+                            **scope,
+                            "chunk_ids": sorted(
+                                {
+                                    c["source_chunk_id"]
+                                    for c in stale
+                                    if c.get("source_chunk_id")
+                                }
+                            )[:STALE_CHUNK_SAMPLE],
+                            "limit": STALE_CHUNK_SAMPLE,
+                        },
+                    )
+                ]
+                if stale
+                else []
+            )
+    except (GraphError, TemplateError) as e:
+        report["diff"] = av.unavailable(None, _graph_detail(s.memgraph_url, e))
+        return av.leg(None, report)
+
+    # A stale claim's quote *was* verified — against a chunk that has since been
+    # re-cut. Checking it against the text the chunk holds now is the one check
+    # `claims_verified` cannot make from inside its own run, and it is what
+    # separates harmless debris from a claim that reads exactly like a good one.
+    text_by_chunk = {c["id"]: c.get("text") for c in chunk_rows}
+    quoted = unlocatable = 0
+    for claim in stale:
+        verdict = av.quote_still_locates(
+            claim.get("quote"), text_by_chunk.get(claim.get("source_chunk_id"))
+        )
+        if verdict is None:
+            continue
+        quoted += 1
+        if not verdict:
+            unlocatable += 1
+
+    report["extractor_model"] = doc.get("extractor_model")
+    report["diff"] = av.leg(
+        None,
+        {
+            **av.semantic_diff(
+                doc, claims=claims, concepts=concepts, mentions=mentions
+            ),
+            "stale_claim_quotes": {
+                "with_a_quote": quoted,
+                "quote_no_longer_locates": unlocatable,
+            },
+        },
+    )
+    return av.leg(None, report)
+
+
+def _retrieval_leg(run_id: str | None, scores: dict[str, Any] | None) -> dict[str, Any]:
+    """What this index can actually be asked, and whether its floor is honest.
+
+    `scores is None` means **nobody measured**, which is true of every version
+    indexed before the eval stage existed and of every run whose gate declined
+    it. It is not a recall of zero, and the two must not render alike.
+    """
+    if scores is None:
+        return av.unavailable(
+            None,
+            "ningún run midió esta versión; no es lo mismo que una recuperación "
+            "de cero",
+        )
+    floor = scores.get("noise_floor")
+    return av.leg(
+        None,
+        {
+            "source_run": run_id,
+            "scores": scores,
+            # A `min_score` at or below the measured noise floor wins the metric
+            # by admitting exactly what the floor was measured to exclude — and
+            # it looks like an improvement, because every eval question has a
+            # right answer to find and none of them is off-corpus.
+            "floor": av.floor_verdict(MIN_SCORE, floor) if floor is not None else None,
+        },
+    )
+
+
+@app.get("/libraries/{library_id}/versions/{version_id}/statistics")
+def version_statistics(library_id: str, version_id: str) -> dict[str, Any]:
+    """What one indexed version holds, what it cost, and what still agrees.
+
+    Read-only across all three stores and the run's own artifacts. Nothing here
+    writes and nothing here spends.
+    """
+    s = settings()
+    with Catalog(s.database_url) as catalog:
+        # The predicate is `removal.remove_version`'s in shape: a version is
+        # reached through the documents that hold it, and a document is only
+        # this caller's if it is in this library and this organisation. **A
+        # salted id is not authorization** — it is `digest(tenant, content)`,
+        # and a tenant id is a value its own members hold, so a member of A who
+        # has the same file as B can recompute B's `ver_`. The lookup is what
+        # refuses. 404 and never 403, the same decision `activate_version`
+        # records: which organisations exist is not this caller's business.
+        holders = catalog.documents_holding(version_id)
+        owners = [
+            catalog.document(h, library_id=library_id, tenant_id=LEGACY_TENANT_ID)
+            for h in holders
+        ]
+        in_library = [d for d in owners if d is not None]
+        if not in_library:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "kind": "version_not_found",
+                    "message": (
+                        f"no existe la versión {version_id!r} en la biblioteca "
+                        f"{library_id!r}"
+                    ),
+                },
+            )
+        document = in_library[0]
+        tenant_id = document.tenant_id
+        version = next(
+            (v for v in catalog.versions_of(document.id) if v.id == version_id), None
+        )
+        active = catalog.active_version(document.id) == version_id
+        runs = catalog.runs(tenant_id=tenant_id, version_id=version_id, limit=50)
+        # Which run to read an artifact from is a question per *artifact*, not
+        # per version: a rebuild replays an older run's chunks while a later run
+        # measured the index, so the newest succeeded run holding that artifact
+        # is the honest source for it. `latest_run_with_artifact` already
+        # restricts itself to runs that succeeded.
+        chunks_run = catalog.latest_run_with_artifact(version_id, REQUIRED_ARTIFACT)
+        semantics_run = catalog.latest_run_with_artifact(version_id, "semantics")
+        scores_run = catalog.latest_run_with_artifact(version_id, SCORES_ARTIFACT)
+        artifacts_for = {
+            run: catalog.artifacts(run)
+            for run in {chunks_run, semantics_run, scores_run}
+            if run
+        }
+        scores = (
+            _measured_scores(s.workspace, scores_run, artifacts_for[scores_run])
+            if scores_run
+            else None
+        )
+        # **A version's bill is not one run's bill**, which is what this leg
+        # exists for: grouping `cost_entry` across every run of the version is
+        # what makes a stage charged in more than one of them visible at all.
+        ledger = av.cost_by_stage(
+            [
+                {
+                    "run_id": r.id,
+                    "state": r.state,
+                    "costs": [
+                        {
+                            "stage": c.stage,
+                            "usd": None if c.usd is None else float(c.usd),
+                        }
+                        for c in catalog.costs(r.id, tenant_id=tenant_id)
+                    ],
+                }
+                for r in runs
+            ]
+        )
+        warnings = catalog.open_profile_warnings(version_id)
+
+    catalog_leg = (
+        av.leg(
+            None,
+            {
+                "content_sha256": version.content_sha256,
+                "byte_size": version.byte_size,
+                # The column exists and nothing writes it: `register_version`
+                # runs before extraction, so the page count is not knowable
+                # there. `null` is the measurement rather than a zero — the
+                # field starts working by itself the day something fills it.
+                "page_count": version.page_count,
+                "state": version.state,
+                "active": active,
+                "created_at": _iso(version.created_at),
+                "activated_at": _iso(version.activated_at),
+                "failed_reason": version.failed_reason,
+                "runs": len(runs),
+                "rebuild_run_id": chunks_run,
+                "profile_warnings": [
+                    {
+                        **w,
+                        # `_topical_overlap` compares against the profile's
+                        # `learned_from` filename stem using evidence only
+                        # `pdf_text` fills in, so for a plain-text document it
+                        # returns 0.0 by construction — and 0.0 is documented as
+                        # the *most dangerous* case. Flagged rather than
+                        # repeated as though it were a measurement.
+                        "comparable": bool(w.get("similarity")),
+                    }
+                    for w in warnings
+                ],
+            },
+        )
+        if version is not None
+        else av.unavailable(
+            None, f"la versión {version_id!r} ya no tiene fila en el catálogo"
+        )
+    )
+
+    rows, graph_detail = _statistics_counts(s.memgraph_url, version_id, tenant_id)
+
+    return {
+        "library_id": library_id,
+        "document_id": document.id,
+        "version_id": version_id,
+        "catalog": catalog_leg,
+        "structure": _structure_leg(
+            s,
+            run_id=chunks_run,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            artifacts=artifacts_for.get(chunks_run or "", []),
+            rows=rows,
+            graph_detail=graph_detail,
+        ),
+        "semantics": _semantics_leg(
+            s,
+            run_id=semantics_run,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            artifacts=artifacts_for.get(semantics_run or "", []),
+            rows=rows,
+            graph_detail=graph_detail,
+        ),
+        "retrieval": _retrieval_leg(scores_run, scores),
+        "ledger": av.leg(None, ledger),
+    }
 
 
 @app.post("/libraries/{library_id}/documents/{document_id}/reindex")

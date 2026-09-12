@@ -1364,6 +1364,192 @@ export interface DocumentDetail {
 }
 
 /**
+ * One version's statistics, in five legs that fail independently.
+ *
+ * **Every figure is optional because `available: false` carries none of them.**
+ * That is the contract, not defensive typing: a stopped Memgraph must render as
+ * "could not ask" and never as a version with no concepts, and a run nobody
+ * measured must never render as a recall of zero. A required field here would
+ * force a default at the one layer that could invent one.
+ */
+export interface StatLeg {
+  available: boolean;
+  /** Why it could not answer — and for a store, the URL that was tried. */
+  detail: string;
+}
+
+export interface VersionProfileWarning {
+  profileId: string | null;
+  collidesWith: string | null;
+  similarity: number | null;
+  detail: string | null;
+  /** `_topical_overlap` returns 0 by construction for a plain-text document,
+   *  and 0 is the *most dangerous* case — same structure, unrelated subject
+   *  matter. false means the figure beside it is not a measurement. */
+  comparable: boolean;
+}
+
+export interface VersionCatalogLeg extends StatLeg {
+  contentSha256?: string | null;
+  byteSize?: number | null;
+  /** A column nothing writes: `register_version` runs before extraction. null
+   *  is the measurement, and it starts working the day something fills it. */
+  pageCount?: number | null;
+  state?: string | null;
+  active?: boolean | null;
+  createdAt?: string | null;
+  activatedAt?: string | null;
+  failedReason?: string | null;
+  runs?: number | null;
+  rebuildRunId?: string | null;
+  profileWarnings?: VersionProfileWarning[];
+}
+
+export interface VersionGraphLeg extends StatLeg {
+  chunks?: number | null;
+  sections?: number | null;
+  citations?: number | null;
+  claims?: number | null;
+  /** Keyed by the chunk kind as stored — `cuerpo`, `preguntas`, `nota`. They
+   *  stay Spanish on the wire because they are Qdrant payload values used in
+   *  filters; the UI maps them to localised labels. */
+  kinds?: Record<string, number>;
+  sectionLevels?: Record<string, number>;
+}
+
+export interface VersionQdrantLeg extends StatLeg {
+  points?: number | null;
+}
+
+export interface VersionStreamScore {
+  bytes: number;
+  spansVerified: number;
+  spansMismatched: number;
+}
+
+export interface VersionSpans {
+  chunks: number;
+  spansVerified: number;
+  spansMismatched: number;
+  bytes: number;
+}
+
+export interface VersionSequence {
+  indices: number;
+  contiguous: boolean;
+  missingIndices: number[];
+  duplicateIndices: number[];
+  bytesCovered: number;
+  bytesTotal: number;
+  coverage: number;
+}
+
+export interface VersionArtifactsLeg extends StatLeg {
+  /** Which stream the `char_span`s index. Nothing records it, so it is chosen
+   *  by scoring every stream present — on one real version `raw.txt` verified
+   *  8 of 600 spans where `extracted.txt` verified 600. */
+  stream?: string | null;
+  streamVerifiesCompletely?: boolean | null;
+  streamsConsidered?: Record<string, VersionStreamScore>;
+  spans?: VersionSpans | null;
+  sequence?: VersionSequence | null;
+}
+
+export interface VersionStructureLeg extends StatLeg {
+  sourceRun?: string | null;
+  graph: VersionGraphLeg;
+  qdrant: VersionQdrantLeg;
+  artifacts: VersionArtifactsLeg;
+  /** null is "could not compare"; only false is the claim that they disagree. */
+  countsAgree?: boolean | null;
+}
+
+export interface VersionSemanticsInStore {
+  claims: number;
+  /** Claims carrying a quote the code located in their own chunk. One nobody
+   *  can check must not look like one that can. */
+  withAQuote: number;
+  /** `afirma` / `niega` / `atribuido` / `sin_estado`, and the last is never
+   *  folded into the first: a text expounding the doctrine it is about to rebut
+   *  enunciates it in the same words as one who holds it. */
+  byStatus: Record<string, number>;
+  concepts: number;
+}
+
+export interface VersionStaleDiff {
+  produced: number;
+  inStore: number;
+  converged: number;
+  /** What the graph holds and this run did not make. Not inert: a stale claim
+   *  stays attached to a chunk whose text has moved. */
+  leftBehind: number;
+  /** Its mirror — a projection that did not finish. */
+  missing: number;
+  staleShare: number | null;
+  /** Concepts only: the names extracted before `canonical_concept` folds them,
+   *  so the fold does not read as a loss. */
+  namesExtracted?: number | null;
+}
+
+export interface VersionSemanticsDiff extends StatLeg {
+  claims?: VersionStaleDiff | null;
+  concepts?: VersionStaleDiff | null;
+  mentions?: VersionStaleDiff | null;
+  staleClaimQuotes?: { withAQuote: number; quoteNoLongerLocates: number } | null;
+}
+
+export interface VersionSemanticsLeg extends StatLeg {
+  sourceRun?: string | null;
+  extractorModel?: string | null;
+  inStore?: VersionSemanticsInStore | null;
+  diff?: VersionSemanticsDiff | null;
+}
+
+export interface VersionFloor {
+  minScore: number;
+  noiseFloor: number;
+  headroom: number;
+  /** false means the floor admits exactly what it was measured to exclude. */
+  honest: boolean;
+}
+
+export interface VersionRetrievalLeg extends StatLeg {
+  sourceRun?: string | null;
+  scores?: RunScores | null;
+  floor?: VersionFloor | null;
+}
+
+export interface VersionStageCost {
+  usd: number;
+  /** Every run that charged this stage. More than one is the finding. */
+  runs: string[];
+  /** A missing price under-reports the bill rather than describing a free call,
+   *  so it is counted and never totalled as zero. */
+  unpricedEntries: number;
+}
+
+export interface VersionLedgerLeg extends StatLeg {
+  byStage?: Record<string, VersionStageCost>;
+  totalUsd?: number;
+  chargedInMoreThanOneRun?: string[];
+  /** Split by the terminal state of the run that incurred it. A split rather
+   *  than one figure called "wasted": a cancelled run bought nothing durable,
+   *  but a failed one can still have left a complete index behind. */
+  usdByRunState?: Record<string, number>;
+}
+
+export interface VersionStatistics {
+  libraryId: string;
+  documentId: string;
+  versionId: string;
+  catalog: VersionCatalogLeg;
+  structure: VersionStructureLeg;
+  semantics: VersionSemanticsLeg;
+  retrieval: VersionRetrievalLeg;
+  ledger: VersionLedgerLeg;
+}
+
+/**
  * What a removal destroyed, and what it deliberately kept.
  *
  * The map keys inside `graph`, `catalog` and `kept` come straight from Python
@@ -1543,6 +1729,11 @@ export const api = {
   // -- the Library's three verbs --------------------------------------------
   documentDetail: (libraryId: string, documentId: string) =>
     invoke<DocumentDetail>("document_detail", { libraryId, documentId }),
+  /** What one version holds, cost, and still agrees with. Reads three stores
+   *  and two artifacts, so it is fetched when a person asks rather than with
+   *  the detail. Free: nothing behind it writes and nothing behind it spends. */
+  versionStatistics: (libraryId: string, versionId: string) =>
+    invoke<VersionStatistics>("version_statistics", { libraryId, versionId }),
   /** Irreversible, and free. The screen confirms before calling this. */
   documentRemove: (libraryId: string, documentId: string) =>
     invoke<Removal>("document_remove", { libraryId, documentId }),

@@ -76,7 +76,7 @@ from brainworker.graph.projection import (  # noqa: E402
     _CANDIDATE_CONCEPTS,
     _COUNT_VERSION_SUBGRAPH,
 )
-from brainworker.graph.schema import chunk_id, claim_id, concept_id  # noqa: E402
+from brainworker.graph.schema import chunk_id  # noqa: E402
 from brainworker.indexing import version_scope  # noqa: E402
 
 # Not a decoration: `projection.py` runs these two through the write path, and
@@ -364,7 +364,8 @@ def _audit_graph(
         return av.unavailable("graph", f"{version} is not in the projection")
 
     counts = _rows(g, _COUNT_VERSION_SUBGRAPH, {"version_id": version})[0]
-    graph_chunks = _rows(g, av.CHUNK_NODES, {"version_id": version})
+    scope = {"version_id": version, "tenant_id": tenant_id}
+    graph_chunks = _rows(g, av.CHUNK_NODES, scope)
     sections = _rows(g, av.SECTION_NODES, {"version_id": version})
     citations = _rows(g, av.CITATION_NODES, {"version_id": version})
 
@@ -438,24 +439,13 @@ def audit_semantics(
         )
     doc = json.loads(path.read_text(encoding="utf-8"))
 
-    produced_claims = {
-        claim_id(c["source_chunk_id"], c["text"]) for c in doc.get("claims", [])
-    }
-    produced_concepts = {
-        concept_id(c["name"], tenant_id) for c in doc.get("concepts", [])
-    }
-    produced_mentions = {
-        (e["source_id"], e["target_id"])
-        for e in doc.get("edges", [])
-        if e.get("type") == "MENTIONS"
-    }
-
     try:
         with Graph(settings.memgraph_url) as g:
-            claims = _rows(g, av.CLAIM_NODES, {"version_id": version})
-            concepts = _rows(g, av.CONCEPTS_REACHED, {"version_id": version})
-            mentions = _rows(g, av.MENTION_EDGES, {"version_id": version})
-            chunk_rows = _rows(g, av.CHUNK_NODES, {"version_id": version})
+            scope = {"version_id": version, "tenant_id": tenant_id}
+            claims = _rows(g, av.CLAIM_NODES, scope)
+            concepts = _rows(g, av.CONCEPTS_REACHED, scope)
+            mentions = _rows(g, av.MENTION_EDGES, scope)
+            chunk_rows = _rows(g, av.CHUNK_NODES, scope)
             orphans = _rows(
                 g, av.ORPHAN_CLAIMS, {"chunk_ids": [c["id"] for c in chunk_rows]}
             )
@@ -463,8 +453,15 @@ def audit_semantics(
     except Exception as e:  # noqa: BLE001
         return av.unavailable("semantics", _graph_detail(settings, e))
 
-    claim_diff = av.stale_diff(produced_claims, (c["id"] for c in claims))
-    stale_ids = set(c["id"] for c in claims) - produced_claims
+    # The three set differences, keyed on the *pre-images* of the derived ids
+    # rather than on the ids. `auditversion.semantic_diff` records why; the short
+    # version is that the paid plane has to make the same comparison, and keying
+    # on `claim_id`/`concept_id` would fork the tenant-salted id contract into a
+    # second language. Measured on this version's own artifact: 3 055 claims,
+    # 3 055 distinct pre-image keys, 3 055 distinct `claim_id`s — the partition
+    # is identical, and 2 634 concept names fold to 2 517 ids either way.
+    diff = av.semantic_diff(doc, claims=claims, concepts=concepts, mentions=mentions)
+    stale = av.stale_claims(doc, claims)
 
     # A stale claim's quote was verified — against a chunk that has since been
     # re-cut. Checking it against the text the chunk holds *now* is what makes
@@ -473,9 +470,7 @@ def audit_semantics(
     text_by_chunk = {c["id"]: c for c in chunk_rows}
     unlocatable = 0
     quoted = 0
-    for c in claims:
-        if c["id"] not in stale_ids:
-            continue
+    for c in stale:
         chunk = text_by_chunk.get(c.get("source_chunk_id"))
         verdict = av.quote_still_locates(c.get("quote"), _chunk_text(chunk))
         if verdict is None:
@@ -489,21 +484,7 @@ def audit_semantics(
         {
             "source_run": run_id,
             "extractor_model": doc.get("extractor_model"),
-            "claims": claim_diff,
-            "concepts": {
-                # The names the run extracted, before `concept_id` folds them.
-                # Reported beside the diff because the two differ legitimately:
-                # `canonical_concept` strips accents and punctuation, so
-                # "Espíritu Santo" and "Espiritu santo" are one node and two
-                # names, and a reader comparing `produced` against
-                # `semantics.json` would otherwise read the fold as a loss.
-                "names_extracted": len(doc.get("concepts", [])),
-                **av.stale_diff(produced_concepts, (c["id"] for c in concepts)),
-            },
-            "mentions": av.stale_diff(
-                produced_mentions,
-                ((m["source_id"], m["target_id"]) for m in mentions),
-            ),
+            **diff,
             "stale_claim_quotes": {
                 "with_a_quote": quoted,
                 "quote_no_longer_locates": unlocatable,
@@ -545,7 +526,7 @@ def _chunk_text(chunk: dict[str, Any] | None) -> str | None:
 
 
 def audit_trail(cat: Catalog, *, tenant_id: str, runs: list[Any]) -> dict:
-    per_run, totals = [], {}
+    per_run, charged = [], []
     for run in runs:
         events = cat.run_events(run.id, tenant_id=tenant_id)
         costs = cat.costs(run.id, tenant_id=tenant_id)
@@ -563,16 +544,16 @@ def audit_trail(cat: Catalog, *, tenant_id: str, runs: list[Any]) -> dict:
             else None
         )
 
-        for c in costs:
-            entry = totals.setdefault(
-                c.stage, {"usd": 0.0, "runs": [], "unpriced": 0}
-            )
-            if c.usd is None:
-                entry["unpriced"] += 1
-            else:
-                entry["usd"] += float(c.usd)
-            if run.id not in entry["runs"]:
-                entry["runs"].append(run.id)
+        charged.append(
+            {
+                "run_id": run.id,
+                "state": run.state,
+                "costs": [
+                    {"stage": c.stage, "usd": None if c.usd is None else float(c.usd)}
+                    for c in costs
+                ],
+            }
+        )
 
         per_run.append(
             {
@@ -609,24 +590,21 @@ def audit_trail(cat: Catalog, *, tenant_id: str, runs: list[Any]) -> dict:
             }
         )
 
-    paid_twice = {
-        stage: data
-        for stage, data in totals.items()
-        if len(data["runs"]) > 1
-    }
+    # Shared with `/libraries/{id}/versions/{id}/statistics`, not copied: the
+    # rule that a version's bill is not one run's bill is the finding, and two
+    # implementations of it would be two answers about the same rows.
+    ledger = av.cost_by_stage(charged)
+    by_stage = ledger["by_stage"]
     return av.leg(
         "trail",
         {
             "runs": per_run,
-            "cost_by_stage": {
-                s: {"usd": round(d["usd"], 6), "runs": d["runs"],
-                    "unpriced_entries": d["unpriced"]}
-                for s, d in sorted(totals.items())
-            },
-            "total_usd": round(sum(d["usd"] for d in totals.values()), 6),
-            "charged_in_more_than_one_run": sorted(paid_twice),
+            "cost_by_stage": by_stage,
+            "total_usd": ledger["total_usd"],
+            "charged_in_more_than_one_run": ledger["charged_in_more_than_one_run"],
+            "usd_by_run_state": ledger["usd_by_run_state"],
             "semantics_charged_in": sorted(
-                {r for s in SEMANTICS_STAGES for r in totals.get(s, {}).get("runs", [])}
+                {r for s in SEMANTICS_STAGES for r in by_stage.get(s, {}).get("runs", [])}
             ),
         },
     )

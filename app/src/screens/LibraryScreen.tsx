@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { VersionAudit } from "../RunAudit";
+import { VersionStatistics } from "./VersionStatistics";
 
 import {
   api,
@@ -8,7 +9,6 @@ import {
   type DocumentDetail,
   type DocumentRow,
   type Removal,
-  type RunScores,
 } from "../lib/api";
 import { useLibraries } from "../lib/libraries";
 
@@ -27,54 +27,6 @@ import { useLibraries } from "../lib/libraries";
  * component. It also lets the confirmation name what is about to be destroyed
  * *and* what survives, which "are you sure?" cannot.
  */
-/** What one version's index can be asked.
- *
- * Rendered only when a run measured it, never as zeros: every version on this
- * installation predates the stage, and "recall 0.00" would send somebody to fix
- * an index that is fine.
- *
- * The five figures go together on purpose. `recallAt5` alone flatters the index,
- * because the questions were generated *from* the chunks they must find and
- * therefore leak vocabulary to the lexical leg — the gap to `recallAt5DenseOnly`
- * is that leakage. And the noise floor is what a *wrong* answer scores, without
- * which a reader cannot tell an index that discriminates from one that returns
- * everything at a similar distance.
- */
-function Scores({ scores }: { scores: RunScores }) {
-  const { t } = useTranslation();
-  const pct = (n: number) => `${(n * 100).toFixed(0)}%`;
-  return (
-    <dl className="scores">
-      <div>
-        <dt>{t("library.scores.recall5")}</dt>
-        <dd>{pct(scores.recallAt5)}</dd>
-      </div>
-      <div>
-        <dt>{t("library.scores.recall1")}</dt>
-        <dd>{pct(scores.recallAt1)}</dd>
-      </div>
-      <div>
-        <dt>{t("library.scores.mrr")}</dt>
-        <dd>{scores.mrrAt10.toFixed(3)}</dd>
-      </div>
-      <div>
-        <dt>{t("library.scores.denseOnly")}</dt>
-        <dd>{pct(scores.recallAt5DenseOnly)}</dd>
-      </div>
-      <div>
-        <dt>{t("library.scores.noiseFloor")}</dt>
-        <dd>{scores.noiseFloor.toFixed(3)}</dd>
-      </div>
-      <p className="muted basis">
-        {t("library.scores.basis", {
-          questions: scores.evalQuestions,
-          chunks: scores.chunks,
-          misses: scores.misses,
-        })}
-      </p>
-    </dl>
-  );
-}
 
 export function LibraryScreen() {
   const { t } = useTranslation();
@@ -94,6 +46,10 @@ export function LibraryScreen() {
   /** Which version's audit is open, if any. One at a time: two ledgers side by
    *  side in a table cell is unreadable, and the question is about one version. */
   const [auditing, setAuditing] = useState<string | null>(null);
+  // One at a time, like the audit panel beside it: the pane reads three
+  // stores and two artifacts, so opening every version's at once would be a
+  // burst of work nobody asked for.
+  const [statsFor, setStatsFor] = useState<string | null>(null);
   const [removed, setRemoved] = useState<Removal | null>(null);
   const [started, setStarted] = useState<{ kind: string; id: string } | null>(
     null,
@@ -456,7 +412,27 @@ export function LibraryScreen() {
                                     ? t("library.detail.hideAudit")
                                     : t("library.detail.showAudit")}
                                 </button>
-                                {v.scores && <Scores scores={v.scores} />}
+                                {/* How big it is, what the extractor found,
+                                    whether the three stores still agree, and
+                                    what it cost across every run that touched
+                                    it. Fetched on demand — free, but three
+                                    stores and two artifacts. */}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setStatsFor(statsFor === v.id ? null : v.id)
+                                  }
+                                >
+                                  {statsFor === v.id
+                                    ? t("library.detail.hideStats")
+                                    : t("library.detail.showStats")}
+                                </button>
+                                {statsFor === v.id && libraryId && (
+                                  <VersionStatistics
+                                    libraryId={libraryId}
+                                    versionId={v.id}
+                                  />
+                                )}
                                 {auditing === v.id && <VersionAudit versionId={v.id} />}
                               </li>
                             ))}

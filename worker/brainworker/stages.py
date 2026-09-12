@@ -102,6 +102,15 @@ VIDEO_STAGES: tuple[str, ...] = (
     "chunking",
     "projecting",
     "embedding",
+    # Added after the first real video shipped with an empty Graph screen.
+    # `library_mentions` derives its node list from `MENTIONS` edges and those
+    # come from semantic extraction, so a workflow with no `semantics` stage
+    # produces a document that is indexed, citable, and invisible on the canvas
+    # — which is indistinguishable, to a reader, from one that failed to index.
+    # It stays **off in `_recommended`**: the stage exists so it can be ticked,
+    # and defaults off because it nearly triples the bill ($0.2258 -> $0.6532 on
+    # a 76-minute talk) and its value on speech is unmeasured.
+    "semantics",
     "activating",
     "done",
 )

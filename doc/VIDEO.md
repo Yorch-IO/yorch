@@ -685,14 +685,35 @@ approves it.
 
 ## What a video does *not* get
 
-**Semantics, profile learning, the eval set and tuning have no stage at all** —
-absent rather than switched off, which is what a separate workflow buys. The
-visible consequence: **a video does not appear on the Graph screen**, because
-`library_mentions` derives its node list from `MENTIONS` edges and those come
-from semantic extraction. A video is a `Document` and a `DocumentVersion` in the
-graph, fully browsable and citable, and absent from the library canvas. That is
-the chosen trade, not a projection that failed, and it is reversible later at the
-cost that stage carries.
+**Profile learning, the eval set and tuning have no stage at all** — absent
+rather than switched off, which is what a separate workflow buys. Profile
+learning is absent because the fingerprint is fed by the extractor contract and
+a transcript has no document-family structure to fingerprint; the eval set and
+tuning are absent because the first generates synthetic questions from the very
+chunks they must find and the second costs a full re-embed per candidate. The
+consequence of the eval set's absence is worth stating plainly: **a video has no
+recall figure and cannot be given one**, so `audit_version.py --measure` returns
+`unavailable` rather than a number.
+
+**`semantics` used to be on that list, and is not any more.** This paragraph
+said the trade was "reversible later at the cost that stage carries", and it was
+reversed on 2026-09-11 after the first real video shipped with an empty Graph
+screen — 0 concepts, 0 claims, 0 `MENTIONS` edges — which a reader cannot tell
+apart from a document that never indexed. `library_mentions` derives its node
+list from `MENTIONS` edges, so no extraction meant no node, and the video was
+indexed, retrievable, citable and invisible.
+
+The stage now exists and **is quoted at the gate rather than forced off**, which
+is the part worth not getting wrong. Forcing it off was correct while there was
+nowhere to run it; once there was, it became the more dangerous default —
+`Approval.options` defaults to a `StageOptions()` whose `extract_semantics` is
+`True`, so a client that approves without echoing the options back would have run
+a stage the gate never quoted. That is the under-reporting failure, the one this
+product refuses outright. So `_recommended` passes it through, `estimate_video`
+covers it, and the number at the gate is the number spent: measured on the
+76-minute talk, **$0.6532 with concepts against $0.2258 without**. Whoever reads
+the gate decides whether concepts are worth $0.43; unticking it skips the stage
+and the spend, and a test asserts both halves.
 
 **A transcript has no sections**, so it carries no breadcrumb. Honest: a talk has
 no table of contents. Whether putting the video's *title* there would help

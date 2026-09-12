@@ -65,6 +65,7 @@ with workflow.unsafe.imports_passed_through():
     from .ingest import (
         FREE_TIMEOUT,
         GATE_TIMEOUT,
+        PAID_HEARTBEAT_TIMEOUT,
         PAID_TIMEOUT,
         WRITE_TIMEOUT,
         Approval,
@@ -367,6 +368,24 @@ class VideoIngestWorkflow:
                 retry_policy=_PAID_RETRY,
             )
             spent.append(indexed.spend)
+
+            # `options` here is `approved.options` — what the person actually
+            # ticked, which need not be what `_recommended` opened with. That is
+            # the whole mechanism: the gate offers semantics off, and a reader
+            # who wants this video on the Graph screen turns it on knowing the
+            # bill. Nothing runs it unless they do.
+            if options.extract_semantics:
+                await self._enter(run_id, "semantics")
+                semantics = await workflow.execute_activity(
+                    paid.extract_semantics,
+                    args=[run_id, registered, chunked, options],
+                    start_to_close_timeout=PAID_TIMEOUT,
+                    heartbeat_timeout=PAID_HEARTBEAT_TIMEOUT,
+                    retry_policy=_PAID_RETRY,
+                )
+                spent.append(semantics.spend)
+                if semantics.condense_spend is not None:
+                    spent.append(semantics.condense_spend)
 
             await self._enter(run_id, "activating")
             await workflow.execute_activity(
@@ -766,15 +785,25 @@ def _recommended(options: StageOptions, probe: VideoProbe) -> StageOptions:
     a 19-second video added $0.026 to a bill whose real total was $0.000012, and
     over-reporting wildly misleads a user into declining affordable work exactly
     as much as under-reporting misleads them into approving an expensive one.
+
+    **`extract_semantics` came off this list when the stage was added**, and the
+    reason it was on it has to be read carefully: it was here because the
+    workflow had nowhere to run it, not because a video should not have
+    concepts. Leaving it forced off once the stage exists would be worse than
+    useless — `Approval.options` defaults to a `StageOptions()` whose
+    `extract_semantics` is `True`, so a client that approves without echoing the
+    options back would have run a stage the gate never quoted. That is the
+    under-reporting failure, which is the one this product refuses outright.
+    So it passes through, the estimate covers it, and the number at the gate is
+    the number that gets spent: **$0.6532 against $0.2258** on a 76-minute talk.
+    Whoever is reading the gate decides whether concepts are worth $0.43.
     """
     return replace(
         options,
         correct=correction_default(probe.chosen.kind if probe.chosen else None),
         learn_profile=False,
-        extract_semantics=False,
         generate_evalset=False,
         tune=False,
-        condense_descriptions=False,
     )
 
 

@@ -36,6 +36,7 @@ from brainworker.pipeline import (
     IngestRequest,
     Preview,
     Registered,
+    Semantics,
     Spend,
     StageEstimate,
     StageOptions,
@@ -362,6 +363,17 @@ async def chunk_transcript(
                    warnings=list(CHUNK_WARNINGS))
 
 
+@activity.defn(name="extract_semantics")
+async def extract_semantics(run_id: str, registered, chunked, options=None):
+    CALLED.append("extract_semantics")
+    SPENT.append("semantics")
+    return Semantics(
+        concepts=2, claims=1, edges=3,
+        spend=Spend(stage="semantics", model="gemini-3.6-flash",
+                    input_tokens=10, output_tokens=10, usd=0.4274),
+    )
+
+
 @activity.defn(name="project_structure")
 async def project_structure(
     req: IngestRequest, staged: Staged, registered: Registered,
@@ -397,7 +409,7 @@ def activities(*, captions=True, already_indexed=False, statuses=None,
         stage_audio, discard_audio,
         start_transcription, poller(statuses or []), collect_transcript,
         abandon_transcription, correct_text, chunk_transcript, project_structure,
-        embed_and_index, activate_version,
+        embed_and_index, extract_semantics, activate_version,
     ]
 
 
@@ -860,17 +872,26 @@ async def test_the_gate_suggests_correction_only_for_automatic_captions(env):
 
 async def test_the_gate_never_suggests_a_stage_this_workflow_does_not_have(env):
     """Leaving them on would quote work that cannot happen: there is no
-    profiling, semantics, evaluating or tuning stage in VIDEO_STAGES."""
+    profiling, evaluating or tuning stage in VIDEO_STAGES.
+
+    `extract_semantics` is deliberately **not** in that list any more. It was,
+    and the reason mattered — there was nowhere to run it — but once the stage
+    exists, forcing it off would be the worse bug: `Approval.options` defaults
+    to a `StageOptions()` with it `True`, so a client approving without echoing
+    the options back would run a stage the gate never quoted.
+    """
     async with Worker(env.client, task_queue=TASK_QUEUE,
                       workflows=[VideoIngestWorkflow], activities=activities()):
         handle = await _start(env, request(), StageOptions())
         rec = (await _wait_for_gate(handle)).recommended
         assert not rec.learn_profile
-        assert not rec.extract_semantics
         assert not rec.generate_evalset
         assert not rec.tune
-        assert not rec.condense_descriptions
         assert rec.embed is True
+        assert rec.extract_semantics is True, (
+            "the stage exists now, so the gate must quote it rather than "
+            "silently run it after the fact"
+        )
         await handle.signal(VideoIngestWorkflow.approve, Approval(approved=False))
         await handle.result()
 
@@ -904,11 +925,12 @@ async def test_the_estimate_quotes_only_the_stages_that_can_actually_run(env):
     assert len(QUOTED) == 1
     quoted = QUOTED[0]
     assert not quoted.learn_profile
-    assert not quoted.extract_semantics
     assert not quoted.generate_evalset
     assert not quoted.tune
-    # And it still quotes what *does* run.
+    # And it quotes everything that *does* run, semantics included since the
+    # stage was added — the number at the gate has to be the number spent.
     assert quoted.embed is True
+    assert quoted.extract_semantics is True
 
 
 async def test_what_chunking_noticed_reaches_the_trail_and_not_only_the_log(env):
@@ -953,3 +975,45 @@ async def test_a_run_with_nothing_to_report_schedules_no_extra_event(env):
 
     assert [c for c in CALLED if c.startswith("stage:chunking|")] == []
     assert "stage:chunking" in CALLED
+
+
+async def test_a_video_gets_concepts_when_the_gate_says_so(env):
+    """The empty Graph screen, fixed.
+
+    `library_mentions` builds its node list from `MENTIONS` edges, and those
+    come from semantic extraction — so a video indexed without this stage is
+    citable, retrievable and **invisible on the canvas**, which a reader cannot
+    tell apart from one that never indexed. Measured on the first real video:
+    0 concepts, 0 claims, 0 edges.
+    """
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow], activities=activities()):
+        handle = await _start(env, request(), StageOptions())
+        await _wait_for_gate(handle)
+        await handle.signal(
+            VideoIngestWorkflow.approve,
+            Approval(approved=True, options=StageOptions(extract_semantics=True)),
+        )
+        result = await handle.result()
+
+    assert result.state == "indexed"
+    assert "extract_semantics" in CALLED
+    assert "stage:semantics" in CALLED
+
+
+async def test_a_video_nobody_asked_concepts_for_does_not_pay_for_them(env):
+    """Unticking it at the gate has to actually stop the spend."""
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow], activities=activities()):
+        handle = await _start(env, request(), StageOptions())
+        await _wait_for_gate(handle)
+        await handle.signal(
+            VideoIngestWorkflow.approve,
+            Approval(approved=True, options=StageOptions(extract_semantics=False)),
+        )
+        result = await handle.result()
+
+    assert result.state == "indexed"
+    assert "extract_semantics" not in CALLED
+    assert "stage:semantics" not in CALLED
+    assert "semantics" not in SPENT

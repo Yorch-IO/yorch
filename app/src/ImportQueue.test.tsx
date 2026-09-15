@@ -6,12 +6,12 @@
  * so a row saying the same thing twice — or saying a finished run is still
  * working — passes every suite.
  */
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import i18n from "./i18n";
 import { ImportQueue } from "./ImportQueue";
-import { api, DEFAULT_STAGES, type RunListItem } from "./lib/api";
+import { api, DEFAULT_STAGES, type GateReport, type RunListItem } from "./lib/api";
 import type { QueueItem } from "./lib/importQueue";
 
 vi.mock("./lib/api", async (importOriginal) => {
@@ -59,14 +59,22 @@ const item = (
   run: run(over.run),
 });
 
-const draw = (items: QueueItem[], onChanged: () => void = () => {}) =>
+const draw = (
+  items: QueueItem[],
+  onChanged: () => void = () => {},
+  onDecide: (
+    workflowId: string,
+    approved: boolean,
+    options: typeof DEFAULT_STAGES,
+  ) => void | Promise<void> = () => {},
+) =>
   render(
     <ImportQueue
       items={items}
       loaded
       error={null}
       stages={DEFAULT_STAGES}
-      onDecide={() => {}}
+      onDecide={onDecide}
       onChanged={onChanged}
       locale="es"
     />,
@@ -250,4 +258,57 @@ it("still shows a kind nobody has written words for", () => {
   ]);
   expect(container.textContent).toContain("some_kind_with_no_wording");
   expect(container.textContent).not.toContain("queue.errorKind.");
+});
+
+/** The report the gate panel renders. Only the fields it reads. */
+const gateReport = () =>
+  ({
+    runId: "ingest-1",
+    documentId: "doc_1",
+    versionId: "ver_1",
+    preview: {
+      chunkCount: 299,
+      kinds: [{ kind: "cuerpo", count: 243 }],
+      characters: 214589,
+      chunksAreFinal: false,
+      warnings: [],
+    },
+    estimate: {
+      stages: [],
+      totalUsd: null,
+      totalUsdHigh: null,
+      priceSource: "table",
+      unpricedStages: [],
+    },
+    profileWarnings: [],
+    profile: null,
+  }) as unknown as GateReport;
+
+it("gives the buttons back when an approval is refused", async () => {
+  // **The failure this was written against.** `setDeciding(true)` had no
+  // counterpart anywhere in the file, so the first press disabled both buttons
+  // for the life of the component — and on the happy path nobody noticed,
+  // because the row moves on and takes the component with it. On a refusal the
+  // panel stayed on screen, inert, over a run that was still waiting for an
+  // answer. Seen in the real window when the paid plane answered 422: the only
+  // remedy was relaunching the app, which is not a remedy anybody guesses.
+  const refused = vi.fn().mockRejectedValue(new Error("422"));
+  const { container } = draw(
+    [item({ run: { state: "awaiting_approval" }, gate: gateReport() })],
+    () => {},
+    // The parent swallows its own failure — `ImportScreen.decide` catches and
+    // renders the error panel — so what reaches the row is a settled promise
+    // either way. This asserts the row does not depend on which way.
+    (id, approved, options) => refused(id, approved, options).catch(() => {}),
+  );
+
+  const approve = () =>
+    [...container.querySelectorAll("button")].find((b) =>
+      b.textContent?.includes(t("gate.approve")),
+    )!;
+
+  expect(approve().disabled).toBe(false);
+  fireEvent.click(approve());
+  await waitFor(() => expect(refused).toHaveBeenCalled());
+  await waitFor(() => expect(approve().disabled).toBe(false));
 });

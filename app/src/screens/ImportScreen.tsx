@@ -450,7 +450,9 @@ export function ImportScreen() {
         loaded={loaded}
         error={queueError}
         stages={stages}
-        onDecide={(id, approved, options) => void decide(id, approved, options)}
+        // Returned, not discarded: the queue row re-enables its buttons
+        // when this settles, and `void` here would make that unreachable.
+        onDecide={(id, approved, options) => decide(id, approved, options)}
         onChanged={() => void refresh()}
         locale={i18n.language}
       />

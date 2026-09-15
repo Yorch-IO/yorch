@@ -145,7 +145,13 @@ function Row({
 }: {
   item: QueueItem;
   stages: StageOptions;
-  onDecide: (workflowId: string, approved: boolean, options: StageOptions) => void;
+  /** May return a promise; the row re-enables its buttons when it settles,
+   *  whichever way it settles. */
+  onDecide: (
+    workflowId: string,
+    approved: boolean,
+    options: StageOptions,
+  ) => void | Promise<void>;
   onChanged: () => void;
   locale: string;
 }) {
@@ -259,7 +265,16 @@ function Row({
           busy={deciding}
           onDecide={(approved, options) => {
             setDeciding(true);
-            onDecide(run.workflowId, approved, options);
+            // **`finally`, not `then`.** This used to set the latch and never
+            // clear it, so a refused approval left both buttons disabled with
+            // the panel still on screen and no way to retry — seen in the real
+            // window when the paid plane answered 422 and the only remedy was
+            // relaunching the app, which nobody guesses. A remount is what
+            // cleared it, which is why the happy path never showed the bug: the
+            // row moves on and the component goes with it.
+            void Promise.resolve(
+              onDecide(run.workflowId, approved, options),
+            ).finally(() => setDeciding(false));
           }}
         />
       )}
@@ -270,7 +285,16 @@ function Row({
           busy={deciding}
           onDecide={(approved, options) => {
             setDeciding(true);
-            onDecide(run.workflowId, approved, options);
+            // **`finally`, not `then`.** This used to set the latch and never
+            // clear it, so a refused approval left both buttons disabled with
+            // the panel still on screen and no way to retry — seen in the real
+            // window when the paid plane answered 422 and the only remedy was
+            // relaunching the app, which nobody guesses. A remount is what
+            // cleared it, which is why the happy path never showed the bug: the
+            // row moves on and the component goes with it.
+            void Promise.resolve(
+              onDecide(run.workflowId, approved, options),
+            ).finally(() => setDeciding(false));
           }}
         />
       )}
@@ -296,7 +320,13 @@ export function ImportQueue({
   loaded: boolean;
   error: unknown;
   stages: StageOptions;
-  onDecide: (workflowId: string, approved: boolean, options: StageOptions) => void;
+  /** May return a promise; the row re-enables its buttons when it settles,
+   *  whichever way it settles. */
+  onDecide: (
+    workflowId: string,
+    approved: boolean,
+    options: StageOptions,
+  ) => void | Promise<void>;
   onChanged: () => void;
   locale: string;
 }) {

@@ -2544,6 +2544,46 @@ session's files.
   from the run that preceded the `_choose_track` fix by twelve minutes. Nothing
   indexes it, nothing charged for it, and nothing cleans it up either.
 
+- **The second gate shows the *first* gate's report, and tells the reader
+  "Nothing has been paid for yet" over a run that has spent $0.58.** Seen in the
+  real window 2026-09-15 on `Conferencias Teologia Social`, parked at
+  `awaiting_correction_review` with `$0.5834` of correction already billed — the
+  figure is on the queue row directly above the panel that denies it. The panel
+  went on to offer "No profile exists for this family of documents yet. One will
+  be learned after approval", for a run whose profile had been learned an hour
+  earlier, and a chunk count (299) measured *before* the correction that has
+  since changed every offset.
+  Two causes, and neither is the renderer's. `self._report` is assigned once, at
+  `workflows/ingest.py:353`, before the first gate, and **never cleared** — so
+  `GET /runs/{id}/gate` keeps answering with the pre-correction preview and
+  estimate for the rest of the run. And the thing that should be shown instead
+  does not exist on the wire at all: `IngestWorkflow.correction` is a
+  `@workflow.query` with **zero callers** — no route on either plane, no screen
+  in either client. `grep` finds the definition and nothing else.
+  So the one gate whose whole purpose is "look at what correction did before you
+  pay to embed it" cannot show what correction did, and fills the space with
+  numbers that are not merely stale but false at the moment somebody decides.
+  This file already recorded the weak version ("returns correction *counts*
+  rather than a diff, so the UI cannot show what changed"); the counts are not
+  reachable either. The fix is a route per plane over the existing query, and a
+  panel that keys on the stage rather than reusing `GateReport`.
+
+- **`deciding` is a one-way latch, so a refused approval kills both buttons
+  until the app is restarted.** `ImportQueue.tsx` calls `setDeciding(true)` in
+  `onDecide` and **`setDeciding(false)` appears nowhere in the file** — grep
+  returns 0. On the happy path the row moves on and nobody notices; on a refusal
+  the panel stays on screen with "Approve and index" and "Cancel" both disabled
+  and no way to retry. Found 2026-09-15 by a person reporting that the gate had
+  no answerable control: they had pressed Approve, taken a 422 from the paid
+  plane, and been left with an inert panel over a run that was still waiting.
+  A remount clears it, so relaunching the app is the workaround — which is
+  exactly the kind of remedy nobody guesses.
+  `ImportScreen.decide` compounds it slightly: `settled(workflowId)` is in the
+  `finally`, so a *failed* approval is recorded as settled. That one is harmless
+  today only because `settled` merely drops the cached gate and the next poll
+  refetches it while `waiting(run)` still holds — the handler gets the right
+  outcome for a reason that has nothing to do with the handler.
+
 - **The desktop app forces a video's semantics off at the gate, so the stage
   `_recommended` deliberately stopped forcing off is unreachable — and the gate
   quotes it anyway.** `VideoGateReview.tsx:63` sends `extractSemantics: false`

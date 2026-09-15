@@ -122,3 +122,6 @@ docaget/cache/embed/
 
 # Testing books repository (maintained separately at git@github.com:kh31r0n/libros.git)
 docaget/libros/
+
+# Book exports by format (organized by book in libros repository)
+exports/

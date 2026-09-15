@@ -119,3 +119,6 @@ worker/cache/
 # enough ($0.000068 for a page) that carrying 19 MB of vectors in history buys
 # nothing.
 docaget/cache/embed/
+
+# Testing books repository (maintained separately at git@github.com:kh31r0n/libros.git)
+docaget/libros/

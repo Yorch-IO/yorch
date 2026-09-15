@@ -1,0 +1,333 @@
+{
+  "fingerprint": "4a29571f942e8696",
+  "slug": "06-sexoenlabiblia-int-s-4a29571f",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "question_min_marks": 2,
+    "heading_l1_max": 40,
+    "heading_l2_max": 120,
+    "heading_l1_pattern": null,
+    "heading_l2_pattern": null
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.575,
+    "recall_at_5": 0.9,
+    "mrr_at_10": 0.7312,
+    "recall_at_5_dense_only": 0.9,
+    "noise_floor": 0.6304,
+    "chunks": 359,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿De qué forma se contrasta en el escrito la conducta reproductiva de los animales frente a las perturbaciones personales y sociales que ocasiona la afectividad física en los seres humanos?",
+      "chunk_index": 58,
+      "char_mid": 49676,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es la única nación hispanoamericana donde la finalización de la gestación cuenta con aprobación legal según los datos presentados?",
+      "chunk_index": 251,
+      "char_mid": 229715,
+      "cell_ref": "",
+      "breadcrumb": "6.\t Ibidem."
+    },
+    {
+      "question": "¿De qué forma y con qué instrumento simbólico emanado de los labios se advierte en Apocalipsis 2 que se luchará contra quienes consienten las enseñanzas nicolaítas?",
+      "chunk_index": 212,
+      "char_mid": 188894,
+      "cell_ref": "",
+      "breadcrumb": "6.\t Ibidem."
+    },
+    {
+      "question": "¿Cómo se caracteriza a los individuos desvergonzados que compensan su escasa agudeza mental con su presencia corporal para establecer pactos ventajosos?",
+      "chunk_index": 129,
+      "char_mid": 113587,
+      "cell_ref": "",
+      "breadcrumb": "2.\t Ibidem."
+    },
+    {
+      "question": "¿Qué razón física dio origen al uso de prendas corporales y de qué manera la presunción humana alteró dicha función primaria con el tiempo?",
+      "chunk_index": 108,
+      "char_mid": 93962,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué modo se caracteriza en los escritos sagrados el temple de la fémina ejemplar frente a la abundancia de quehaceres?",
+      "chunk_index": 156,
+      "char_mid": 136012,
+      "cell_ref": "",
+      "breadcrumb": "2.\t Ibidem."
+    },
+    {
+      "question": "¿De qué manera evita la comunidad religiosa del autor que surjan situaciones comprometedoras durante las sesiones de orientación sobre temas íntimos?",
+      "chunk_index": 37,
+      "char_mid": 32128,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué medida económica adoptan determinados Estados europeos con reducida natalidad para promover la maternidad, de acuerdo con las reflexiones de Paul Kennedy sobre las disparidades globales?",
+      "chunk_index": 280,
+      "char_mid": 251951,
+      "cell_ref": "",
+      "breadcrumb": "6.\t Ibidem."
+    },
+    {
+      "question": "¿Qué denominación otorgan ciertas corrientes esotéricas a la compañera primordial que el hombre busca para completarse tras la división del ser humano primitivo?",
+      "chunk_index": 209,
+      "char_mid": 185472,
+      "cell_ref": "",
+      "breadcrumb": "6.\t Ibidem."
+    },
+    {
+      "question": "¿De qué manera concebía la rectitud moral el aristócrata provenzal que falleció en el asilo de Charenton?",
+      "chunk_index": 50,
+      "char_mid": 44147,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué razones llevan a dudar de la veracidad de cierto hecho considerando los escasos logros y las anomalías en gestaciones y crías obtenidas mediante duplicación genética en diversos seres vivos?",
+      "chunk_index": 297,
+      "char_mid": 265110,
+      "cell_ref": "",
+      "breadcrumb": "6.\t Ibidem."
+    },
+    {
+      "question": "¿Qué comunidad de fe contemporánea se califica como una versión distorsionada en el estudio sobre la sexualidad según las Escrituras?",
+      "chunk_index": 80,
+      "char_mid": 65057,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué padecimientos físicos y restricciones le impuso una madre aristócrata a su hija para impedir su relación con un varón magrebí?",
+      "chunk_index": 235,
+      "char_mid": 212782,
+      "cell_ref": "",
+      "breadcrumb": "6.\t Ibidem."
+    },
+    {
+      "question": "¿De qué maneras alegóricas se ha interpretado este texto en relación con la conexión espiritual del Creador con el pueblo hebreo, la unión del Mesías con sus fieles y la figura de la Virgen María en el catolicismo?",
+      "chunk_index": 336,
+      "char_mid": 297984,
+      "cell_ref": "",
+      "breadcrumb": "9. Notimex, México, Dic. 30, 2002."
+    },
+    {
+      "question": "¿Qué experiencia afectiva previa impulsó al autor a alistarse en las fuerzas armadas para resguardarse de una nueva relación parejil?",
+      "chunk_index": 31,
+      "char_mid": 26897,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Cuál es el compromiso que debe asumir la comunidad eclesial ante la crisis sistemática que destruye a la infancia para asegurar la restauración social venidera?",
+      "chunk_index": 309,
+      "char_mid": 274709,
+      "cell_ref": "",
+      "breadcrumb": "9. Notimex, México, Dic. 30, 2002."
+    },
+    {
+      "question": "¿De qué manera concebía Augusto Forel el afecto primario en relación con la función del encéfalo?",
+      "chunk_index": 44,
+      "char_mid": 38367,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera evolucionó la exposición pública de la anatomía humana desde los shows de danza del período posterior a la Primera Guerra Mundial hasta la consolidación del naturismo en los años cincuenta?",
+      "chunk_index": 90,
+      "char_mid": 73600,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué consecuencia social y delictiva se atribuye a las sociedades donde se condena la exhibición del cuerpo al descubierto, según las encuestas internacionales citadas por Kolosimo?",
+      "chunk_index": 107,
+      "char_mid": 92278,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué vivencia física y sensación de colapso experimentó un guía religioso al imponer sus manos sobre una joven perturbada durante una consulta espiritual?",
+      "chunk_index": 34,
+      "char_mid": 30517,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Quiénes redactaron el texto sobre la etapa inicial del cristianismo publicado por la editorial CLIE mencionado en la sexta cita bibliográfica?",
+      "chunk_index": 72,
+      "char_mid": 59418,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué tipo de vínculo se establece a nivel espiritual al unirse al Creador en contraste con la integración física con una cortesana según el texto sagrado?",
+      "chunk_index": 353,
+      "char_mid": 312353,
+      "cell_ref": "",
+      "breadcrumb": "9. Notimex, México, Dic. 30, 2002."
+    },
+    {
+      "question": "¿Qué escritor es citado por su obra referente al pensador protestante de Ginebra visto como un profeta para la época actual?",
+      "chunk_index": 79,
+      "char_mid": 64954,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera se desmonta la crítica sobre la discriminación de género en las enseñanzas de Pablo a partir del grado de sacrificio que se le requiere al cónyuge masculino?",
+      "chunk_index": 330,
+      "char_mid": 293033,
+      "cell_ref": "",
+      "breadcrumb": "9. Notimex, México, Dic. 30, 2002."
+    },
+    {
+      "question": "¿Qué obra de la editorial Vida publicada en el año 2000 fue escrita por Darío Silva-Silva?",
+      "chunk_index": 55,
+      "char_mid": 46999,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué medio periodístico de Estados Unidos publicado a mediados de abril de 1993 figura entre las referencias bibliográficas citadas?",
+      "chunk_index": 202,
+      "char_mid": 180846,
+      "cell_ref": "",
+      "breadcrumb": "7.\t Ibídem."
+    },
+    {
+      "question": "¿Qué casa editorial con sede en Florida lanzó en 1993 el libro del célebre evangelista norteamericano cuyo título alude a una alerta meteorológica?",
+      "chunk_index": 285,
+      "char_mid": 254451,
+      "cell_ref": "",
+      "breadcrumb": "6.\t Ibidem."
+    },
+    {
+      "question": "¿Qué fuente escrita por Kurt E. Koch y publicada por la editorial CLIE en 1987 se cita en la página 118?",
+      "chunk_index": 36,
+      "char_mid": 31622,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué duda se expone sobre si resulta perjudicial que una creyente utilice fragancias moderadas?",
+      "chunk_index": 351,
+      "char_mid": 310548,
+      "cell_ref": "",
+      "breadcrumb": "9. Notimex, México, Dic. 30, 2002."
+    },
+    {
+      "question": "¿Qué volumen y capítulo de la obra magna de Cervantes se indican en la cuarta entrada bibliográfica?",
+      "chunk_index": 139,
+      "char_mid": 120985,
+      "cell_ref": "",
+      "breadcrumb": "2.\t Ibidem."
+    },
+    {
+      "question": "¿Qué referencia corresponde al despacho de la agencia Reuters firmado por el periodista Meter Graff desde la capital británica el 5 de enero de 2003?",
+      "chunk_index": 301,
+      "char_mid": 267003,
+      "cell_ref": "",
+      "breadcrumb": "9. Notimex, México, Dic. 30, 2002."
+    },
+    {
+      "question": "¿Qué casa editorial de Miami publicó en 1994 la obra sobre la vivencia cotidiana en Jesús escrita por los autores de apellido Anderson?",
+      "chunk_index": 83,
+      "char_mid": 66653,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué compañía audiovisual lanzó la obra cinematográfica denominada «El grito silencioso» a mediados de la década de 1990?",
+      "chunk_index": 225,
+      "char_mid": 204316,
+      "cell_ref": "",
+      "breadcrumb": "6.\t Ibidem."
+    },
+    {
+      "question": "¿Qué epístola dirigida al obispo de Hipona por parte del traductor de la Vulgata aparece citada por el autor Jonson Paul?",
+      "chunk_index": 25,
+      "char_mid": 22413,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿De qué manera irónica se caracteriza la nula influencia práctica que ejerce la disciplina del estudio social sobre el devenir de la realidad?",
+      "chunk_index": 6,
+      "char_mid": 3947,
+      "cell_ref": "",
+      "breadcrumb": ""
+    },
+    {
+      "question": "¿Qué escrito del creador del psicoanálisis sobre los fallos en la conducta diaria se menciona en la tercera cita bibliográfica?",
+      "chunk_index": 137,
+      "char_mid": 120858,
+      "cell_ref": "",
+      "breadcrumb": "2.\t Ibidem."
+    },
+    {
+      "question": "¿Cuál es el título del trabajo publicado por el Instituto Allan Guttmacher al que hace referencia la nota número seis?",
+      "chunk_index": 252,
+      "char_mid": 230118,
+      "cell_ref": "",
+      "breadcrumb": "6.\t Ibidem."
+    },
+    {
+      "question": "¿Qué pensador es el autor de la obra enfocada en la emancipación femenina y la sexualidad que fue publicada por la casa editorial Ariel?",
+      "chunk_index": 177,
+      "char_mid": 155479,
+      "cell_ref": "",
+      "breadcrumb": "4.\t Ibídem."
+    },
+    {
+      "question": "¿Qué publicación periódica autónoma de la capital colombiana correspondiente a junio de 1993 figura en la cuarta nota de referencia?",
+      "chunk_index": 275,
+      "char_mid": 248753,
+      "cell_ref": "",
+      "breadcrumb": "6.\t Ibidem."
+    },
+    {
+      "question": "¿En qué fecha y lugar se celebró el evento internacional convocado por las Naciones Unidas sobre temas demográficos?",
+      "chunk_index": 272,
+      "char_mid": 247165,
+      "cell_ref": "",
+      "breadcrumb": "6.\t Ibidem."
+    }
+  ],
+  "learned_from": "libros/06-SexoEnLaBiblia_INT-S.pdf",
+  "learned_at": 1788119156.3153164,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^12/22/12\\\\s+12:18\\\\s+PM$' matches '12/22/12   12:18 PM' on 192 pages, no body hits",
+    "OK  header_patterns: '^Sexo\\\\s+en\\\\s+la\\\\s+Biblia$' matches 'Sexo en la Biblia' on 86 pages, no body hits",
+    "FAIL heading_patterns: nivel 1: '^[A-ZÁÉÍÓÚÑ][^.?¿!]{3,40}$' coincide con 31.5% de los párrafos — ha dejado de discriminar",
+    "FAIL heading_guards: l1_max=45 yields 8 level-1 headings with duplicate numbers [2]: a document has one chapter 2, so the guard is admitting review questions or footnotes as chapters",
+    "OK  question_pattern: none proposed; defaults apply",
+    "FAIL footnote_pattern: only 25% of 61 matches look like a footnote by an independent signal; e.g. ['1.\\t Bajo el signo de Eros. . . . . . . . . . . . . . . . . . . . . . . . 27', '2.\\t El desnudo al desnudo . . . . . . . . . . . . . . . . . . . . . . 45', '3.\\t El macho latino. . . . . . . . . . . . . . . . . . . . . . . . . . . . 61']"
+  ],
+  "tuning_history": []
+}

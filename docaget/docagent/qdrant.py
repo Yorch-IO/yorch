@@ -26,7 +26,7 @@ import hashlib
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Sequence
 
 import httpx
 
@@ -77,8 +77,22 @@ class SearchOpts:
     limit: int = 5
     min_score: float = 0.60  # cosine floor, dense leg only
     dense_only: bool = False
+    #: Sparse-only retrieval, the mirror of `dense_only`. It exists because
+    #: "did BM25 carry this chunk?" is not answerable from a hybrid result: RRF
+    #: returns fused ranks, so a chunk absent from the output could have been
+    #: absent from either leg or from both, and those have different fixes.
+    #: No floor is applied here — `min_score` is a cosine, and invariant #8
+    #: keeps it on the dense prefetch.
+    sparse_only: bool = False
     query_text: str = ""  # needed to build the sparse vector
     filters: dict[str, str] = field(default_factory=dict)  # payload key -> value
+    #: How deep each leg looks before RRF fuses them. A parameter rather than
+    #: the module constant it used to be, because it is the one retrieval knob
+    #: that changes *which* chunks can be ranked at all rather than how the
+    #: ranked ones are ordered — and it could not be measured while it was
+    #: unreachable from `SearchOpts`. Costs nothing to change: no re-embedding,
+    #: no re-indexing, one wider read.
+    prefetch_limit: int = PREFETCH_LIMIT
 
 
 @dataclass
@@ -216,25 +230,51 @@ class Qdrant:
                 {"points": [p.as_json() for p in batch]},
             )
 
-    def scroll_all(self) -> list[dict[str, Any]]:
-        """Page through every point's payload, for whole-collection audits."""
+    def scroll(
+        self, filters: "dict[str, str] | None" = None
+    ) -> list[dict[str, Any]]:
+        """Page through matching points as ``{"id": ..., "payload": {...}}``.
+
+        Two things this gives an audit that :meth:`scroll_all` cannot. The
+        **filter** keeps a per-document read off the whole collection — one
+        collection holds every library of every organisation here. And the
+        **id**, which `scroll_all` drops: a point id is
+        ``point_id(version_id, chunk_index)``, so checking that the ids present
+        are exactly the ones the version derives is what detects a tail left
+        behind by a longer previous chunking. A payload alone cannot say that,
+        because a stale point's payload is perfectly well-formed.
+
+        Shares `_filter` with search and removal, so an audit cannot select a
+        set that a search would have read differently. An empty filter is
+        allowed here, unlike in the removal path: reading every point is what
+        `scroll_all` has always meant.
+        """
         out: list[dict[str, Any]] = []
         offset: Any = None
+        selector = self._filter(filters or {})
         while True:
             body: dict[str, Any] = {
                 "limit": 256,
                 "with_payload": True,
                 "with_vector": False,
             }
+            if selector:
+                body["filter"] = selector
             if offset is not None:
                 body["offset"] = offset
             result = self._ok(
                 "POST", f"/collections/{self.collection}/points/scroll", body
             )["result"]
-            out.extend(p["payload"] for p in result["points"])
+            out.extend(
+                {"id": p["id"], "payload": p["payload"]} for p in result["points"]
+            )
             offset = result.get("next_page_offset")
             if offset is None:
                 return out
+
+    def scroll_all(self) -> list[dict[str, Any]]:
+        """Page through every point's payload, for whole-collection audits."""
+        return [p["payload"] for p in self.scroll()]
 
     # --- removal ------------------------------------------------------------
     #
@@ -284,6 +324,48 @@ class Qdrant:
         )
         return removed
 
+    def prune_tail(self, doc_id: str, keep: int) -> int:
+        """Delete any point for `doc_id` whose `chunk_index` is >= `keep`.
+
+        A rejected chunk-tuning candidate re-indexes fewer chunks than it just
+        wrote, and `upsert` only overwrites the ids the new run actually
+        produces (`0..keep-1`) — it never deletes ids beyond them. Observed on
+        `07-LlavesDelPoder-INT.pdf` (2026-08-30): a 625-chunk candidate was
+        rejected in favour of a 502-chunk one, and ids `502..624` — still
+        carrying the rejected candidate's `char_span` — survived in the
+        collection, silently duplicating the back third of the book under two
+        incompatible sets of chunk boundaries.
+
+        Point ids are deterministic (`point_id(doc_id, i)`), so the stale
+        range is exactly `[keep, old_count)` and needs no range filter — a
+        plain equality filter cannot express ">=" and `count`/`delete_by_filter`
+        both require one.
+        """
+        old_count = self.count({"doc_id": doc_id})
+        if old_count <= keep:
+            return 0
+        return self.delete_by_ids(
+            [point_id(doc_id, i) for i in range(keep, old_count)]
+        )
+
+    def delete_by_ids(self, ids: "Sequence[str]") -> int:
+        """Delete exactly these points.
+
+        Separate from `delete_by_filter` because a filter here is equality-only
+        and cannot express a range. The caller that knows the ids is the one that
+        derived them, and the two hosts derive them differently: this engine from
+        `doc_id`, the product from a content-derived `version_id`. Hence a
+        primitive rather than a second `prune_tail`.
+        """
+        if not ids:
+            return 0
+        self._ok(
+            "POST",
+            f"/collections/{self.collection}/points/delete?wait=true",
+            {"points": list(ids)},
+        )
+        return len(ids)
+
     def set_payload(self, filters: dict[str, str], payload: dict[str, Any]) -> int:
         """Overwrite the named payload keys on every matching point.
 
@@ -317,11 +399,13 @@ class Qdrant:
         }
 
     def search(self, vector: list[float], opts: SearchOpts) -> list[Hit]:
-        """Dense-only or hybrid retrieval, with RRF fusion on the server.
+        """Dense-only, sparse-only, or hybrid retrieval with RRF fusion.
 
         The cosine threshold goes on the dense prefetch, never on the fused
-        output (invariant #8).
+        output and never on the sparse leg (invariant #8).
         """
+        from .bm25 import query_sparse_vector  # local: avoids a cycle at import
+
         if opts.dense_only:
             body: dict[str, Any] = {
                 "query": vector,
@@ -330,20 +414,28 @@ class Qdrant:
             }
             if opts.min_score > 0:
                 body["score_threshold"] = opts.min_score
+        elif opts.sparse_only:
+            # No `score_threshold`: `min_score` is a cosine and means nothing
+            # against a BM25 score. Applying it here would silently empty this
+            # leg, which is the failure the invariant exists to prevent.
+            body = {
+                "query": query_sparse_vector(opts.query_text).as_payload(),
+                "using": SPARSE_VEC,
+                "limit": opts.limit,
+            }
         else:
             dense: dict[str, Any] = {
                 "query": vector,
                 "using": DENSE_VEC,
-                "limit": PREFETCH_LIMIT,
+                "limit": opts.prefetch_limit,
             }
             if opts.min_score > 0:
                 dense["score_threshold"] = opts.min_score
-            from .bm25 import query_sparse_vector  # local: avoids a cycle at import
 
             sparse = {
                 "query": query_sparse_vector(opts.query_text).as_payload(),
                 "using": SPARSE_VEC,
-                "limit": PREFETCH_LIMIT,
+                "limit": opts.prefetch_limit,
             }
             body = {
                 "prefetch": [dense, sparse],

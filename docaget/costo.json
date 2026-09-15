@@ -1,78 +1,96 @@
 {
-  "total_usd": 0.051321,
+  "total_usd": 1.33582,
   "measured": true,
+  "unpriced_stages": [],
   "prices_per_million": {
-    "embed_input": 0.15,
-    "flash_input": 0.15,
-    "flash_output": 1.25
+    "gemini-embedding-001": {
+      "input": 0.15,
+      "output": 0.0
+    },
+    "gemini-2.5-flash": {
+      "input": 0.15,
+      "output": 1.25
+    },
+    "gemini-3.5-flash": {
+      "input": 1.5,
+      "output": 9.0
+    },
+    "gemini-3.6-flash": {
+      "input": 1.5,
+      "output": 7.5
+    },
+    "gemini-embedding-2": {
+      "input": 0.2,
+      "output": 0.0
+    }
   },
-  "price_source": "third-party aggregators, 2026-07-26 — token counts are measured, multipliers are second-hand; verify against GCP billing",
+  "price_source": "third-party aggregators, 2026-07-26 — token counts are measured, multipliers are second-hand; verify against GCP billing. Models absent from prices_per_million are reported unpriced, not free.",
   "stages": [
     {
-      "stage": "correct",
-      "model": "gemini-2.5-flash",
-      "calls": 6,
+      "stage": "propose",
+      "model": "gemini-3.6-flash",
+      "calls": 1,
       "retries": 0,
       "failures": 0,
       "cache_hits": 0,
-      "input_tokens": 24321,
-      "output_tokens": 23819,
-      "cost_usd": 0.033422
+      "input_tokens": 2074,
+      "output_tokens": 270,
+      "cost_usd": 0.005136
+    },
+    {
+      "stage": "correct",
+      "model": "gemini-3.6-flash",
+      "calls": 19,
+      "retries": 0,
+      "failures": 0,
+      "cache_hits": 0,
+      "input_tokens": 137709,
+      "output_tokens": 138856,
+      "cost_usd": 1.247984
     },
     {
       "stage": "evalset",
-      "model": "gemini-2.5-flash",
-      "calls": 89,
+      "model": "gemini-3.6-flash",
+      "calls": 40,
       "retries": 0,
       "failures": 0,
       "cache_hits": 0,
-      "input_tokens": 47701,
-      "output_tokens": 4763,
-      "cost_usd": 0.013109
+      "input_tokens": 25299,
+      "output_tokens": 2038,
+      "cost_usd": 0.053233
     },
     {
       "stage": "embed",
       "model": "gemini-embedding-001",
-      "calls": 107,
-      "retries": 0,
+      "calls": 875,
+      "retries": 500,
       "failures": 0,
-      "cache_hits": 0,
-      "input_tokens": 21821,
+      "cache_hits": 754,
+      "input_tokens": 195242,
       "output_tokens": 0,
-      "cost_usd": 0.003273
+      "cost_usd": 0.029286
     },
     {
       "stage": "eval_query",
       "model": "gemini-embedding-001",
-      "calls": 89,
-      "retries": 0,
+      "calls": 40,
+      "retries": 25,
       "failures": 0,
-      "cache_hits": 0,
-      "input_tokens": 2839,
+      "cache_hits": 120,
+      "input_tokens": 1202,
       "output_tokens": 0,
-      "cost_usd": 0.000426
+      "cost_usd": 0.00018
     },
     {
       "stage": "eval_noise",
       "model": "gemini-embedding-001",
-      "calls": 16,
+      "calls": 0,
       "retries": 0,
       "failures": 0,
-      "cache_hits": 0,
-      "input_tokens": 124,
+      "cache_hits": 12,
+      "input_tokens": 0,
       "output_tokens": 0,
-      "cost_usd": 1.9e-05
-    },
-    {
-      "stage": "propose",
-      "model": "gemini-2.5-flash",
-      "calls": 3,
-      "retries": 0,
-      "failures": 0,
-      "cache_hits": 0,
-      "input_tokens": 2233,
-      "output_tokens": 590,
-      "cost_usd": 0.001072
+      "cost_usd": 0.0
     }
   ]
 }

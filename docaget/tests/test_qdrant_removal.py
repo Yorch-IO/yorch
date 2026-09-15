@@ -93,6 +93,36 @@ def test_setting_a_payload_names_only_the_keys_it_changes():
     assert "text" not in body["payload"]
 
 
+def test_a_reverted_chunk_candidate_prunes_the_points_it_left_behind():
+    """Observed indexing `07-LlavesDelPoder-INT.pdf` on 2026-08-30: the tuning
+    loop tried a 625-chunk candidate, rejected it, and re-indexed the reverted
+    502-chunk config. `upsert` only overwrites ids `0..501` — the ids the new
+    run actually produces — so ids `502..624` from the rejected candidate
+    survived in the collection, each still carrying that candidate's
+    (wrong) `char_span`. Found only because a document was indexed end to
+    end and the collection was scrolled and inspected by hand; nothing in
+    the test suite would have caught it.
+
+    Point ids are deterministic (`point_id(doc_id, i)`), so the stale range is
+    exactly `[keep, old_count)` and needs no range filter to compute.
+    """
+    q = FakeQdrant(count=625)
+    removed = q.prune_tail("doc_1", keep=502)
+
+    assert removed == 123
+    method, path, body = q.calls[-1]
+    assert method == "POST" and path.endswith("/points/delete?wait=true")
+    assert body["points"] == [qd.point_id("doc_1", i) for i in range(502, 625)]
+
+
+def test_pruning_the_tail_is_a_noop_when_nothing_was_left_behind():
+    """The common case — no tuning candidate ran, or it was smaller than the
+    kept config — must not issue a delete request at all."""
+    q = FakeQdrant(count=502)
+    assert q.prune_tail("doc_1", keep=502) == 0
+    assert not any(c[1].endswith("/points/delete?wait=true") for c in q.calls)
+
+
 def test_the_count_is_exact():
     """It is used to tell a user how much of their library just disappeared.
     An estimate from segment metadata is fine for a progress bar and wrong for

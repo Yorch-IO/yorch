@@ -1,0 +1,339 @@
+{
+  "fingerprint": "721bae21c368c63e",
+  "slug": "04-tesorosdiosmedio-int-721bae21",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [
+      "^\\d{1,2}/\\d{1,2}/\\d{2}\\s+\\d{1,2}:\\d{2}\\s+[AP]M$",
+      "^@\\s+c\\s+2$",
+      "^Los\\s+tesoros\\s+que\\s+Dios\\s+me\\s+dio$"
+    ],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "question_min_marks": 2,
+    "heading_l1_max": 40,
+    "heading_l2_max": 35,
+    "heading_l1_pattern": "^[A-ZÁÉÍÓÚÑ][a-záéíóúñ\\s]{3,40}$",
+    "heading_l2_pattern": "^[A-ZÁÉÍÓÚÑ\\s]{4,35}$"
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.5,
+    "recall_at_5": 0.875,
+    "mrr_at_10": 0.6604,
+    "recall_at_5_dense_only": 0.925,
+    "noise_floor": 0.6472,
+    "chunks": 232,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Qué percance de salud sufrió la joven que le evitó acudir al certamen de elegancia justo cuando su madre volvía de comprarle la ropa?",
+      "chunk_index": 26,
+      "char_mid": 22734,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares > REINA SIN CORONA"
+    },
+    {
+      "question": "¿Qué crítica se expone sobre el uso de los fondos recaudados en las congregaciones para la construcción de recintos lujosos frente a la atención de los integrantes vulnerables?",
+      "chunk_index": 111,
+      "char_mid": 118639,
+      "cell_ref": "",
+      "breadcrumb": "La esclavitud femenina"
+    },
+    {
+      "question": "¿Por qué razón la fundadora descartó acudir al auxilio del estado para financiar la atención a la infancia vulnerable?",
+      "chunk_index": 179,
+      "char_mid": 197677,
+      "cell_ref": "",
+      "breadcrumb": "Un burro en la lavandería"
+    },
+    {
+      "question": "¿Qué tipo de criatura peligrosa se encontraba oculta en el flotador que sostenía una de las colaboradoras durante el viaje?",
+      "chunk_index": 93,
+      "char_mid": 98511,
+      "cell_ref": "",
+      "breadcrumb": "Un colmillo de elefante"
+    },
+    {
+      "question": "¿De qué manera fundamenta la congregación la necesidad de retribuir económicamente y procurar el bienestar de los colaboradores dedicados de forma exclusiva a la labor social?",
+      "chunk_index": 164,
+      "char_mid": 180198,
+      "cell_ref": "",
+      "breadcrumb": "La mafia de la mendicidad > UNA CADENA DE AMOR"
+    },
+    {
+      "question": "¿Qué elementos cotidianos del entorno doméstico y la atención familiar señala la autora como fundamentales para satisfacer al cónyuge y contar con el agrado divino?",
+      "chunk_index": 57,
+      "char_mid": 57259,
+      "cell_ref": "",
+      "breadcrumb": "El secuestro frustrado"
+    },
+    {
+      "question": "¿Qué tipo de formaciones u oficios profesionales previos poseen con frecuencia las parejas que asumen la tutoría de los menores en los albergues?",
+      "chunk_index": 161,
+      "char_mid": 176549,
+      "cell_ref": "",
+      "breadcrumb": "La mafia de la mendicidad"
+    },
+    {
+      "question": "¿Qué práctica diaria enfocada en el bienestar de los semejantes, más allá de los aportes monetarios en la iglesia, se aconseja enseñar por considerarse la acción más provechosa?",
+      "chunk_index": 181,
+      "char_mid": 200413,
+      "cell_ref": "",
+      "breadcrumb": "Un burro en la lavandería"
+    },
+    {
+      "question": "¿Qué cita de las Escrituras le sirvió de respuesta a la autora cuando, arrodillada, consultó sobre su destino tras finalizar su vínculo amoroso y su publicación impresa?",
+      "chunk_index": 47,
+      "char_mid": 45556,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares > UNA DURA PRUEBA"
+    },
+    {
+      "question": "¿De qué manera logró la institución adquirir los insumos para la remodelación del suelo a pesar de no contar con presupuesto?",
+      "chunk_index": 174,
+      "char_mid": 191679,
+      "cell_ref": "",
+      "breadcrumb": "Un burro en la lavandería"
+    },
+    {
+      "question": "¿Qué anécdota le hizo comprender a la protagonista que sus rentas financieras le impedían enfocarse libremente en su vocación de fe?",
+      "chunk_index": 69,
+      "char_mid": 70860,
+      "cell_ref": "",
+      "breadcrumb": "Un colmillo de elefante"
+    },
+    {
+      "question": "¿Qué interrogante le planteaba el autor al Creador durante su juventud al comparar su estilo de vida con la precaria situación de los menores vulnerables?",
+      "chunk_index": 17,
+      "char_mid": 13726,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares"
+    },
+    {
+      "question": "¿Qué tipo de prueba médica preventiva debió aprender a realizar personalmente el autor ante la negativa del personal voluntario a atender a las mujeres de bajos recursos?",
+      "chunk_index": 122,
+      "char_mid": 132730,
+      "cell_ref": "",
+      "breadcrumb": "La pobreza real"
+    },
+    {
+      "question": "¿De qué manera desacreditó la prensa política nicaragüense a los evangelizadores durante su visita?",
+      "chunk_index": 92,
+      "char_mid": 97079,
+      "cell_ref": "",
+      "breadcrumb": "Un colmillo de elefante"
+    },
+    {
+      "question": "¿Qué condiciones son necesarias cumplir para que el Creador otorgue lo que anhelamos internamente y supla nuestras necesidades cotidianas?",
+      "chunk_index": 23,
+      "char_mid": 20286,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares"
+    },
+    {
+      "question": "¿De qué manera ayudó el grupo de oración al asistente de pequeña estatura que acudía diariamente a comer con ellos?",
+      "chunk_index": 129,
+      "char_mid": 140292,
+      "cell_ref": "",
+      "breadcrumb": "La pobreza real"
+    },
+    {
+      "question": "¿Qué provocaba la melancolía de la hija mayor tras mudarse a Colombia y qué acontecimiento demostró la causa de su cambio de actitud?",
+      "chunk_index": 34,
+      "char_mid": 31711,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares"
+    },
+    {
+      "question": "¿Qué ilustración bíblica se presenta para demostrar la ineficacia de ofrecer únicamente palabras de aliento a un compañero de congregación que carece de abrigo y sustento diario?",
+      "chunk_index": 104,
+      "char_mid": 110250,
+      "cell_ref": "",
+      "breadcrumb": "La esclavitud femenina > AYUDA A LOS NECESITADOS"
+    },
+    {
+      "question": "¿A qué labor se dedica en la actualidad por todo el territorio nacional el individuo en situación de indigencia que fue asistido?",
+      "chunk_index": 146,
+      "char_mid": 160574,
+      "cell_ref": "",
+      "breadcrumb": "La mafia de la mendicidad"
+    },
+    {
+      "question": "¿Qué costumbre benéfica aprendida en el hogar generó desacuerdos entre la autora y su progenitora durante su niñez?",
+      "chunk_index": 14,
+      "char_mid": 11026,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares > MISERICORDIA NATURAL"
+    },
+    {
+      "question": "¿En qué página empieza la sección dedicada al intento fallido de rapto?",
+      "chunk_index": 2,
+      "char_mid": 1393,
+      "cell_ref": "",
+      "breadcrumb": "Contenido"
+    },
+    {
+      "question": "¿Qué postura comunica una mujer a sus pares profesionales tras decidir atender a su pareja con alimentos hechos en casa en lugar de continuar laborando mientras come?",
+      "chunk_index": 199,
+      "char_mid": 220549,
+      "cell_ref": "",
+      "breadcrumb": "Mujer integral"
+    },
+    {
+      "question": "¿Qué confusión respecto a la jerarquía de compromisos personales provocó la separación matrimonial de una de las integrantes del grupo?",
+      "chunk_index": 53,
+      "char_mid": 53897,
+      "cell_ref": "",
+      "breadcrumb": "El secuestro frustrado"
+    },
+    {
+      "question": "¿Cuál es el objetivo manifiesto de la llegada de Cristo referente a ofrecer una existencia plena a la humanidad según el evangelista Juan?",
+      "chunk_index": 18,
+      "char_mid": 14689,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares"
+    },
+    {
+      "question": "¿Qué comportamiento de la protagonista durante las honras fúnebres de su hermano ocasionó que sus parientes la considerasen la persona extravagante del grupo familiar?",
+      "chunk_index": 48,
+      "char_mid": 47058,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares"
+    },
+    {
+      "question": "¿Qué experiencia le devolvió la tranquilidad a la madre de la narradora para que dejara de afligirse por la pérdida de su hijo?",
+      "chunk_index": 49,
+      "char_mid": 48829,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares"
+    },
+    {
+      "question": "¿Qué experiencia vivida en un centro de reclusión ayudó a la autora a sanar la hostilidad hacia los captores de su hermano?",
+      "chunk_index": 58,
+      "char_mid": 58695,
+      "cell_ref": "",
+      "breadcrumb": "El secuestro frustrado"
+    },
+    {
+      "question": "¿De qué manera los dos nietos mayores de la autora clasificaron a los integrantes de su hogar usando personajes del entretenimiento infantil?",
+      "chunk_index": 204,
+      "char_mid": 226108,
+      "cell_ref": "",
+      "breadcrumb": "Mujer integral > YO Y MI CASA SERVIMOS A DIOS"
+    },
+    {
+      "question": "¿Por qué razón la encargada general del trabajo de la autora le permitió continuar laborando a pesar de la molestia inicial por su estado de gestación?",
+      "chunk_index": 30,
+      "char_mid": 26725,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares"
+    },
+    {
+      "question": "¿Qué significado espiritual tiene, según el autor, que una persona necesitada acuda directamente a un creyente en lugar de que este delegue el auxilio en su comunidad religiosa?",
+      "chunk_index": 109,
+      "char_mid": 116963,
+      "cell_ref": "",
+      "breadcrumb": "La esclavitud femenina"
+    },
+    {
+      "question": "¿Qué fallo en la elección de un aparato de cocina generaba desembolsos económicos continuos al preparar comida para decenas de personas?",
+      "chunk_index": 172,
+      "char_mid": 188544,
+      "cell_ref": "",
+      "breadcrumb": "Un burro en la lavandería"
+    },
+    {
+      "question": "¿Qué objeto estropeado durante una buena acción en su infancia conserva la persona tras cinco décadas como recordatorio divino?",
+      "chunk_index": 19,
+      "char_mid": 15408,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares"
+    },
+    {
+      "question": "¿Qué texto de las Escrituras citó entre llantos el individuo para ilustrar su recaída en la violencia tras haberse vuelto creyente?",
+      "chunk_index": 83,
+      "char_mid": 85327,
+      "cell_ref": "",
+      "breadcrumb": "Un colmillo de elefante"
+    },
+    {
+      "question": "¿Cómo reacciona el hijo menor de los Espíndola cuando alguien intenta apartarlo del autor?",
+      "chunk_index": 205,
+      "char_mid": 227587,
+      "cell_ref": "",
+      "breadcrumb": "Mujer integral > YO Y MI CASA SERVIMOS A DIOS"
+    },
+    {
+      "question": "¿Qué distinción le reveló el Señor a la autora entre las manifestaciones espirituales particulares y las Escrituras destinadas a toda la humanidad?",
+      "chunk_index": 193,
+      "char_mid": 214079,
+      "cell_ref": "",
+      "breadcrumb": "Mujer integral"
+    },
+    {
+      "question": "¿Qué tragedia vial le aconteció a los parientes a quienes el autor había instruido en la fe durante una estancia por la salud de su padre, y qué enseñanza de las Escrituras aplicó al recibir la noticia?",
+      "chunk_index": 46,
+      "char_mid": 44607,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares > UNA DURA PRUEBA"
+    },
+    {
+      "question": "¿Qué sugerencia sobre la entrega de aportes económicos se le brindó a una educadora en extrema pobreza que sentía que su vida era un fracaso?",
+      "chunk_index": 62,
+      "char_mid": 63807,
+      "cell_ref": "",
+      "breadcrumb": "El secuestro frustrado"
+    },
+    {
+      "question": "¿De qué manera manifestaban falta de generosidad algunas colaboradoras que habían superado la escasez económica al entregar los remanentes de ayuda alimentaria a los menores?",
+      "chunk_index": 123,
+      "char_mid": 134609,
+      "cell_ref": "",
+      "breadcrumb": "La pobreza real"
+    },
+    {
+      "question": "¿Qué objeto artesanal recibió la autora de regalo por parte de una de las ancianas a las que visitaba en su infancia?",
+      "chunk_index": 15,
+      "char_mid": 11910,
+      "cell_ref": "",
+      "breadcrumb": "Lazos familiares"
+    },
+    {
+      "question": "¿Qué técnica poco habitual se empleó para recopilar las vivencias personales de la protagonista antes de pasarlas al texto impreso?",
+      "chunk_index": 6,
+      "char_mid": 3591,
+      "cell_ref": "",
+      "breadcrumb": "Prólogo > MEMORIAS DE MEMORIA"
+    }
+  ],
+  "learned_from": "libros/04-TesorosDiosMeDio_int.pdf",
+  "learned_at": 1788015625.390142,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^\\\\d{1,2}/\\\\d{1,2}/\\\\d{2}\\\\s+\\\\d{1,2}:\\\\d{2}\\\\s+[AP]M$' matches '12/22/12   12:02 PM' on 160 pages, no body hits",
+    "OK  header_patterns: '^@\\\\s+c\\\\s+2$' matches '@ c 2' on 80 pages, no body hits",
+    "OK  header_patterns: '^Los\\\\s+tesoros\\\\s+que\\\\s+Dios\\\\s+me\\\\s+dio$' matches 'Los tesoros que Dios me dio' on 73 pages, no body hits",
+    "OK  heading_patterns: nivel 1: '^[A-ZÁÉÍÓÚÑ][a-záéíóúñ\\\\s]{3,40}$' -> 80 encabezados sin numerar (15.1% de los párrafos)",
+    "OK  heading_patterns: nivel 2: '^[A-ZÁÉÍÓÚÑ\\\\s]{4,35}$' -> 33 encabezados sin numerar (6.2% de los párrafos)",
+    "OK  heading_guards: the learned pattern explains 80 level-1 headings against 1 numbered lines, so the numbered path is footnote noise here and its sequence is not the signal",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

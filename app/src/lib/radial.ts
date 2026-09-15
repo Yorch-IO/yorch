@@ -29,9 +29,8 @@ export const GEOM = {
   CENTRE_H: 64,
   DOC_W: 140,
   DOC_H: 40,
-  /** Smallest pointer/touch target on the inner ring, as a radius. Concept
-   *  circles reach r≈20 at the top of the mention scale and 9 at the bottom,
-   *  which is a 18px target — below any comfortable one. */
+  /** Pointer/touch target radius for a concept. Its 44px diameter stays
+   *  comfortably larger than the fixed 18px visual circle. */
   HIT_R: 22,
 } as const;
 
@@ -134,9 +133,8 @@ export function labelAnchor(angle: number, nodeRadius: number): LabelAnchor {
     : { dx: 0, dy: nodeRadius + 9, anchor: "middle", baseline: "hanging" };
 }
 
-/** A node's radius from its share of the largest value on the ring. Both rings
- *  normalise against their own maximum, so a document whose neighbours all
- *  share two concepts does not look isolated. */
+/** Map a value onto a visual range. Used for edge widths, so sparse graphs do
+ *  not make their weakest relationship disappear. */
 export function scale(value: number, max: number, min: number, span: number): number {
   return min + (value / Math.max(max, 1)) * span;
 }

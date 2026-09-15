@@ -1,3 +1,4 @@
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -6,160 +7,295 @@ import {
   DEFAULT_STAGES,
   errorGuidanceKey,
   errorMessage,
-  type GateReport,
   type StageOptions,
+  type VideoFetchEvent,
 } from "../lib/api";
 import { useLibraries } from "../lib/libraries";
+import { useImportQueue } from "../lib/importQueue";
+import { ImportQueue } from "../ImportQueue";
 
-/** How often to ask whether the free stages have finished. */
-const POLL_MS = 1500;
+// `Money`, `Cost` and `range` moved to `../Money` when the audit ledger started
+// rendering the same figures — the gate quotes a cost and the ledger reports
+// what was billed, and the two have to be comparable at a glance. Re-exported
+// because this module is where they were and tests import them from this path.
+export { Cost, range } from "../Money";
+
+// The gate moved to `../GateReview` with its profile machinery, because the
+// queue can hold several runs parked at their own gates for up to seven days
+// each, and each one needs its own choice of rules.
+export { PROFILE_SWITCHES } from "../GateReview";
+
+/** The last component of a path, for the two separators the app can be handed.
+ *  Exported for its own test, for the reason `libraryLabel` gives: the property
+ *  is a decision about a string and asserting it directly beats rendering a
+ *  screen to find out. */
+export function fileName(path: string): string {
+  const parts = path.split(/[/\\]/).filter((p) => p !== "");
+  return parts[parts.length - 1] ?? path;
+}
+
+/** How many megabytes, for a figure a person reads rather than compares. */
+function mib(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
 
 /**
- * Money is only ever shown when it is known.
+ * One line about what this machine is doing before the run exists.
  *
- * `null` means the model has no recorded price, which the gate renders as "not
- * priced". Formatting it as $0.00 would tell the user a paid stage is free.
+ * Pure and exported for its own test, for the reason `fileName` above gives:
+ * the property is a decision about a string, and the interesting one here is
+ * that **`total === 0` means yt-dlp offered no estimate** — so it renders as a
+ * running byte count and never as "of 0 MB" or as 0%. That is
+ * `/project-summary`'s rule about a leg it could not ask, applied to one
+ * number: an unmeasured figure must not be shown as a measured zero.
  */
-function Money({ usd }: { usd: number | null }) {
-  const { t } = useTranslation();
-  if (usd === null)
-    return <span className="unpriced">{t("gate.unpriced")}</span>;
-  return <span>${usd.toFixed(6)}</span>;
+export function fetchingLabel(
+  event: VideoFetchEvent,
+  t: (key: string, vars?: Record<string, unknown>) => string,
+): string {
+  if (event.step === "downloading" && event.bytes) {
+    return event.total
+      ? t("import.fetch.downloadingOf", {
+          done: mib(event.bytes),
+          total: mib(event.total),
+        })
+      : `${t("import.fetch.downloading")} ${mib(event.bytes)}`;
+  }
+  return t(`import.fetch.${event.step}`);
 }
-
-/** A cost that may be a range.
- *
- *  Semantic extraction is a mean over a corpus whose documents vary by more than
- *  2x, so one number could not both cover the worst document and stay within
- *  reach of the smallest — the gate under-reported a real run by 22% because it
- *  had to pick one. Two figures let it stop picking.
- *
- *  Renders a single figure when the ends agree, which is every stage but that
- *  one, so nothing on this screen grows a range it has no measurement for. */
-/** Two figures that have to read as one value.
- *
- *  The non-breaking space glues the dash to the low figure, so the only break
- *  opportunity is after the dash. Measured at 520px: without this the dash sat
- *  alone on its own line, and forcing `nowrap` instead pushed the table past the
- *  viewport with the high figure clipped. */
-export function range(low: string, high: string): string {
-  return `${low}\u00a0\u2013 ${high}`;
-}
-
-export function Cost({ usd, high }: { usd: number | null; high: number | null }) {
-  if (usd === null || high === null || high <= usd) return <Money usd={usd} />;
-  return (
-    <span className="range">
-      {range(`$${usd.toFixed(6)}`, `$${high.toFixed(6)}`)}
-    </span>
-  );
-}
-
-/** The three mutually exclusive things a person can decide about rules. */
-type ProfileChoice = "inherited" | "learn" | "defaults";
-
-/** How each choice reaches the workflow.
- *
- * `ignoreProfile` only means anything when a profile was found, and
- * `learnProfile` only when one was not — so "defaults" sets both, which is the
- * one combination that says "neither inherit nor pay to learn" whichever case
- * the run turned out to be.
- */
-const PROFILE_SWITCHES: Record<
-  ProfileChoice,
-  Pick<StageOptions, "learnProfile" | "ignoreProfile">
-> = {
-  inherited: { learnProfile: false, ignoreProfile: false },
-  learn: { learnProfile: true, ignoreProfile: false },
-  defaults: { learnProfile: false, ignoreProfile: true },
-};
 
 export function ImportScreen() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   const { selected: libraryId } = useLibraries();
-  const [path, setPath] = useState("");
+  /** Every file chosen, not just the first.
+   *
+   *  This screen used to keep `[first]` and count the rest as "ignored",
+   *  because one screen held one run and one run is one approval gate. The
+   *  queue below is what made that unnecessary: **enqueuing is starting the
+   *  workflow**, the free stages cost nothing, and each run parks at its own
+   *  gate until somebody answers it. So a drop of five books is five imports,
+   *  approved one at a time, rather than four files that vanished. */
+  const [paths, setPaths] = useState<string[]>([]);
+  const [picking, setPicking] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [stages, setStages] = useState<StageOptions>(DEFAULT_STAGES);
-  const [workflowId, setWorkflowId] = useState<string | null>(null);
-  const [gate, setGate] = useState<GateReport | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const [outcome, setOutcome] = useState<string | null>(null);
-  /** What the gate should do about rules. Three states rather than two booleans
-   *  because they are mutually exclusive choices, and a UI offering
-   *  "learn" and "ignore" as independent checkboxes invites setting both. */
-  const [profileChoice, setProfileChoice] = useState<ProfileChoice>("learn");
-  const timer = useRef<number | undefined>(undefined);
+  /** What the local fetch is doing, or null when nothing is fetching.
+   *
+   *  Cloud mode only, in practice: local mode sends no `resolved` because the
+   *  container's egress is this machine's egress and YouTube answers it, so
+   *  the only event that ever arrives there is `starting`. */
+  const [fetching, setFetching] = useState<VideoFetchEvent | null>(null);
+  /** What the batch could not do, per file.
+   *
+   *  Kept apart from `error` because a batch is not all-or-nothing: four books
+   *  can enqueue while the fifth is refused for an unsupported format, and one
+   *  red panel saying "it failed" would be wrong about the four. */
+  const [refused, setRefused] = useState<{ path: string; message: string }[]>([]);
+  /** Video links, one per line, exactly as typed.
+   *
+   *  A text box here and none for files, which looks inconsistent and is not.
+   *  The file box was removed because a path typed by hand cannot work in
+   *  either plane — the app and the worker see two different namespaces, so the
+   *  string a person types is meaningless to the thing that would open it. A
+   *  URL is the same string everywhere. */
+  const [urls, setUrls] = useState("");
+  const dropZone = useRef<HTMLDivElement>(null);
+  /** Whether the pointer was last seen inside the drop zone. See the drop
+   *  branch below for why this cannot be the `dragging` state. */
+  const inside = useRef(false);
 
-  const stopPolling = useCallback(() => {
-    if (timer.current !== undefined) {
-      window.clearInterval(timer.current);
-      timer.current = undefined;
-    }
+  const { items, loaded, error: queueError, refresh, settled } =
+    useImportQueue(libraryId);
+
+  /** Accept paths from either source. Extension is not checked here: the
+   *  chooser already filters, a drop cannot be filtered, and the server refuses
+   *  an unsupported suffix with an error that names what it does support —
+   *  which is a better message than one this screen could invent. */
+  const choose = useCallback((chosen: string[]) => {
+    if (chosen.length === 0) return;
+    // Appended rather than replacing, so a second trip to the chooser adds to
+    // the batch. Deduplicated by path, because choosing the same file twice is
+    // a slip and two runs over one file would both be billed.
+    setPaths((current) => [...new Set([...current, ...chosen])]);
+    setError(null);
+    setRefused([]);
   }, []);
 
-  useEffect(() => stopPolling, [stopPolling]);
-
-  const start = useCallback(async () => {
-    if (!libraryId) return;
-    setBusy(true);
+  const pick = useCallback(async () => {
+    setPicking(true);
     setError(null);
-    setGate(null);
-    setOutcome(null);
     try {
-      const key =
-        path.split(/[\\/]/).filter(Boolean).slice(-2).join("/") || path;
-      const run = await api.ingestStart(
-        { libraryId, sourcePath: path, sourceKey: key, title: "" },
-        stages,
-      );
-      setWorkflowId(run.workflowId);
-
-      stopPolling();
-      timer.current = window.setInterval(async () => {
-        try {
-          const report = await api.ingestGate(run.workflowId);
-          if (report) {
-            setGate(report);
-            // Reuse is free, so it is the default whenever a profile exists.
-            // Offering "learn again" first would quote the user for work the
-            // family has already paid for.
-            setProfileChoice(
-              report.profile?.source === "reused" ? "inherited" : "learn",
-            );
-            stopPolling();
-          }
-        } catch (e) {
-          setError(e);
-          stopPolling();
-        }
-      }, POLL_MS);
+      const picked = await api.pickSource();
+      // `null` is a dismissed dialog. Leave the previous choice alone: the
+      // person opened the chooser and changed their mind, which is not a
+      // reason to take away what they had already selected.
+      if (picked !== null) choose([picked]);
     } catch (e) {
       setError(e);
     } finally {
-      setBusy(false);
+      setPicking(false);
     }
-  }, [libraryId, path, stages, stopPolling]);
+  }, [choose]);
 
-  const decide = useCallback(
-    async (approved: boolean) => {
-      if (!workflowId) return;
-      setBusy(true);
+  // The webview's own drag events carry a `File` with no path — the browser
+  // withholds it, and a path is the only thing either plane can use. Tauri's
+  // native drag-drop is the one that reports real paths, so the listener is
+  // bound to the webview rather than to a React `onDrop`.
+  //
+  // Bound once for the screen's lifetime, and the screen stays mounted while
+  // other tabs are shown, so `over` is filtered on the pointer being inside
+  // this drop zone. Without that, dragging a file anywhere over the window
+  // would light up a target the person cannot see.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      // The webview API is only there inside a Tauri window. Under a component
+      // test — and under any host that does not provide it — subscribing
+      // throws, and dropping files is a convenience: the chooser button does
+      // the same job. So the screen degrades to "no drag and drop" rather than
+      // to a blank panel.
+      let fn: (() => void) | undefined;
       try {
-        await api.ingestApprove(workflowId, {
-          approved,
-          options: { ...stages, ...PROFILE_SWITCHES[profileChoice] },
-          reason: "",
+        fn = await getCurrentWebview().onDragDropEvent((event) => {
+          const zone = dropZone.current;
+          if (!zone) return;
+          if (event.payload.type === "over") {
+            const { x, y } = event.payload.position;
+            const box = zone.getBoundingClientRect();
+            inside.current =
+              x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+            setDragging(inside.current);
+            return;
+          }
+          if (event.payload.type === "drop") {
+            // The drop payload carries no position, so whether it landed on the
+            // zone is decided by the last `over` — a ref rather than the state,
+            // because this closure is bound once and would otherwise read the
+            // value `dragging` had when it was created.
+            setDragging(false);
+            if (inside.current) choose(event.payload.paths);
+            inside.current = false;
+            return;
+          }
+          inside.current = false;
+          setDragging(false);
         });
-        setOutcome(approved ? "gate.approved" : "gate.rejected");
-        setGate(null);
+      } catch {
+        return;
+      }
+      if (cancelled) fn();
+      else unlisten = fn;
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [choose]);
+
+  /** Stage and start one workflow per file, in order.
+   *
+   *  **Sequential, not parallel.** Staging copies or uploads the bytes, and a
+   *  parallel burst buys nothing against one disk or one upstream link. A
+   *  per-file failure is recorded against that file and the loop continues:
+   *  refusing the whole batch because the fifth book is a `.pptx` would throw
+   *  away four imports that were fine.
+   *
+   *  Nothing here is paid for. Each run stops at its gate, which is where the
+   *  money is decided, and it waits there for up to seven days. */
+  const start = useCallback(async () => {
+    if (!libraryId || paths.length === 0) return;
+    setBusy(true);
+    setError(null);
+    setRefused([]);
+    const failures: { path: string; message: string }[] = [];
+    const enqueued: string[] = [];
+    for (const path of paths) {
+      try {
+        // Staging is what makes one screen serve both planes. Local mode hands
+        // the path straight back; cloud mode uploads the file and returns the
+        // path *inside the worker's container*, which is the only path
+        // `ingestStart` can use there. The key comes back too, because the two
+        // planes derive it differently and the screen should not have to know.
+        const staged = await api.stageSource(path);
+        await api.ingestStart(
+          {
+            libraryId,
+            sourcePath: staged.sourcePath,
+            sourceKey: staged.sourceKey,
+            title: "",
+          },
+          stages,
+        );
+        enqueued.push(path);
+      } catch (e) {
+        failures.push({ path, message: errorMessage(e) });
+      }
+    }
+    // Only what got through leaves the chooser, so a refused file stays visible
+    // beside the reason and can be removed or retried without being re-picked.
+    setPaths((current) => current.filter((p) => !enqueued.includes(p)));
+    setRefused(failures);
+    setBusy(false);
+    void refresh();
+  }, [libraryId, paths, stages, refresh]);
+
+  /** Enqueue every link in the box, one run each.
+   *
+   *  The same shape as `start` above and for the same reason: enqueuing *is*
+   *  starting the workflow, the probe costs nothing, and each run parks at its
+   *  own gate. So a paste of five links is five imports, refused individually —
+   *  a playlist URL among them is one refusal, not a failed batch.
+   *
+   *  Stages are **not** passed. What a video should run depends on where its
+   *  transcript comes from, which is not known until the probe has looked; the
+   *  gate carries a `recommended` and opens with those boxes ticked. */
+  const startVideos = useCallback(async () => {
+    const links = urls
+      .split(/[\s,]+/)
+      .map((u) => u.trim())
+      .filter(Boolean);
+    if (!libraryId || links.length === 0) return;
+    setBusy(true);
+    setError(null);
+    setRefused([]);
+    const failures: { path: string; message: string }[] = [];
+    const enqueued = new Set<string>();
+    for (const url of links) {
+      try {
+        await api.videoStart({ libraryId, url }, DEFAULT_STAGES, setFetching);
+        enqueued.add(url);
+      } catch (e) {
+        failures.push({ path: url, message: errorMessage(e) });
+      }
+    }
+    setFetching(null);
+    // Only what got through leaves the box, so a refused link stays visible
+    // beside its reason and can be corrected rather than retyped.
+    setUrls(links.filter((u) => !enqueued.has(u)).join("\n"));
+    setRefused(failures);
+    setBusy(false);
+    void refresh();
+  }, [libraryId, urls, refresh]);
+
+  /** Answer one item's gate. The queue is the source of truth, so this records
+   *  nothing locally — it forgets the report and lets the next poll say what
+   *  happened. */
+  const decide = useCallback(
+    async (workflowId: string, approved: boolean, options: StageOptions) => {
+      try {
+        await api.ingestApprove(workflowId, { approved, options, reason: "" });
       } catch (e) {
         setError(e);
       } finally {
-        setBusy(false);
+        settled(workflowId);
+        void refresh();
       }
     },
-    [workflowId, stages, profileChoice],
+    [refresh, settled],
   );
 
   const toggle = (key: keyof StageOptions) =>
@@ -170,14 +306,77 @@ export function ImportScreen() {
       <h2>{t("import.title")}</h2>
       <p className="intro">{t("import.intro")}</p>
 
-      <label className="field">
-        <span>{t("import.path")}</span>
-        <input
-          value={path}
-          placeholder={t("import.pathHint")}
-          onChange={(e) => setPath(e.target.value)}
+      {/* No text field. A path typed by hand cannot work in either mode — the
+          local worker opens `/workspace` and the cloud worker is on another
+          machine — so the only paths that may reach `stage_source` are ones the
+          OS produced. `aria-label` rather than a visible one: the zone's own
+          text is the label, and repeating it above would read it twice. */}
+      <div
+        ref={dropZone}
+        className={dragging ? "dropzone dragging" : "dropzone"}
+        role="group"
+        aria-label={t("import.file")}
+      >
+        {paths.length === 0 ? (
+          <p className="muted">{t("import.dropHint")}</p>
+        ) : (
+          <ul className="chosen-files">
+            {paths.map((p) => (
+              <li key={p} className="chosen">
+                <strong>{fileName(p)}</strong>
+                <br />
+                <span className="muted">{p}</span>{" "}
+                <button
+                  type="button"
+                  className="link"
+                  onClick={() => setPaths((c) => c.filter((x) => x !== p))}
+                >
+                  {t("import.removeFile")}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button type="button" onClick={() => void pick()} disabled={picking}>
+          {picking
+            ? t("import.picking")
+            : t(paths.length === 0 ? "import.choose" : "import.chooseMore")}
+        </button>
+      </div>
+
+      {/* Videos. Its own panel and its own button, because a video is not a
+          file: nothing is staged, no format is checked, and the stages below do
+          not apply — a video run has no profile, semantics, eval-set or tuning
+          stage at all, and the gate opens with what its own probe recommends. */}
+      <div className="dropzone" role="group" aria-label={t("import.videoTitle")}>
+        <p className="muted">{t("import.videoHint")}</p>
+        <textarea
+          className="video-urls"
+          rows={3}
+          value={urls}
+          spellCheck={false}
+          placeholder={t("import.videoPlaceholder")}
+          aria-label={t("import.videoTitle")}
+          onChange={(e) => setUrls(e.target.value)}
         />
-      </label>
+        <button
+          type="button"
+          onClick={() => void startVideos()}
+          disabled={busy || urls.trim() === "" || !libraryId}
+        >
+          {busy ? t("import.working") : t("import.videoStart")}
+        </button>
+        {/* The only thing on screen between pressing the button and the queue
+            appearing. In cloud mode the two calls YouTube refuses the server
+            are made here, on this machine — resolving is seconds and, for a
+            video with no captions, downloading its audio is minutes, all of it
+            before a run row exists for the queue to show. */}
+        {fetching !== null && (
+          <p className="muted" role="status">
+            {fetchingLabel(fetching, t)}
+          </p>
+        )}
+      </div>
 
       <fieldset className="stages">
         <legend>{t("import.stages")}</legend>
@@ -186,6 +385,8 @@ export function ImportScreen() {
             ["correct", "import.stageCorrect"],
             ["embed", "import.stageEmbed"],
             ["extractSemantics", "import.stageSemantics"],
+            ["generateEvalset", "import.stageEvalset"],
+            ["tune", "import.stageTune"],
             ["learnProfile", "import.stageLearnProfile"],
             ["reviewCorrection", "import.stageReview"],
           ] as const
@@ -201,181 +402,30 @@ export function ImportScreen() {
         ))}
       </fieldset>
 
-      <button type="button" onClick={start} disabled={busy || !path.trim() || !libraryId}>
-        {busy ? t("import.working") : t("import.start")}
+      <button
+        type="button"
+        onClick={start}
+        disabled={busy || paths.length === 0 || !libraryId}
+      >
+        {busy
+          ? t("import.working")
+          : t("import.startBatch", { count: paths.length })}
       </button>
 
-      {workflowId && !gate && !outcome && (
-        <p className="waiting">{t("import.waiting", { id: workflowId })}</p>
-      )}
-
-      {outcome && <p className="notice">{t(outcome)}</p>}
-
-      {gate && (
-        <div className="gate">
-          <h3>{t("gate.title")}</h3>
-          <p className="intro">{t("gate.intro")}</p>
-
-          <dl className="preview">
-            <dt>{t("gate.chunks")}</dt>
-            <dd>{gate.preview.chunkCount}</dd>
-            <dt>{t("gate.characters")}</dt>
-            <dd>{gate.preview.characters.toLocaleString()}</dd>
-            <dt>{t("gate.kinds")}</dt>
-            <dd>
-              {gate.preview.kinds
-                .map((k) => `${k.kind} ${k.count}`)
-                .join(" · ") || "—"}
-            </dd>
-          </dl>
-
-          {/* Not a footnote. Correction runs before chunking because it changes
-              the text's length, so with it on these are not the chunks that
-              will be indexed. */}
-          {!gate.preview.chunksAreFinal && (
-            <p className="warn">{t("gate.notFinal")}</p>
-          )}
-          {gate.preview.warnings.map((w) => (
-            <p className="warn" key={w}>
-              {w}
-            </p>
-          ))}
-
-          {/* Which rules will chunk this document, and where they came from.
-              Shown at the gate rather than buried in a run log because
-              "inherited someone else's rules" and "about to pay to learn new
-              ones" are different decisions, and only one of them costs money. */}
-          <div className="profile">
-            <h4>{t("gate.profileTitle")}</h4>
-            {gate.profile?.source === "reused" ? (
-              <>
-                <p>
-                  {t("gate.profileReused", {
-                    slug: gate.profile.slug,
-                    learnedFrom: gate.profile.learnedFrom || "—",
-                    revisions: gate.profile.revisions,
-                  })}
-                </p>
-                {gate.profile.rules.headingL1Pattern && (
-                  <p className="model">
-                    {t("gate.profileHeadings", {
-                      pattern: gate.profile.rules.headingL1Pattern,
-                    })}
-                  </p>
-                )}
-              </>
-            ) : (
-              <>
-                <p>{t("gate.profileDefault")}</p>
-                <p className={stages.learnProfile ? "" : "warn"}>
-                  {t(
-                    stages.learnProfile
-                      ? "gate.profileWillLearn"
-                      : "gate.profileNoLearn",
-                  )}
-                </p>
-              </>
-            )}
-
-            {gate.profileWarnings.length > 0 && (
-              <div className="warn">
-                <strong>{t("gate.profileCollision")}</strong>
-                {gate.profileWarnings.map((w) => (
-                  <p key={w.profileId + w.detail}>{w.detail}</p>
-                ))}
-                {/* A *low* topical overlap is the dangerous case: identical
-                    structure, unrelated subject matter. The metrics cannot see
-                    it, so the choice below is a person's to make. */}
-                <p className="caveat">{t("gate.profileCollisionHelp")}</p>
-              </div>
-            )}
-
-            <fieldset className="stages">
-              <legend>{t("gate.profileChoice")}</legend>
-              {(
-                [
-                  ["inherited", "gate.profileUseInherited"],
-                  ["learn", "gate.profileLearnFresh"],
-                  ["defaults", "gate.profileUseDefaults"],
-                ] as const
-              ).map(([value, label]) => (
-                <label key={value}>
-                  <input
-                    type="radio"
-                    name="profile-choice"
-                    checked={profileChoice === value}
-                    disabled={
-                      value === "inherited" && gate.profile?.source !== "reused"
-                    }
-                    onChange={() => setProfileChoice(value)}
-                  />
-                  <span>{t(label)}</span>
-                </label>
-              ))}
-            </fieldset>
-          </div>
-
-          <table className="estimate">
-            <thead>
-              <tr>
-                <th>{t("gate.stage")}</th>
-                <th>{t("gate.model")}</th>
-                <th>{t("gate.tokensIn")}</th>
-                <th>{t("gate.tokensOut")}</th>
-                <th>{t("gate.cost")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {gate.estimate.stages.map((s) => (
-                <tr key={s.stage}>
-                  <td>
-                    {t(`gate.stages.${s.stage}`, { defaultValue: s.stage })}
-                  </td>
-                  <td className="model">{s.model}</td>
-                  <td>{s.inputTokens.toLocaleString()}</td>
-                  <td>
-                    {s.outputTokensHigh > s.outputTokens ? (
-                      <span className="range">
-                        {range(
-                          s.outputTokens.toLocaleString(),
-                          s.outputTokensHigh.toLocaleString(),
-                        )}
-                      </span>
-                    ) : (
-                      s.outputTokens.toLocaleString()
-                    )}
-                  </td>
-                  <td>
-                    <Cost usd={s.usd} high={s.usdHigh} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colSpan={4}>{t("gate.total")}</td>
-                <td>
-                  <Cost
-                    usd={gate.estimate.totalUsd}
-                    high={gate.estimate.totalUsdHigh}
-                  />
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-
-          {/* The caveat travels with the figure, always: the token counts are
-              measured, the prices are second-hand. */}
-          <p className="caveat">{gate.estimate.priceSource}</p>
-
-          <div className="actions">
-            <button type="button" onClick={() => decide(true)} disabled={busy}>
-              {t("gate.approve")}
-            </button>
-            <button type="button" onClick={() => decide(false)} disabled={busy}>
-              {t("gate.reject")}
-            </button>
-          </div>
+      {refused.length > 0 && (
+        <div className="error">
+          <strong>{t("import.someRefused", { count: refused.length })}</strong>
+          <ul>
+            {refused.map((f) => (
+              <li key={f.path}>
+                <strong>{fileName(f.path)}</strong>
+                <pre className="detail">{f.message}</pre>
+              </li>
+            ))}
+          </ul>
+          <button type="button" onClick={() => setRefused([])}>
+            {t("error.dismiss")}
+          </button>
         </div>
       )}
 
@@ -389,6 +439,20 @@ export function ImportScreen() {
           </button>
         </div>
       )}
+
+      {/* The queue, and the reason this screen is no longer amnesiac: it is read
+          from the catalog, so it survives a relaunch, a plane switch and a
+          crash, and an approved import stays on screen instead of vanishing
+          behind a one-line notice. */}
+      <ImportQueue
+        items={items}
+        loaded={loaded}
+        error={queueError}
+        stages={stages}
+        onDecide={(id, approved, options) => void decide(id, approved, options)}
+        onChanged={() => void refresh()}
+        locale={i18n.language}
+      />
     </section>
   );
 }

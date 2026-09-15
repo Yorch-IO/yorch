@@ -15,6 +15,8 @@
  * window was shut be collected on the next launch rather than paid for twice.
  */
 import { errorMessage, isAppError, type Answer, type EvidenceItem } from "./api";
+import { DEFAULT_ASK_EFFORT, isAskEffort, type AskEffort } from "./askEffort";
+import { scopedKey } from "./backend";
 
 export interface AskEntry {
   /** Supplied by the caller, so the reducer needs no clock and no counter of
@@ -38,6 +40,11 @@ export interface AskEntry {
   /** Index into `answer.citations`. Kept per entry, so returning to an earlier
    *  question finds it where you left it rather than reset to the first. */
   citation: number;
+  /** The level it was asked at. Recorded per entry rather than read off the
+   *  current control, because the control moves and the entry does not: asking
+   *  an old question again must repeat what it did, and two entries with
+   *  different answers to the same question are otherwise unexplained. */
+  effort: AskEffort;
 }
 
 export interface AskSession {
@@ -47,7 +54,14 @@ export interface AskSession {
 }
 
 export type AskAction =
-  | { type: "submit"; id: string; question: string; libraryId: string; startedAt: number }
+  | {
+      type: "submit";
+      id: string;
+      question: string;
+      libraryId: string;
+      startedAt: number;
+      effort: AskEffort;
+    }
   | { type: "started"; id: string; questionId: string }
   | { type: "answered"; id: string; answer: Answer }
   | { type: "failed"; id: string; error: unknown }
@@ -83,6 +97,7 @@ export function askReducer(state: AskSession, action: AskAction): AskSession {
             answer: null,
             error: null,
             citation: 0,
+            effort: action.effort,
           },
           ...state.entries,
         ],
@@ -167,14 +182,19 @@ function storableError(error: unknown): { kind: string; message: string } | null
   return { kind: "io", message: errorMessage(error) };
 }
 
-export function saveSession(state: AskSession): void {
+/** Scoped on the plane, because a question is asked of one corpus and answered
+ *  by one organisation's data. Signing out of the paid service and back in as
+ *  somebody else must not leave their questions — and their retrieved passages —
+ *  on screen. `scopedKey` leaves the local plane's key alone, so no existing
+ *  history is orphaned by this. */
+export function saveSession(state: AskSession, identity: string): void {
   const entries = state.entries.slice(0, KEEP);
   const payload = {
     entries: entries.map((e) => ({ ...e, error: storableError(e.error) })),
     selected: entries.some((e) => e.id === state.selected) ? state.selected : null,
   };
   try {
-    window.localStorage.setItem(STORED, JSON.stringify(payload));
+    window.localStorage.setItem(scopedKey(STORED, identity), JSON.stringify(payload));
   } catch {
     // Over quota, or storage denied. Losing the history is not worth an error
     // in front of an answer the user is reading.
@@ -182,10 +202,10 @@ export function saveSession(state: AskSession): void {
 }
 
 /** Restore a previous window's history, or an empty session. */
-export function loadSession(): AskSession {
+export function loadSession(identity: string): AskSession {
   let raw: string | null = null;
   try {
-    raw = window.localStorage.getItem(STORED);
+    raw = window.localStorage.getItem(scopedKey(STORED, identity));
   } catch {
     return EMPTY_SESSION;
   }
@@ -206,6 +226,11 @@ export function loadSession(): AskSession {
         e.status === "pending" && !e.questionId
           ? { kind: "io", message: "interrupted" }
           : e.error,
+      // Every entry already in a user's history predates the level, and was
+      // asked at what is now the default. Validated rather than trusted for the
+      // same reason `loadEffort` validates: a bad value here would be handed
+      // straight back to the server by "ask again".
+      effort: isAskEffort(e.effort) ? e.effort : DEFAULT_ASK_EFFORT,
     }));
 
     return {

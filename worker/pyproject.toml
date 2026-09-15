@@ -13,6 +13,15 @@ dependencies = [
     "httpx>=0.28.1",
     "neo4j>=5.28",
     "google-genai>=1.0",
+    # The video path. Both are pure-Python wheels, so `worker/Dockerfile` keeps
+    # its "no compiler in the image" property — and `bestaudio` with no
+    # postprocessor means no ffmpeg either, which is the difference between this
+    # image and ~80 MB of apt on a 60 GiB volume that also holds the corpus.
+    #
+    # yt-dlp is pinned to a floor rather than an exact version because YouTube
+    # changes underneath it and a stale one fails at extraction, not at build.
+    "yt-dlp>=2026.1.1",
+    "boto3>=1.35",
 ]
 
 [dependency-groups]

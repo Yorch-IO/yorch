@@ -82,6 +82,7 @@ def test_the_buggy_optional_dot_pattern_is_rejected(book_bytes, evidence):
     assert v.feedback, "a rejection with no feedback cannot drive a refine round"
 
 
+@pytest.mark.reference_corpus  # asserts `passed`, which depends on the book
 def test_the_correct_required_dot_pattern_is_accepted(book_bytes, evidence):
     v = _validate(
         CORRECT_QUESTION_PATTERN, CORRECT_FOOTNOTE_PATTERN, book_bytes, evidence
@@ -184,7 +185,20 @@ def test_header_pattern_matching_no_real_repeat_is_rejected(book_bytes, evidence
     assert any("matches none of the lines" in f.detail for f in v.findings)
 
 
+@pytest.mark.reference_corpus  # asserts `passed`, which depends on the book
 def test_correct_header_pattern_is_accepted(book_bytes, evidence):
+    """Both this and `test_the_correct_required_dot_pattern_is_accepted` assert
+    that a hand-written proposal *passes*, and `passed` is a property of the
+    resolved corpus as much as of the checker.
+
+    Observed 2026-08-28: indexing `01_RetoDeDios_INT-S.pdf` wrote a 476 KB
+    `.corrected.txt`, which made it the largest and so the resolver's choice,
+    and both tests went red mid-session with no code change. This publisher
+    numbers its footnotes with a dot ("2. Ibídem."), so the numbered path finds
+    duplicate level-1 numbers and `heading_guards` fails — correctly, for a
+    proposal written for another book. Marked rather than loosened: the
+    assertion is sound on the reference corpus and is a fact about it.
+    """
     evidence.repeated_lines = {"CULTURA, SOCIEDAD Y CRISTIANISMO": 175}
     v = validate(
         Proposal(

@@ -294,3 +294,259 @@ def test_offsets_shift_when_accents_are_added():
     after = "relación evidente con otras materias".encode("utf-8")
     assert len(after) == len(before) + 1
     assert before.index(b"evidente") != after.index(b"evidente")
+
+
+# --- the cache ---------------------------------------------------------------
+
+
+class _OneShotVertex:
+    """Corrects by appending a marker, and counts the calls it was asked for."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, prompt, *, system=None, stage="", json_schema=None, temperature=0.0):
+        import json
+
+        self.calls += 1
+        payload = json.loads(prompt)
+        return json.dumps(
+            {
+                "parrafos": [
+                    {"i": p["i"], "texto": p["texto"]} for p in payload["parrafos"]
+                ]
+            }
+        )
+
+
+def test_an_interrupted_correction_keeps_what_it_already_paid_for(tmp_path):
+    """The reason this cache exists: a run was killed at batch 14 of 19 and threw
+    away everything before it. Correction is the dominant cost of an index
+    ($0.0334 against $0.0498 on a real run), so the second attempt must ask only
+    for what it never got."""
+    paragraphs = [ORIGINAL, ORIGINAL.replace("griego", "helénico")]
+    cache = tmp_path / "correct"
+
+    first = _OneShotVertex()
+    correct_paragraphs(first, paragraphs, cache_dir=cache)
+    assert first.calls == 1
+
+    second = _OneShotVertex()
+    _, report = correct_paragraphs(second, paragraphs, cache_dir=cache)
+    assert second.calls == 0, "it re-paid for corrections it already had"
+    assert report.cache_hits == len(paragraphs)
+
+
+def test_two_concurrent_corrections_do_not_lose_each_others_entries(tmp_path):
+    """One file per paragraph, not one JSON holding every entry.
+
+    The old layout loaded the whole file at the top of a run and rewrote it after
+    every batch, so the second writer's dict — assembled before the first one
+    wrote — silently replaced it. The worker can correct two documents at once.
+    """
+    cache = tmp_path / "correct"
+    mine = ORIGINAL
+    theirs = ORIGINAL.replace("Dooyeweerd", "Kierkegaard")
+
+    # Interleaved deliberately: both start before either finishes.
+    a = correct_mod._ParagraphCache(cache)
+    b = correct_mod._ParagraphCache(cache)
+    a.get(mine)
+    b.get(theirs)
+    a.put(mine, "corregido A")
+    b.put(theirs, "corregido B")
+
+    fresh = correct_mod._ParagraphCache(cache)
+    assert fresh.get(mine) == "corregido A"
+    assert fresh.get(theirs) == "corregido B"
+
+
+def test_the_previous_single_file_cache_is_still_read(tmp_path):
+    """2,379 lines of corrections already paid for live in `paragraphs.json`.
+    Changing the layout must not re-spend them."""
+    import json
+
+    cache = tmp_path / "correct"
+    cache.mkdir(parents=True)
+    (cache / "paragraphs.json").write_text(
+        json.dumps({correct_mod._key(ORIGINAL): "de la caché antigua"}),
+        encoding="utf-8",
+    )
+
+    assert correct_mod._ParagraphCache(cache).get(ORIGINAL) == "de la caché antigua"
+
+
+def test_the_cache_root_is_a_parameter_not_the_working_directory(tmp_path):
+    """`os.chdir` is process-global and the worker runs activities concurrently."""
+    a, b = tmp_path / "one", tmp_path / "two"
+    correct_mod._ParagraphCache(a).put(ORIGINAL, "en A")
+
+    assert correct_mod._ParagraphCache(b).get(ORIGINAL) is None
+    assert correct_mod._ParagraphCache(a).get(ORIGINAL) == "en A"
+
+
+# --- a ratio cannot express "a sentence was deleted" ------------------------
+#
+# Measured 2026-09-03 over the 2,684 corrections this repository's own cache
+# holds for `libros/`, recovered by re-extracting each PDF and looking its
+# paragraphs up by cache key. **Not one of them was rejected by the gate as it
+# stood**, and seven had deleted real content — four of those a negation or a
+# section title, which are the two things whose loss changes the meaning most.
+# None lost a proper noun, a two-digit number or a scripture reference, and the
+# largest was -22.2%, so every existing check passed all seven.
+
+
+def test_rejects_a_deleted_sentence_that_the_ratio_lets_through():
+    """`07-LlavesDelPoder-INT.pdf`, verbatim. Extraction merged the section
+    title into its paragraph and the model deleted it: 195 -> 163 characters,
+    -16.4%, well inside ±25%."""
+    original = (
+        "Generosidad en vez de avaricia. La Biblia no enseña en ninguna parte "
+        "que uno recibe sin dar. Es completamente antiescritural pretender "
+        "recibir sin dar. Sencillamente no se puede. Leamos al Señor:"
+    )
+    corrected = original[len("Generosidad en vez de avaricia. "):]
+    # Every other check passes, which is why this one had to exist.
+    assert abs(len(corrected) - len(original)) / len(original) < MAX_LENGTH_DELTA
+    ok, reason, detail = verify(original, corrected)
+    assert not ok, "a deleted section title must not be accepted"
+    assert reason == "deleted", detail
+
+
+def test_rejects_a_deleted_negation():
+    """`06-SexoEnLaBiblia_INT-S.pdf`, verbatim: the leading clause goes, and
+    with it the "no" that carries the claim. 1063 -> 1016 characters, -4.4%."""
+    tail = (
+        "El placer erótico propio de la relación sexual entre un hombre y una "
+        "mujer no puede ser unilateral; al describir las características del "
+        "verdadero amor, Pablo dice a los corintios que tal sentimiento «no es "
+        "egoísta», de donde nace la necesidad de comprender que si alguien "
+        "quiere ser feliz debe procurar primero la felicidad de su pareja, y "
+        "así sucesivamente, con lo cual el asunto se resuelve por sí mismo."
+    )
+    original = "no se menciona, en este caso, la reproducción. " + tail
+    corrected = tail[0].lower() + tail[1:]
+    ok, reason, _ = verify(original, corrected)
+    assert not ok and reason == "deleted"
+
+
+def test_a_one_character_fix_on_a_tiny_paragraph_is_still_accepted():
+    """The reason the guard is an absolute count and not a tighter ratio. All
+    four of these are real corrections from `libros/`, and on a paragraph this
+    short a single character is 8-15% of it."""
+    for original, corrected in (
+        ("pág 33.", "pág. 33."),
+        ("(Siembr a)", "(Siembra)"),
+        ("México 2001.", "México, 2001."),
+        ("La granfarsa", "La gran farsa"),
+    ):
+        ok, reason, detail = verify(original, corrected)
+        assert ok, f"{original!r}: {reason}: {detail}"
+
+
+def test_the_ordinary_correction_is_untouched_by_the_new_floor():
+    """2,145 of the 2,684 measured corrections gained or kept length and 525
+    lost between one and five characters. The floor sits at 20, above all of
+    them: only 9 corrections in the whole corpus lost 12 or more."""
+    original = "contra-ataque brutal, según lo expuesto en 1991 por Antonio Cruz."
+    ok, reason, detail = verify(original, original.replace("contra-ataque", "contraataque"))
+    assert ok, f"{reason}: {detail}"
+
+
+# --- a cache hit used to skip the gate entirely -----------------------------
+
+
+class _RefusesToSpend:
+    """A `Vertex` that fails the test if anything asks it to generate."""
+
+    def generate(self, *a, **k):  # pragma: no cover - must never be reached
+        raise AssertionError("a cached paragraph must not be sent to the API")
+
+
+def test_a_cached_correction_is_verified_on_the_way_out(tmp_path):
+    """The gate's rules are measured, and measured rules get tightened.
+
+    A cache entry is the output of the gate *as it stood when the entry was
+    written*, and the entry is reused for ever — so the five sentence deletions
+    sitting in the cache this repository ships would be re-applied by every
+    re-index and every rebuild of those books, with the gate never consulted.
+    Verifying on read costs nothing: `verify` is deterministic and free.
+    """
+    original = (
+        "Se negó a recibir culto. Un general del ejército romano de nombre "
+        "Cornelio, ama sinceramente a Dios y le ha pedido que se le revele. "
+        "Entre tanto Pedro, en otra ciudad, recibe la orden de ir donde este "
+        "gentil a hablarle de la fe en jesucristo. Veamos lo que pasa:"
+    )
+    poisoned = original[len("Se negó a recibir culto. "):]
+
+    root = tmp_path / "correct"
+    root.mkdir()
+    (root / f"{correct_mod._key(original)}.txt").write_text(poisoned, encoding="utf-8")
+
+    out, report = correct_paragraphs(_RefusesToSpend(), [original], cache_dir=root)
+
+    assert out == [original], "a cached correction the gate refuses must not be used"
+    assert [r.reason for r in report.rejected] == ["deleted"]
+    assert report.cache_hits == 1  # it did save the call, and is reported as such
+
+
+def test_a_cached_correction_the_gate_accepts_is_still_used(tmp_path):
+    original = "Al ocuparse del aporte griego, Dooyeweerd identifica la relacion dialéctica."
+    good = original.replace("relacion", "relación")
+    root = tmp_path / "correct"
+    root.mkdir()
+    (root / f"{correct_mod._key(original)}.txt").write_text(good, encoding="utf-8")
+
+    out, report = correct_paragraphs(_RefusesToSpend(), [original], cache_dir=root)
+    assert out == [good]
+    assert not report.rejected
+
+
+# --- a rejection has to be reviewable, not just counted ----------------------
+
+
+def test_a_refused_correction_keeps_what_was_refused():
+    """Without this the gate's own false-positive rate is unmeasurable.
+
+    A refused proposal is never cached — `correct_paragraphs` `continue`s before
+    `cache.put` — so the reason and the missing token were all that survived.
+    The wide audit that set `MAX_LOST_CHARS` read 2,684 corrections out of the
+    cache and therefore saw only the ones this gate had *accepted*.
+    """
+    def loses_the_name(items):
+        return [
+            {"i": it["i"], "texto": it["texto"].replace("Dooyeweerd", "el autor")}
+            for it in items
+        ]
+
+    out, report = correct_paragraphs(FakeVertex(loses_the_name), [ORIGINAL])
+    assert out[0] == ORIGINAL, "the corpus must still be unaffected"
+    assert len(report.rejected) == 1
+    rejected = report.rejected[0]
+    assert rejected.reason == "proper_noun"
+    assert "el autor" in rejected.proposed
+    assert "Dooyeweerd" not in rejected.proposed
+
+
+def test_a_cached_correction_the_gate_refuses_is_reported_with_its_text(tmp_path):
+    original = (
+        "Se negó a recibir culto. Al ocuparse del aporte griego, Dooyeweerd "
+        "identifica la relación dialéctica."
+    )
+    poisoned = original[len("Se negó a recibir culto. "):]
+    root = tmp_path / "correct"
+    root.mkdir()
+    (root / f"{correct_mod._key(original)}.txt").write_text(poisoned, encoding="utf-8")
+
+    out, report = correct_paragraphs(_RefusesToSpend(), [original], cache_dir=root)
+    assert out == [original]
+    assert report.rejected[0].proposed == poisoned
+
+
+def test_a_paragraph_that_came_back_absent_has_no_proposal_to_keep():
+    """`missing` is a different outcome from `rejected` and must stay one."""
+    out, report = correct_paragraphs(FakeVertex(lambda items: []), [ORIGINAL])
+    assert out[0] == ORIGINAL
+    assert report.missing == 1
+    assert report.rejected == []

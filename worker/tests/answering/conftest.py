@@ -14,6 +14,8 @@ import random
 import httpx
 import pytest
 
+from brainworker.graph.schema import LEGACY_TENANT_ID
+
 from brainworker import config
 
 QDRANT = os.environ.get("BRAIN_QDRANT_URL", "http://127.0.0.1:6433")
@@ -53,8 +55,8 @@ def indexed():
             cited = {
                 r["chunk_id"]
                 for r in graph.query(
-                    "citations_for_chunks",
-                    {"chunk_ids": [c for c in by_chunk if c], "limit": 200},
+            "citations_for_chunks",
+            {"tenant_id": LEGACY_TENANT_ID, "chunk_ids": [c for c in by_chunk if c], "limit": 200},
                 )
             }
     except GraphError as e:
@@ -104,14 +106,32 @@ class VectorProvider:
         class _S:
             model = "gemini-3.6-flash"
             embedding_model = "gemini-embedding-2"
+            # Read by `CachedEmbedder`, which `search` now fronts the query
+            # embedding with. Typed like the real `Gemini` for the reason the
+            # two below are: a double trimmed to today's assertions fails with
+            # an AttributeError the next time the code under test grows, rather
+            # than exercising it.
+            embedding_dimensions = 3072
+            # See the note on the same fields in `test_answer.py`: typed like
+            # the real `Gemini` so the reasoning policy can be exercised rather
+            # than crashed into.
+            stage_thinking: dict[str, int | None] = {}
+            thinking_budget: int | None = None
 
         self.settings = _S()
 
     def embed(self, texts, *, task, workers=6):
-        from brainworker.providers.gemini import Embedding
+        from brainworker.providers.gemini import Embedding, Usage
 
         self.tasks.append(task)
-        return [Embedding(values=self.vector) for _ in texts]
+        # A token count, because the real one reports one and `search` bills off
+        # it. Without this the double reported zero for a miss and zero for a
+        # cache hit, so the two were indistinguishable — and the rule that a
+        # cached query must not be billed had nothing standing on it.
+        return [
+            Embedding(values=self.vector, usage=Usage(input_tokens=11))
+            for _ in texts
+        ]
 
 
 @pytest.fixture

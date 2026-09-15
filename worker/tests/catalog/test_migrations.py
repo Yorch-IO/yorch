@@ -1,13 +1,20 @@
-"""Migration behaviour. These need Postgres and skip, with the URL, without it."""
+"""Schema behaviour. These need Postgres and skip, with the URL, without it.
+
+Prisma owns this schema now, so what is tested here changed shape: there is no
+longer a Python runner whose *applying* is the subject. What is tested is the
+schema those migrations produce, the assertion that replaced the runner, and the
+one property the tenancy migration changed — content uniqueness is now per
+tenant.
+"""
 
 from __future__ import annotations
-
-import pathlib
 
 import psycopg
 import pytest
 
 from brainworker.catalog import migrations as m
+
+LEGACY = "tnt_000000000000000000000001"
 
 
 def _tables(database_url: str) -> set[str]:
@@ -18,16 +25,23 @@ def _tables(database_url: str) -> set[str]:
     return {r[0] for r in rows}
 
 
-def test_migrating_an_empty_catalog_creates_every_table(database_url: str):
-    applied = m.migrate(database_url)
+def test_applying_every_migration_creates_every_table(database_url: str):
+    applied = m.apply_migrations(database_url)
     # Spelled out rather than derived from the directory: this list is the
     # tripwire for a migration arriving that nobody meant to add, and a derived
     # one would welcome it. Updating it is meant to be a deliberate act.
     assert applied == [
-        "001_initial.sql",
-        "002_profile_warning.sql",
-        "003_document_source_path.sql",
-        "004_run_kind_rebuild.sql",
+        "0_init",
+        "20260826120000_tenancy",
+        "20260826180000_tenant_required",
+        "20260831140000_run_blocked",
+        "20260831160000_run_kind_ask",
+        "20260901120000_run_event",
+        "20260903180000_answer_style",
+        "20260905060000_run_kind_video",
+        "20260905180000_run_library_label",
+        "20260905200000_conversation",
+        "20260906120000_delta_kind",
     ]
     assert {
         "library",
@@ -39,69 +53,201 @@ def test_migrating_an_empty_catalog_creates_every_table(database_url: str):
         "run",
         "run_artifact",
         "cost_entry",
+        "run_event",
         "profile_warning",
         "schema_migration",
+        "tenant",
+        "app_user",
+        "tenant_membership",
+        "answer_style",
+        "conversation",
+        "conversation_turn",
+        "conversation_delta",
     } <= _tables(database_url)
 
 
-def test_migrating_twice_applies_nothing_the_second_time(database_url: str):
-    """It runs on every API start, so "already applied" is the common path."""
-    m.migrate(database_url)
-    assert m.migrate(database_url) == []
+def test_applying_twice_applies_nothing_the_second_time(database_url: str):
+    m.apply_migrations(database_url)
+    assert m.apply_migrations(database_url) == []
 
 
-def test_current_version_tracks_the_highest_applied(database_url: str):
+def test_current_version_is_the_newest_applied(database_url: str):
     assert m.current_version(database_url) is None
-    m.migrate(database_url)
-    # Derived, because what this test is about is that `current_version` returns
-    # the *highest* applied version rather than the first or the last inserted.
-    # The inventory itself is pinned by the test above, so a literal here would
-    # only churn on every migration without checking anything more.
-    highest = max(f.name.split("_", 1)[0] for f in m.SCHEMA_DIR.glob("*.sql"))
-    assert m.current_version(database_url) == highest
+    m.apply_migrations(database_url)
+    assert m.current_version(database_url) == m.REQUIRED_MIGRATION
 
 
-def test_003_adds_the_column_reindex_reads(database_url: str):
+def test_require_schema_refuses_a_catalog_that_was_never_migrated(database_url: str):
+    """The message has to name the fix. An operator reading /health sees this
+    string and nothing else."""
+    with pytest.raises(m.MigrationError, match="never been migrated"):
+        m.require_schema(database_url)
+
+
+def test_require_schema_refuses_a_catalog_behind_the_code(database_url: str):
+    m.apply_migrations(database_url)
+    with pytest.raises(m.MigrationError, match="behind this code"):
+        m.require_schema(database_url, minimum="99999999999999_not_yet_written")
+
+
+def test_require_schema_accepts_a_catalog_ahead_of_the_code(database_url: str):
+    """A database migrated ahead of the binary reading it is the ordinary state
+    during a rollout — the migrate step runs before either plane starts. Refusing
+    it would make every deployment a flap."""
+    m.apply_migrations(database_url)
+    assert m.require_schema(database_url, minimum="0_init") == [
+        "0_init",
+        "20260826120000_tenancy",
+        "20260826180000_tenant_required",
+        "20260831140000_run_blocked",
+        "20260831160000_run_kind_ask",
+        "20260901120000_run_event",
+        "20260903180000_answer_style",
+        "20260905060000_run_kind_video",
+        "20260905180000_run_library_label",
+        "20260905200000_conversation",
+        m.REQUIRED_MIGRATION,
+    ]
+
+
+def test_a_half_applied_migration_does_not_count_as_applied(database_url: str):
+    """Prisma leaves `finished_at` null when a migration dies partway. Counting
+    that row is how "the column is there" gets believed about a database where
+    it is not."""
+    m.apply_migrations(database_url)
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute(
+            "UPDATE _prisma_migrations SET finished_at = NULL WHERE migration_name = %s",
+            (m.REQUIRED_MIGRATION,),
+        )
+    with pytest.raises(m.MigrationError, match="behind this code"):
+        m.require_schema(database_url)
+
+
+def test_the_column_reindex_reads_is_nullable(database_url: str):
     """`source_key` is library-relative on purpose and cannot name a file, so
-    re-index has nowhere to read from without this. Nullable, because documents
-    imported before it have no recorded path and must say so rather than guess."""
-    m.migrate(database_url)
+    re-index has nowhere to read from without `source_path`. Nullable, because
+    documents imported before it exists have no recorded path and must say so
+    rather than guess."""
+    m.apply_migrations(database_url)
     with psycopg.connect(database_url) as conn:
         row = conn.execute(
             "SELECT is_nullable FROM information_schema.columns "
             "WHERE table_name = 'document' AND column_name = 'source_path' "
             "AND table_schema = current_schema()"
         ).fetchone()
-    assert row is not None, "003 did not add document.source_path"
+    assert row is not None, "document.source_path is missing"
     assert row[0] == "YES"
 
 
-def test_editing_an_applied_migration_is_refused(
-    database_url: str, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+def test_a_write_that_names_no_tenant_is_refused(database_url: str):
+    """The acceptance criterion for phase 2, and the inverse of what stood here.
+
+    Through phase 1 this asserted the opposite: a column default put an
+    unqualified write into the legacy organisation, which is what let the free
+    plane and every activity keep writing with no Python change. That test said
+    of itself that it would be the thing to fail when the default came off, and
+    that the removal had to arrive *with* the activities passing a tenant rather
+    than instead of it. Both happened, so this is now the assertion.
+
+    A silent wrong answer is worse than an error, and the field this guards is
+    the one that decides whose data a row is.
+    """
+    m.apply_migrations(database_url)
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        with pytest.raises(psycopg.errors.NotNullViolation):
+            # Deliberately naming no tenant: this is the statement the column
+            # default used to accept, and it is the whole point of the phase.
+            conn.execute("INSERT INTO library (id, name) VALUES ('lib_1', 'L')")
+
+
+def test_a_write_that_names_one_still_works(database_url: str):
+    m.apply_migrations(database_url)
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO library (id, name, tenant_id) VALUES ('lib_1', 'L', %s)",
+            (LEGACY,),
+        )
+        row = conn.execute("SELECT tenant_id FROM library WHERE id = 'lib_1'").fetchone()
+    assert row == (LEGACY,)
+
+
+def test_identical_bytes_are_one_version_per_tenant_and_not_one_overall(
+    database_url: str,
 ):
-    """Two machines silently disagreeing about the schema is the failure this
-    prevents; both would report themselves fully migrated."""
-    m.migrate(database_url)
+    """The rule this catalog was designed around — one DocumentVersion per
+    distinct sha256, the fix for docagent's path-hashing `doc_id_for()` — now
+    holds *per tenant*. Two customers importing the same PDF must get two
+    versions, two sets of chunks and two bills; sharing them would leak one
+    corpus into the other."""
+    m.apply_migrations(database_url)
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO tenant (id, slug, name) "
+            "VALUES ('tnt_00000000000000000000000b', 'otro', 'Otro')"
+        )
+        conn.execute(
+            "INSERT INTO document_version (id, content_sha256, byte_size, tenant_id) "
+            "VALUES ('ver_a', 'same', 1, %s)",
+            (LEGACY,),
+        )
+        # The same bytes under a different tenant: allowed, and the point.
+        conn.execute(
+            "INSERT INTO document_version (id, content_sha256, byte_size, tenant_id) "
+            "VALUES ('ver_b', 'same', 1, 'tnt_00000000000000000000000b')"
+        )
+        # The same bytes twice under one tenant: still refused.
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            conn.execute(
+                "INSERT INTO document_version (id, content_sha256, byte_size, tenant_id) "
+                "VALUES ('ver_c', 'same', 1, %s)",
+                (LEGACY,),
+            )
 
-    edited = tmp_path / "schema"
-    edited.mkdir()
-    for src in sorted(m.SCHEMA_DIR.glob("*.sql")):
-        (edited / src.name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-    target = edited / "001_initial.sql"
-    target.write_text(target.read_text(encoding="utf-8") + "\n-- edited\n", encoding="utf-8")
 
-    monkeypatch.setattr(m, "SCHEMA_DIR", edited)
-    with pytest.raises(m.MigrationError, match="changed after it was applied"):
-        m.migrate(database_url)
+def test_a_tenant_holding_data_cannot_be_deleted(database_url: str):
+    """RESTRICT rather than CASCADE. Cascading would take the catalog rows and
+    leave the Qdrant points and Memgraph nodes they point at behind, unreachable
+    and unnoticed — removal has an order (`removal.py`: projections first,
+    catalog last) and a foreign key cannot honour it."""
+    m.apply_migrations(database_url)
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        conn.execute("INSERT INTO library (id, name, tenant_id) VALUES ('lib_1', 'L', %s)",
+            (LEGACY,),)
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            conn.execute("DELETE FROM tenant WHERE id = %s", (LEGACY,))
+
+
+def test_a_tenant_id_must_look_like_a_graph_id(database_url: str):
+    """Phase 2 puts this string on a graph node, where the query binder checks
+    it against `(lib|fld|doc|…|tnt)_[0-9a-f]{24}`. A free-form id would pass
+    every test here and fail there, months later."""
+    m.apply_migrations(database_url)
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute("INSERT INTO tenant (id, slug, name) VALUES ('acme', 'acme', 'A')")
+
+
+def test_an_email_must_be_stored_lowercase(database_url: str):
+    """The login lookup is case-insensitive, so two rows differing only in case
+    would make it ambiguous which one claims the Cognito sub — and the wrong
+    answer there hands one person's memberships to another."""
+    m.apply_migrations(database_url)
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute(
+                "INSERT INTO app_user (id, email) VALUES ('usr_1', 'Bob@Example.com')"
+            )
 
 
 def test_a_version_is_not_answerable_until_it_is_activated(database_url: str):
     """`state` and `activated_at` are the gate; the default must be closed."""
-    m.migrate(database_url)
+    m.apply_migrations(database_url)
     with psycopg.connect(database_url, autocommit=True) as conn:
         conn.execute(
-            "INSERT INTO document_version (id, content_sha256, byte_size) "
-            "VALUES ('ver_x', 'a', 1)"
+            "INSERT INTO document_version (id, content_sha256, byte_size, tenant_id) "
+            "VALUES ('ver_x', 'a', 1, %s)",
+            (LEGACY,),
         )
         row = conn.execute(
             "SELECT state, activated_at FROM document_version WHERE id = 'ver_x'"
@@ -111,18 +257,20 @@ def test_a_version_is_not_answerable_until_it_is_activated(database_url: str):
 
 def test_one_document_cannot_have_two_active_versions(database_url: str):
     """Enforced by the database, because a citation must resolve after a crash."""
-    m.migrate(database_url)
+    m.apply_migrations(database_url)
     with psycopg.connect(database_url, autocommit=True) as conn:
-        conn.execute("INSERT INTO library (id, name) VALUES ('lib_1', 'L')")
+        conn.execute("INSERT INTO library (id, name, tenant_id) VALUES ('lib_1', 'L', %s)",
+            (LEGACY,),)
         conn.execute(
-            "INSERT INTO document (id, library_id, source_key, title, format) "
-            "VALUES ('doc_1', 'lib_1', 'a.pdf', 'A', 'pdf')"
+            "INSERT INTO document (id, library_id, source_key, title, format, tenant_id) "
+            "VALUES ('doc_1', 'lib_1', 'a.pdf', 'A', 'pdf', %s)",
+            (LEGACY,),
         )
         for vid, sha in (("ver_1", "a"), ("ver_2", "b")):
             conn.execute(
-                "INSERT INTO document_version (id, content_sha256, byte_size) "
-                "VALUES (%s, %s, 1)",
-                (vid, sha),
+                "INSERT INTO document_version (id, content_sha256, byte_size, tenant_id) "
+                "VALUES (%s, %s, 1, %s)",
+                (vid, sha, LEGACY),
             )
         conn.execute(
             "INSERT INTO document_active_version (document_id, version_id) "
@@ -135,49 +283,42 @@ def test_one_document_cannot_have_two_active_versions(database_url: str):
             )
 
 
-def test_identical_bytes_cannot_be_stored_as_two_versions(database_url: str):
-    """The uniqueness that makes the duplicate-file fix real rather than a habit."""
-    m.migrate(database_url)
-    with psycopg.connect(database_url, autocommit=True) as conn:
-        conn.execute(
-            "INSERT INTO document_version (id, content_sha256, byte_size) "
-            "VALUES ('ver_a', 'same', 1)"
-        )
-        with pytest.raises(psycopg.errors.UniqueViolation):
-            conn.execute(
-                "INSERT INTO document_version (id, content_sha256, byte_size) "
-                "VALUES ('ver_b', 'same', 1)"
-            )
-
-
 def test_a_cost_with_no_known_price_stays_null_rather_than_zero(database_url: str):
     """Zero would be a lie the UI would render as "free"."""
-    m.migrate(database_url)
+    m.apply_migrations(database_url)
     with psycopg.connect(database_url, autocommit=True) as conn:
         conn.execute(
-            "INSERT INTO run (id, workflow_id, kind) VALUES ('run_1', 'wf-1', 'index')"
+            "INSERT INTO run (id, workflow_id, kind, tenant_id) "
+            "VALUES ('run_1', 'wf-1', 'index', %s)",
+            (LEGACY,),
         )
         conn.execute(
-            "INSERT INTO cost_entry (run_id, stage, provider, model, input_tokens) "
-            "VALUES ('run_1', 'correction', 'vertex', 'gemini-2.5-flash', 1000)"
+            "INSERT INTO cost_entry "
+            "(run_id, stage, provider, model, input_tokens, tenant_id) "
+            "VALUES ('run_1', 'correction', 'vertex', 'gemini-2.5-flash', 1000, %s)",
+            (LEGACY,),
         )
         row = conn.execute("SELECT usd, input_tokens FROM cost_entry").fetchone()
     assert row[0] is None and row[1] == 1000
 
 
-def test_004_lets_a_rebuild_run_be_told_apart_from_a_reindex(database_url: str):
+def test_a_rebuild_run_can_be_told_apart_from_a_reindex(database_url: str):
     """A rebuild replays artifacts and can only spend on embedding; a reindex
     re-reads the file and pays for correction too. `cost_entry` is the one place
     a user can see where the money went, so the two must not share a kind."""
-    m.migrate(database_url)
+    m.apply_migrations(database_url)
     with psycopg.connect(database_url) as conn:
-        conn.execute("INSERT INTO library (id, name) VALUES ('lib_1', 'L')")
+        conn.execute("INSERT INTO library (id, name, tenant_id) VALUES ('lib_1', 'L', %s)",
+            (LEGACY,),)
         for kind in ("index", "reindex", "rebuild"):
             conn.execute(
-                "INSERT INTO run (id, workflow_id, kind) VALUES (%s, %s, %s)",
-                (f"r_{kind}", f"wf_{kind}", kind),
+                "INSERT INTO run (id, workflow_id, kind, tenant_id) "
+                "VALUES (%s, %s, %s, %s)",
+                (f"r_{kind}", f"wf_{kind}", kind, LEGACY),
             )
         with pytest.raises(psycopg.errors.CheckViolation):
             conn.execute(
-                "INSERT INTO run (id, workflow_id, kind) VALUES ('r_x', 'wf_x', 'nonsense')"
+                "INSERT INTO run (id, workflow_id, kind, tenant_id) "
+                "VALUES ('r_x', 'wf_x', 'nonsense', %s)",
+                (LEGACY,),
             )

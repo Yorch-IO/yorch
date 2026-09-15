@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+from brainworker import config
+from brainworker.graph.schema import LEGACY_TENANT_ID
 
 from brainworker.answering.retrieve import OffCorpus, search
 from brainworker.answering.types import Plan, Question
+from .conftest import QDRANT
 
 
 def question(library: str, text: str = "¿Qué hace feliz a la gente?", **kw) -> Question:
@@ -137,7 +143,7 @@ def test_the_questions_confidence_floor_is_what_filters_the_claims():
     from brainworker.answering import retrieve
 
     graph = StubGraph([])
-    retrieve._attach_claims(graph, [_evidence("chk_1")], 0.85)
+    retrieve._attach_claims(graph, [_evidence("chk_1")], 0.85, LEGACY_TENANT_ID)
 
     [(template_id, params)] = graph.calls
     assert template_id == "claims_for_chunks"
@@ -161,7 +167,7 @@ def test_one_heavily_annotated_chunk_cannot_spend_the_whole_budget():
     ]
     evidence = [_evidence("chk_1"), _evidence("chk_2")]
 
-    retrieve._attach_claims(StubGraph(rows), evidence, 0.6)
+    retrieve._attach_claims(StubGraph(rows), evidence, 0.6, LEGACY_TENANT_ID)
 
     assert len(evidence[0].claims) == retrieve.CLAIMS_PER_CHUNK
     assert len(evidence[1].claims) == 1
@@ -214,7 +220,7 @@ def test_a_claim_template_contributes_the_chunks_its_claims_came_from():
         def write(self, *a, **k):
             return []
 
-    def fake_hydrate(graph, ids, source, library_id):
+    def fake_hydrate(graph, ids, source, library_id, LEGACY_TENANT_ID):
         hydrated.append(list(ids))
         return []
 
@@ -223,8 +229,152 @@ def test_a_claim_template_contributes_the_chunks_its_claims_came_from():
     try:
         plan = Plan(intent="relacion", template_id="claims_between_concepts",
                     params={"concept_id": "con_" + "d" * 24})
-        retrieve._by_template(StubGraph(), plan, {"chk_" + "3" * 24}, "lib_a")
+        retrieve._by_template(
+            StubGraph(),
+            plan,
+            {"chk_" + "3" * 24},
+            Question(library_id="lib_a", text="¿?"),
+        )
     finally:
         retrieve._hydrate = original
 
     assert hydrated == [["chk_" + "1" * 24, "chk_" + "2" * 24]]
+
+
+# -- the organisation filter -------------------------------------------------
+
+
+def test_the_tenant_is_not_a_filter_a_caller_may_name():
+    """It is not a narrowing a request may ask for; it is the scope the request
+    is confined to. Listing it beside `kind` and `library_id` would turn the one
+    filter that decides whose corpus is searched into one a caller can set."""
+    from brainworker.answering.retrieve import ALLOWED_FILTERS
+
+    assert "tenant_id" not in ALLOWED_FILTERS
+
+
+def test_a_smuggled_tenant_filter_is_overwritten_not_honoured(
+    settings, on_topic, library
+):
+    """Two guards for one property, and this exercises the second.
+
+    The allowlist already drops the key; this asks what happens if it ever
+    stopped doing so. The assignment after it wins, so a caller naming another
+    organisation searches their own.
+    """
+    evidence = search(
+        settings,
+        on_topic,
+        question(library, filters={"tenant_id": "tnt_" + "9" * 24}),
+        vector_only(),
+    )
+    assert evidence, "the caller's own corpus is still searched"
+
+
+def test_asking_as_another_organisation_finds_nothing(settings, on_topic, library):
+    """The filter is real, against the real index.
+
+    Every point in this collection carries the legacy tenant. A question asked
+    as anybody else must come back empty — not with a lower score, not with
+    fewer hits.
+    """
+    from brainworker.answering.retrieve import OffCorpus
+
+    with pytest.raises(OffCorpus):
+        search(
+            settings,
+            on_topic,
+            question(library, tenant_id="tnt_" + "9" * 24),
+            vector_only(),
+        )
+
+
+# --- the effort level's claim allowance -------------------------------------
+
+
+def test_the_claims_cap_follows_the_level_rather_than_the_constant():
+    """A wider level must actually get more claims per chunk.
+
+    The parameter defaults to the module constant so the four-argument call
+    sites above keep working; this is what proves the argument is read at all.
+    """
+    from brainworker.answering import retrieve
+    from brainworker.answering.effort import BUDGETS
+
+    wide = BUDGETS["thorough"].claims_per_chunk
+    rows = [
+        {"chunk_id": "chk_1", "id": f"clm_{i}", "text": f"c{i}", "confidence": 0.9,
+         "quote": "", "status": "afirma", "concept": ""}
+        for i in range(wide + 4)
+    ]
+    evidence = [_evidence("chk_1")]
+
+    retrieve._attach_claims(
+        StubGraph(rows), evidence, 0.6, LEGACY_TENANT_ID, wide
+    )
+    assert len(evidence[0].claims) == wide
+    assert wide > retrieve.CLAIMS_PER_CHUNK, "otherwise this asserts nothing"
+
+
+def test_the_row_limit_and_the_per_chunk_cap_are_the_same_number():
+    """Two places one cap is spelled, and they must move together.
+
+    The query asks for `len(ids) * cap` rows *globally* and the loop then allows
+    `cap` per chunk. Threading the level into only the loop leaves the wider
+    level unreachable — the query would fetch three per chunk's worth of rows
+    and the loop would sit there willing to accept four. Nothing would error;
+    the level would just quietly not work.
+    """
+    from brainworker.answering import retrieve
+    from brainworker.answering.effort import BUDGETS
+
+    wide = BUDGETS["thorough"].claims_per_chunk
+    graph = StubGraph([])
+    evidence = [_evidence("chk_1"), _evidence("chk_2")]
+
+    retrieve._attach_claims(graph, evidence, 0.6, LEGACY_TENANT_ID, wide)
+
+    [(_, params)] = graph.calls
+    assert params["limit"] == len(evidence) * wide
+
+
+def test_a_repeated_question_books_no_embedding_charge(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, library: str, on_topic
+):
+    """The query embedding is cached, and a hit must not be billed.
+
+    `search` fronts it with `CachedEmbedder` for latency rather than money —
+    measured 2026-09-06, everything else in that function totals 9 ms while the
+    one embedding ranged 0.4 s to 18.8 s against a per-minute quota. The hazard
+    the cache introduces is in the ledger: a hit hands back an `Embedding`
+    carrying the token count the *original* call cost, so reading that for the
+    charge would bill every repeat question for tokens nobody spent. The count
+    has to come from the embedder, which accumulates misses only.
+
+    A workspace of its own, so the cache starts empty and the first ask is a
+    miss whatever else has run on this machine.
+    """
+    monkeypatch.setenv("BRAIN_WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setenv("BRAIN_QDRANT_URL", QDRANT)
+    monkeypatch.setenv("BRAIN_GEMINI_PROJECT_ID", "proj-test")
+    monkeypatch.setenv(
+        "BRAIN_MEMGRAPH_URL",
+        os.environ.get("BRAIN_MEMGRAPH_URL", "bolt://127.0.0.1:7788"),
+    )
+    s = config.load()
+    question = Question(library_id=library, text="una pregunta repetida")
+    plan = Plan(intent="x", template_id=None, params={}, concepts=[],
+                rationale="", spend=None)
+
+    first: list = []
+    search(s, on_topic, question, plan, first)
+    (charge,) = [x for x in first if x.stage == "ask-embedding"]
+    assert charge.input_tokens > 0, "the first ask should have been a miss"
+
+    second: list = []
+    search(s, on_topic, question, plan, second)
+    (again,) = [x for x in second if x.stage == "ask-embedding"]
+    # The row is still written — a stage that ran for nothing and a stage that
+    # did not run are different facts — but it carries nothing.
+    assert again.input_tokens == 0, "a cached query embedding was billed again"
+    assert again.usd in (0, 0.0, None)

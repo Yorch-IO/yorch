@@ -48,6 +48,58 @@ const EXPLORE_TIMEOUT: Duration = Duration::from_secs(15);
 /// must not be reported as unreachable while it is still working.
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Listing the queue is one indexed, keyset-paged read of the catalog.
+const RUNS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The audit ledger is four catalog reads for one run — events, charges,
+/// artifacts, warnings — and touches Temporal not at all, which is the whole
+/// point of it: it answers for a run whose history has aged out.
+const AUDIT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Three stores and two artifact reads, so it is given more room than the
+/// catalog-only audit beside it — but not much more, because it is measured:
+/// **0.52 s** on the biggest version here (631 chunks, 3 055 claims, a 4.2 MB
+/// `semantics.json`), of which 0.29 s is the semantics diff. 30 s is the
+/// allowance for a cold page cache and a contended Memgraph, not for a shape
+/// anybody has seen.
+const STATISTICS_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The raw history is fetched from Temporal, page by page, and a run with many
+/// retries has a long one. Longer than the ledger because this is the call that
+/// can actually be slow, and it is made once, when a person expands the panel.
+const EVENTS_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long a conversation's stream will wait between pieces of an answer.
+///
+/// **A different kind of number from every other constant here.** The rest are
+/// total budgets: the whole request must finish inside them. A turn's stream
+/// cannot have one — its body arrives over the life of an answer, and a total
+/// budget generous enough for a `thorough` turn would be no budget at all for a
+/// dead connection. So this bounds one *read*, and the stream lives as long as
+/// the server keeps saying something.
+///
+/// Generous even so, because the gap that matters is not between tokens but
+/// between the request and the first of them: planning, embedding, the
+/// topicality probe and retrieval all happen before the model writes a word,
+/// and on a large library that is tens of seconds during which the relay has
+/// nothing to publish. The server's own poll loop is what keeps this honest —
+/// it emits a terminal event rather than going quiet.
+const CHAT_STREAM_IDLE: Duration = Duration::from_secs(120);
+
+/// Uploading a source file. Generous because this is the one request whose
+/// duration is set by the user's upstream bandwidth rather than by the server:
+/// the cap is 200 MB, and a slow home connection can spend minutes on a book
+/// that the whole rest of the pipeline then handles in seconds.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(900);
+
+/// Uploading a video's audio, which is the same shape as above with a bigger
+/// worst case. `MAX_AUDIO_BYTES` is a gigabyte and the audio of a four-hour
+/// talk is a couple of hundred megabytes, so an hour is the budget rather than
+/// the fifteen minutes a book gets. It bounds a stalled connection; it does not
+/// bound the download, which happened before this call and reported its own
+/// progress.
+const AUDIO_UPLOAD_TIMEOUT: Duration = Duration::from_secs(3600);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceHealth {
     pub ok: bool,
@@ -106,6 +158,84 @@ pub struct IngestRequest {
     pub folder_id: Option<String>,
     #[serde(default)]
     pub auto_approve: bool,
+    /// What to call the library, when this import is the one that creates it.
+    ///
+    /// A library id is a value the client picks — `lib_teologia` — and is not a
+    /// name. Empty means "leave whatever it is called alone", so a second
+    /// import does not rename a library after its own id, which is what every
+    /// import used to do.
+    #[serde(default)]
+    pub library_name: String,
+}
+
+/// One video to index.
+///
+/// Renamed on the **deserialize** side for the same reason `IngestRequest` is:
+/// this travels webview → Rust → Python, so it accepts the webview's camelCase
+/// and emits Python's snake_case.
+///
+/// It carries a URL where `IngestRequest` carries a path, and that is the whole
+/// difference between the two pipelines at this end: there is nothing to stage,
+/// so no `stage_source` call precedes this and no `sourcePath` is ever computed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct VideoRequest {
+    pub library_id: String,
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub auto_approve: bool,
+    #[serde(default)]
+    pub reindex: bool,
+    #[serde(default)]
+    pub library_name: String,
+    /// Caption languages to prefer, best first. Empty lets the worker choose.
+    #[serde(default)]
+    pub languages: Vec<String>,
+    /// What this machine already learned about the video, or `None` to let the
+    /// pipeline ask YouTube itself.
+    ///
+    /// Never sent by the webview — it is `#[serde(default)]` on the way in and
+    /// filled by `video_start`, because the whole point is that the call is
+    /// made here. It serializes under Python's own spelling; see
+    /// [`crate::ytdlp::VideoInfo`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<crate::ytdlp::VideoInfo>,
+    /// Audio this machine already downloaded and uploaded, as the path the
+    /// worker sees. Empty unless the video has no captions at all.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub audio_path: String,
+}
+
+/// Where audio the app uploaded landed, as the *worker* sees it.
+///
+/// Deliberately not `StagedSource`: that one carries a `source_key` because a
+/// document's original filename becomes its title, and audio has no title of
+/// its own — the video already supplied one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct StagedAudio {
+    pub audio_path: String,
+    pub byte_size: u64,
+}
+
+/// Where a file the app uploaded landed, as the *worker* sees it.
+///
+/// `source_path` is a container path (`/workspace/tenants/<id>/inbox/…`) and is
+/// meaningless on the user's own machine. That is the point: it is what
+/// `IngestRequest.source_path` must carry, and in local mode the same field
+/// carries the host path the worker shares through the volume. The two planes
+/// disagree about what a path *is*, and this type is where that is resolved
+/// once rather than at every call site.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct StagedSource {
+    pub source_path: String,
+    pub source_key: String,
+    pub byte_size: u64,
 }
 
 /// Which paid stages the user approved. Individually switchable because they
@@ -130,6 +260,16 @@ pub struct StageOptions {
     /// wrong rules produced. This is the person's way out.
     pub ignore_profile: bool,
     pub review_correction: bool,
+    /// Try to improve retrieval, and measure whether it worked.
+    ///
+    /// Off, and bounded to a single chunking candidate. The free half —
+    /// `min_score`, `per_section`, dense-only — changes nothing in the index;
+    /// the paid half re-cuts the document and embeds every chunk again, which is
+    /// the largest single line a gate can show. Turning it on also raises the
+    /// eval sample, because at 40 questions the bootstrap margin cannot resolve
+    /// the effect the round is looking for.
+    #[serde(default)]
+    pub tune: bool,
 }
 
 impl Default for StageOptions {
@@ -142,6 +282,7 @@ impl Default for StageOptions {
             learn_profile: true,
             ignore_profile: false,
             review_correction: false,
+            tune: false,
         }
     }
 }
@@ -151,6 +292,305 @@ impl Default for StageOptions {
 pub struct StartedRun {
     pub workflow_id: String,
     pub state: String,
+}
+
+/// Where a run *is*, which is not the same question as which stage it last
+/// recorded.
+///
+/// A `stage` query against a failed workflow hands back the last value it
+/// reached, so a run whose activity retries were exhausted reported
+/// `"stage": "learning"` indefinitely while Temporal already knew it had
+/// failed. This is the field that tells them apart.
+///
+/// Only the two fields the app acts on are modelled; the response also carries
+/// artifacts, cost and semantics counts, and no screen reads them. Both are
+/// `#[serde(default)]` so a control plane that has not been upgraded loses the
+/// distinction rather than the whole call — the same treatment the cost range's
+/// new fields got.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunState {
+    pub workflow_id: String,
+    #[serde(default)]
+    pub stage: Option<String>,
+    /// `running`, or whatever terminal state it ended in. `None` means nobody
+    /// could say — an old plane, or a run whose history has aged out — and a
+    /// caller must read that as "keep waiting", never as "failed".
+    #[serde(default)]
+    pub state: Option<String>,
+    /// How far the running activity has got, when it reports.
+    ///
+    /// `None` for every honest absence, and they are not told apart on purpose:
+    /// nothing pending, an activity that does not heartbeat, a run older than
+    /// the code that emits it. All of them mean "no progress to show", which is
+    /// one thing for a screen to render rather than four.
+    #[serde(default)]
+    pub progress: Option<RunProgress>,
+    /// What the index this run wrote can actually be asked.
+    ///
+    /// `None` means nobody measured — which is true of every version indexed
+    /// before the stage existed, and of every run whose gate declined it. It is
+    /// deliberately not zero: recall of 0.00 is a claim about the index, and it
+    /// would send somebody to fix one that is fine.
+    #[serde(default)]
+    pub scores: Option<RunScores>,
+}
+
+/// One run as the queue lists it.
+///
+/// Everything here comes from the catalog, which is what makes the queue
+/// survive a stopped Temporal and a closed window: what a run is *doing* belongs
+/// to `RunState`, and what it *was* belongs here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunListItem {
+    pub id: String,
+    pub workflow_id: String,
+    pub kind: String,
+    pub state: String,
+    #[serde(default)]
+    pub stage: Option<String>,
+    pub started_at: String,
+    #[serde(default)]
+    pub finished_at: Option<String>,
+    #[serde(default)]
+    pub error_kind: Option<String>,
+    #[serde(default)]
+    pub error_detail: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub library_id: Option<String>,
+    /// What the run knew about itself before it had a document: the URL for a
+    /// video, the picked file's basename for an import. `default` is
+    /// load-bearing rather than habit — a control plane older than the column
+    /// sends no key, and the queue must still decode.
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub document_id: Option<String>,
+    #[serde(default)]
+    pub version_id: Option<String>,
+    /// `None`, never zero, when no stage has recorded a price. A run still in
+    /// its free stages legitimately has none, and zero would claim it spent.
+    #[serde(default)]
+    pub usd_so_far: Option<f64>,
+}
+
+/// A page of the queue, and where the next one starts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunListPage {
+    pub runs: Vec<RunListItem>,
+    /// The cursor for the following page, or `None` at the end. Opaque: it is
+    /// `{started_at}|{id}` because the sort is on both, but no caller parses it.
+    #[serde(default)]
+    pub next_before: Option<String>,
+}
+
+/// What one charge cost, as the ledger reports it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditCostEntry {
+    pub stage: String,
+    pub provider: String,
+    pub model: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// `None` is "no price known for this model", rendered "sin precio". Never
+    /// zero — that would be a claim that it was free.
+    #[serde(default)]
+    pub usd: Option<f64>,
+}
+
+/// What a stage cost, with the unpriced part reported rather than folded in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditCost {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub usd: Option<f64>,
+    #[serde(default)]
+    pub unpriced_entries: u64,
+    #[serde(default)]
+    pub entries: Vec<AuditCostEntry>,
+}
+
+/// One artifact, as `run_artifact` recorded it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditArtifact {
+    pub name: String,
+    pub rel_path: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+}
+
+/// One row of the ledger: a stage, how long it took, and what it produced.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditStage {
+    /// `None` on the trailing row that collects whatever no stage claimed —
+    /// the charges a question makes, which belong to no pipeline stage.
+    #[serde(default)]
+    pub seq: Option<i64>,
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub at: Option<String>,
+    /// `None` means one of two things `outcome` tells apart: the run is still in
+    /// this stage, or this row *is* the outcome and is an instant.
+    #[serde(default)]
+    pub ended_at: Option<String>,
+    #[serde(default)]
+    pub seconds: Option<f64>,
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub detail: Option<String>,
+    /// `None` for a stage that does not spend — deliberately not a zeroed
+    /// block, because "does not spend" and "the charge was not recorded" are
+    /// different claims and a zero renders as the first.
+    #[serde(default)]
+    pub cost: Option<AuditCost>,
+    #[serde(default)]
+    pub artifacts: Vec<AuditArtifact>,
+}
+
+/// The run the ledger describes, read from the catalog rather than Temporal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditRun {
+    pub id: String,
+    pub workflow_id: String,
+    pub kind: String,
+    pub state: String,
+    #[serde(default)]
+    pub stage: Option<String>,
+    pub started_at: String,
+    #[serde(default)]
+    pub finished_at: Option<String>,
+    #[serde(default)]
+    pub error_kind: Option<String>,
+    #[serde(default)]
+    pub error_detail: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub library_id: Option<String>,
+    /// What the run knew about itself before it had a document. See
+    /// `RunListItem::label`.
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub document_id: Option<String>,
+    #[serde(default)]
+    pub version_id: Option<String>,
+}
+
+/// A profile warning raised against the version this run produced.
+///
+/// The row carries no `kind`, so a reader cannot tell a plain collision from the
+/// heading disagreement that withholds activation — that distinction exists only
+/// on the Temporal payload today, and the pane must not imply otherwise.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AuditWarning {
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    #[serde(default)]
+    pub collides_with: Option<String>,
+    #[serde(default)]
+    pub similarity: Option<f64>,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+/// Everything a run did, from the catalog alone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunAudit {
+    pub run: AuditRun,
+    pub stages: Vec<AuditStage>,
+    pub totals: AuditCost,
+    #[serde(default)]
+    pub warnings: Vec<AuditWarning>,
+}
+
+/// One line of the raw workflow history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunEvent {
+    pub id: i64,
+    pub at: String,
+    #[serde(rename(deserialize = "type"))]
+    pub kind: String,
+    #[serde(default)]
+    pub activity: Option<String>,
+    /// Present from the second attempt onward, which is the whole reason this
+    /// panel exists: a retry is invisible everywhere else.
+    #[serde(default)]
+    pub attempt: Option<u32>,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+/// The raw history, or an honest statement that there is none to be had.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunEventPage {
+    /// `false` means Temporal has forgotten this run, which is ordinary past the
+    /// retention period. It is deliberately not the same as an empty `events`:
+    /// "the history aged out" and "this run did nothing" must not render alike.
+    pub available: bool,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub events: Vec<RunEvent>,
+}
+
+/// Measured retrieval quality for one run's index.
+///
+/// `recall_at_5_dense_only` and `noise_floor` are not extras. The eval set's
+/// questions are written *from* the chunks they must find, so they leak
+/// vocabulary to the lexical leg and the hybrid figure alone flatters the index;
+/// the gap between the two is that leakage. And recall says how often the right
+/// chunk came back while the floor says what a *wrong* one scores — without it a
+/// reader cannot tell an index that discriminates from one that returns
+/// everything at a similar distance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunScores {
+    pub recall_at_1: f64,
+    pub recall_at_5: f64,
+    pub mrr_at_10: f64,
+    pub recall_at_5_dense_only: f64,
+    pub noise_floor: f64,
+    pub chunks: u32,
+    pub eval_questions: u32,
+    /// Bootstrap margin on the objective. A difference smaller than this is
+    /// noise, and reporting it as real is the failure it guards against.
+    #[serde(default)]
+    pub margin: f64,
+    #[serde(default)]
+    pub leakage: String,
+    /// How many questions did not find their own chunk.
+    #[serde(default)]
+    pub misses: u32,
+}
+
+/// Chunks done out of chunks total, off the activity's heartbeat.
+///
+/// Only semantic extraction reports today, and it is the one worth reporting:
+/// one generation call per chunk, so this is simultaneously a count of calls and
+/// of spend — which is what a person stopping a run is actually weighing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RunProgress {
+    pub activity: String,
+    pub done: u32,
+    pub total: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -237,6 +677,102 @@ pub struct GateReport {
     pub profile: Option<ProfileDecision>,
 }
 
+/// One caption track a video offers.
+///
+/// `kind` is `manual` or `auto`, and the distinction is not cosmetic: an
+/// automatic track is a machine transcript with no punctuation, which is why it
+/// is the only one correction is suggested for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct CaptionTrack {
+    pub language: String,
+    pub kind: String,
+    pub ext: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+/// Everything free that could be learned about a video before the gate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VideoProbe {
+    pub video_id: String,
+    pub canonical_url: String,
+    pub source_key: String,
+    pub title: String,
+    #[serde(default)]
+    pub channel: String,
+    pub duration_s: i64,
+    #[serde(default)]
+    pub upload_date: String,
+    #[serde(default)]
+    pub tracks: Vec<CaptionTrack>,
+    /// The track that will be read, or `null` when Amazon Transcribe must run —
+    /// which is the difference between a free transcript and a paid one, and the
+    /// only thing the gate needs to explain the transcription line.
+    #[serde(default)]
+    pub chosen: Option<CaptionTrack>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+/// The transcript, once it exists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Transcribed {
+    /// `captions:es:manual` or `transcribe`, so a reader can tell a human
+    /// transcript from a machine one without a second call.
+    pub source: String,
+    pub paragraphs: i64,
+    pub characters: i64,
+    #[serde(default)]
+    pub covered_s: f64,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+/// A video run's gate, which is a different shape from a document's.
+///
+/// `preview` is optional here and it is the whole reason this is its own type:
+/// a video with no captions has no text to preview until the money has been
+/// spent, and `null` says so rather than quoting a chunk count nobody measured.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VideoGateReport {
+    pub run_id: String,
+    pub document_id: String,
+    pub version_id: String,
+    pub probe: VideoProbe,
+    pub estimate: Estimate,
+    #[serde(default)]
+    pub preview: Option<Preview>,
+    #[serde(default)]
+    pub transcript: Option<Transcribed>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    /// Which switches the gate should open with, given where this transcript
+    /// came from. A suggestion, not a rule — the approval carries whatever the
+    /// person actually ticked.
+    #[serde(default)]
+    pub recommended: Option<RecommendedStages>,
+}
+
+/// The two switches a video's gate actually offers.
+///
+/// A response-side twin of `StageOptions` rather than the type itself, and for
+/// two reasons. `StageOptions` renames on the *deserialize* side, because it
+/// travels webview → Python; this travels the other way and has to rename on
+/// serialize, and one struct cannot do both. And a video run has no profile,
+/// semantics, eval-set or tuning stage at all, so offering those switches would
+/// quote work that cannot happen. Python sends the full nine fields and serde
+/// drops the seven this does not name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct RecommendedStages {
+    pub correct: bool,
+    pub embed: bool,
+}
+
 /// Mirrors `brainworker.pipeline.ProfileRules` — the flattened rules, not the
 /// whole profile. A `Profile` also carries an eval set, its scores and a tuning
 /// history, none of which the gate shows or any activity applies.
@@ -299,20 +835,222 @@ pub struct Approval {
 pub struct Question {
     pub library_id: String,
     pub text: String,
-    #[serde(default = "default_top_k")]
-    pub top_k: u32,
+    /// Absent means "the effort level decides", which is what the app always
+    /// says. Omitted from the payload entirely rather than sent as `null`, so
+    /// the two control planes see the same thing a `curl` that never mentioned
+    /// it would send — and so neither has to decide what a null means.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
     #[serde(default)]
     pub filters: std::collections::BTreeMap<String, String>,
     #[serde(default = "default_floor")]
     pub confidence_floor: f64,
-}
-
-fn default_top_k() -> u32 {
-    8
+    /// How much evidence and reasoning the question may spend. The numbers
+    /// behind each level live in the worker (`answering/effort.py`); nothing on
+    /// this side knows or needs to know what they are.
+    ///
+    /// Defaulted rather than optional because a level is always in effect —
+    /// there is no such thing as a question asked at no effort — and a webview
+    /// older than this shell must keep asking at the level that behaves the way
+    /// it always has.
+    #[serde(default = "default_effort")]
+    pub effort: String,
 }
 
 fn default_floor() -> f64 {
     0.6
+}
+
+/// One effort level's answer wording, as the settings screen needs it.
+///
+/// `body` is what would actually be used — the organisation's override where
+/// there is one and the built-in default where there is not — and `custom` says
+/// which of the two it is. Both are needed: the text goes in the box, the flag
+/// decides whether "restore the default" would do anything.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AnswerStyle {
+    pub effort: String,
+    pub body: String,
+    pub default_body: String,
+    pub custom: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AnswerStyles {
+    pub levels: Vec<AnswerStyle>,
+    pub max_chars: usize,
+}
+
+/// The new wording for one level. Empty clears the override.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct AnswerStyleUpdate {
+    #[serde(default)]
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct AnswerStyleSaved {
+    pub effort: String,
+    pub custom: bool,
+}
+
+/// Kept equal to `DEFAULT_EFFORT` in `worker/brainworker/answering/effort.py`.
+/// Restated here only because a webview may omit the field; every other default
+/// in this struct is there for the same reason.
+fn default_effort() -> String {
+    "standard".to_string()
+}
+
+// -- conversations ----------------------------------------------------------
+//
+// A conversation's transcript comes from the catalog rather than from Temporal,
+// which is what lets it outlive the retention that bounds a session. These are
+// response shapes, so they deserialize the snake_case the control planes emit
+// and re-serialize camelCase for the webview.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Conversation {
+    pub id: String,
+    pub library_id: String,
+    pub title: String,
+    pub title_generated: bool,
+    pub turns: u32,
+    pub created_at: String,
+    pub last_message_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Conversations {
+    pub conversations: Vec<Conversation>,
+}
+
+/// One question and its answer.
+///
+/// `searched` is the standalone question the rewrite produced, and it is shown
+/// rather than kept for debugging: a follow-up is answered against a question
+/// the person did not type, and an answer that quietly addresses something
+/// adjacent is indistinguishable from a bad answer unless the substitution is
+/// visible.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ConversationTurn {
+    pub seq: u32,
+    pub question: String,
+    #[serde(default)]
+    pub searched: Option<String>,
+    #[serde(default)]
+    pub answer: String,
+    pub state: String,
+    #[serde(default)]
+    pub effort: String,
+    #[serde(default)]
+    pub style_effort: Option<String>,
+    #[serde(default)]
+    pub citations: Vec<Citation>,
+    #[serde(default)]
+    pub cited_evidence: Vec<EvidenceItem>,
+    #[serde(default)]
+    pub error: Option<AskFailure>,
+    pub asked_at: String,
+    #[serde(default)]
+    pub answered_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ConversationDetail {
+    pub id: String,
+    pub library_id: String,
+    pub title: String,
+    pub title_generated: bool,
+    pub turns: u32,
+    pub created_at: String,
+    pub last_message_at: String,
+    #[serde(default)]
+    pub turns_detail: Vec<ConversationTurn>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ConversationStarted {
+    pub conversation_id: String,
+    pub library_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct TurnStarted {
+    pub conversation_id: String,
+    pub turn_seq: u32,
+    pub state: String,
+}
+
+/// The body of `POST /chat`. A request shape, so the rename goes the other way.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct NewConversation {
+    pub library_id: String,
+}
+
+/// The body of `POST /chat/{id}/turn`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct NewTurn {
+    pub text: String,
+    /// Omitted when absent rather than defaulted here. A level spelled into
+    /// this struct would be a copy of a value that already lives in the Python
+    /// dataclass, and the copy that silently disagreed after somebody moved the
+    /// other — the same reasoning `ask.service.ts` records for the same field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+/// One server-sent event from a turn in flight.
+///
+/// Every field but the discriminator is optional because the three event types
+/// share this one shape — `token` carries `seq` and `text`, `done` carries
+/// `turn`, `error` carries `kind` and `message`. Modelling them as one struct
+/// rather than an enum is deliberate: an event type this build has never heard
+/// of arrives as data with an unknown `event` rather than failing to
+/// deserialize, so a newer server cannot take the stream down.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ChatEvent {
+    /// `token`, `done` or `error`. Named `event` in Rust because `type` is a
+    /// keyword; it is `type` on both wires.
+    #[serde(rename = "type")]
+    pub event: String,
+    #[serde(default)]
+    pub seq: Option<u32>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub turn: Option<ConversationTurn>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Which stage a `stage` event is announcing.
+    ///
+    /// Declared, because serde drops what it does not declare — and a proxy that
+    /// silently ate this would leave the window showing one unchanging line for
+    /// the nine tenths of a turn these events exist to cover.
+    #[serde(default)]
+    pub stage: Option<String>,
+    /// How many chunks reached the prompt, on the `evidence` stage.
+    #[serde(default)]
+    pub chunks: Option<u32>,
+    /// How many of them cleared the dense floor. `None` is "not measured",
+    /// which is different from zero — zero is a question the corpus does not
+    /// support, and the two must not render the same.
+    #[serde(default)]
+    pub dense: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -467,6 +1205,11 @@ pub struct VersionRow {
     /// document leaves the version standing, and the confirm has to say so.
     #[serde(default)]
     pub also_held_by: Vec<String>,
+    /// What this version's index can be asked, from the newest run that measured
+    /// it. `None` means nobody measured — which is every version on this
+    /// installation today, and is not the same claim as a recall of zero.
+    #[serde(default)]
+    pub scores: Option<RunScores>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -492,6 +1235,338 @@ pub struct DocumentDetail {
     pub versions: Vec<VersionRow>,
 }
 
+// ---------------------------------------------------------------------------
+// One version's statistics
+// ---------------------------------------------------------------------------
+//
+// Five legs, and **every data field on every leg is optional**, because
+// `available: false` carries none of them. That is not defensive typing: a leg
+// that could not answer must be unable to supply a figure, and making the
+// fields non-optional would force a default — which is how "the graph is
+// stopped" becomes "this version has no concepts".
+
+/// One leg's verdict: `available: false` plus the URL or reason it failed on.
+///
+/// The data fields live on each leg beside this rather than inside a nested
+/// object, because that is the shape Python emits — `auditversion.leg` splats
+/// its payload next to the three bookkeeping keys — and a translation struct
+/// here would be a second opinion about the wire format.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionCatalogLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub content_sha256: Option<String>,
+    #[serde(default)]
+    pub byte_size: Option<u64>,
+    /// A column nothing writes: `register_version` runs before extraction, so
+    /// the page count is not knowable there. `None` is the measurement, not a
+    /// zero, and the field starts working the day something fills it.
+    #[serde(default)]
+    pub page_count: Option<u32>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub active: Option<bool>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub activated_at: Option<String>,
+    #[serde(default)]
+    pub failed_reason: Option<String>,
+    #[serde(default)]
+    pub runs: Option<u32>,
+    #[serde(default)]
+    pub rebuild_run_id: Option<String>,
+    #[serde(default)]
+    pub profile_warnings: Vec<VersionProfileWarning>,
+}
+
+/// A profile collision raised at a gate, and whether its figure means anything.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionProfileWarning {
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    #[serde(default)]
+    pub collides_with: Option<String>,
+    #[serde(default)]
+    pub similarity: Option<f64>,
+    #[serde(default)]
+    pub detail: Option<String>,
+    /// `_topical_overlap` returns 0.0 by construction for a plain-text
+    /// document, and 0.0 is documented as the *most dangerous* case — same
+    /// structure, unrelated subject matter. `false` means the figure beside it
+    /// is not a measurement and must not be rendered as one.
+    #[serde(default)]
+    pub comparable: bool,
+}
+
+/// The graph's own count of what this version projected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionGraphLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub chunks: Option<u32>,
+    #[serde(default)]
+    pub sections: Option<u32>,
+    #[serde(default)]
+    pub citations: Option<u32>,
+    #[serde(default)]
+    pub claims: Option<u32>,
+    /// Keyed by the chunk kind as stored — `cuerpo`, `preguntas`, `nota` —
+    /// which stays Spanish on the wire because these are Qdrant payload values
+    /// used in filters. `rename_all` renames struct fields and never map keys,
+    /// so these survive the hop unchanged and the UI maps them.
+    #[serde(default)]
+    pub kinds: std::collections::BTreeMap<String, u32>,
+    #[serde(default)]
+    pub section_levels: std::collections::BTreeMap<String, u32>,
+}
+
+/// How many points Qdrant holds for this version, exactly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionQdrantLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub points: Option<u32>,
+}
+
+/// The run's own `chunks.jsonl`, against the byte stream it indexed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionArtifactsLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    /// Which stream the `char_span`s actually index. Nothing records it, so it
+    /// is chosen by scoring every stream present — measured on one version,
+    /// `raw.txt` verifies 8 of 600 spans where `extracted.txt` verifies 600.
+    #[serde(default)]
+    pub stream: Option<String>,
+    #[serde(default)]
+    pub stream_verifies_completely: Option<bool>,
+    #[serde(default)]
+    pub streams_considered: std::collections::BTreeMap<String, VersionStreamScore>,
+    #[serde(default)]
+    pub spans: Option<VersionSpans>,
+    #[serde(default)]
+    pub sequence: Option<VersionSequence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStreamScore {
+    pub bytes: u64,
+    pub spans_verified: u32,
+    pub spans_mismatched: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionSpans {
+    pub chunks: u32,
+    pub spans_verified: u32,
+    pub spans_mismatched: u32,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionSequence {
+    pub indices: u32,
+    pub contiguous: bool,
+    #[serde(default)]
+    pub missing_indices: Vec<u32>,
+    #[serde(default)]
+    pub duplicate_indices: Vec<u32>,
+    pub bytes_covered: u64,
+    pub bytes_total: u64,
+    pub coverage: f64,
+}
+
+/// How big this version is, in all three stores at once.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStructureLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub source_run: Option<String>,
+    pub graph: VersionGraphLeg,
+    pub qdrant: VersionQdrantLeg,
+    pub artifacts: VersionArtifactsLeg,
+    /// `None` is "could not compare" and only `Some(false)` is the claim that
+    /// the stores disagree. Always present on the wire so a reader never has to
+    /// tell an absent key from a null one.
+    #[serde(default)]
+    pub counts_agree: Option<bool>,
+}
+
+/// What the graph holds of this version's semantics right now.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionSemanticsInStore {
+    pub claims: u32,
+    /// Claims carrying a quote the code located in their own chunk. A claim
+    /// nobody can check must not look like one that can.
+    pub with_a_quote: u32,
+    /// `afirma`, `niega`, `atribuido`, `sin_estado` — Spanish on the wire like
+    /// the chunk kinds, and `sin_estado` is never folded into `afirma`.
+    #[serde(default)]
+    pub by_status: std::collections::BTreeMap<String, u32>,
+    pub concepts: u32,
+}
+
+/// One three-way split between what a run made and what is there now.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStaleDiff {
+    pub produced: u32,
+    pub in_store: u32,
+    pub converged: u32,
+    /// The defect: something the graph holds that this run did not make. Not
+    /// inert — a stale claim stays attached to a chunk whose text has moved and
+    /// reads exactly like a good one.
+    pub left_behind: u32,
+    /// Its mirror, and it matters as much: something the run produced and the
+    /// graph lacks is a projection that did not finish.
+    pub missing: u32,
+    #[serde(default)]
+    pub stale_share: Option<f64>,
+    #[serde(default)]
+    pub names_extracted: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStaleQuotes {
+    pub with_a_quote: u32,
+    pub quote_no_longer_locates: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionSemanticsDiff {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub claims: Option<VersionStaleDiff>,
+    #[serde(default)]
+    pub concepts: Option<VersionStaleDiff>,
+    #[serde(default)]
+    pub mentions: Option<VersionStaleDiff>,
+    #[serde(default)]
+    pub stale_claim_quotes: Option<VersionStaleQuotes>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionSemanticsLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub source_run: Option<String>,
+    #[serde(default)]
+    pub extractor_model: Option<String>,
+    #[serde(default)]
+    pub in_store: Option<VersionSemanticsInStore>,
+    #[serde(default)]
+    pub diff: Option<VersionSemanticsDiff>,
+}
+
+/// Whether the dense floor sits above what a wrong chunk scores.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionFloor {
+    pub min_score: f64,
+    pub noise_floor: f64,
+    pub headroom: f64,
+    /// `false` means the floor admits exactly what it was measured to exclude —
+    /// and it looks like an improvement, because every eval question has a right
+    /// answer to find and none of them is off-corpus.
+    pub honest: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionRetrievalLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub source_run: Option<String>,
+    /// Absent means **nobody measured**, which is not a recall of zero.
+    #[serde(default)]
+    pub scores: Option<RunScores>,
+    #[serde(default)]
+    pub floor: Option<VersionFloor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStageCost {
+    pub usd: f64,
+    /// Every run that charged this stage. More than one is the finding.
+    #[serde(default)]
+    pub runs: Vec<String>,
+    /// A missing price under-reports the bill rather than describing a free
+    /// call, so it is counted and never totalled as zero.
+    #[serde(default)]
+    pub unpriced_entries: u32,
+}
+
+/// What this **version** cost, across every run that touched it.
+///
+/// Not one run's bill: on `ver_0cde…` the eval set was generated twice, the
+/// first time inside a run that was cancelled. Grouping by run answers only
+/// half of it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionLedgerLeg {
+    pub available: bool,
+    #[serde(default)]
+    pub detail: String,
+    /// Keyed by stage name as the ledger stores it — a map, so `rename_all`
+    /// leaves the keys alone.
+    #[serde(default)]
+    pub by_stage: std::collections::BTreeMap<String, VersionStageCost>,
+    #[serde(default)]
+    pub total_usd: f64,
+    #[serde(default)]
+    pub charged_in_more_than_one_run: Vec<String>,
+    /// Split by the terminal state of the run that incurred it. A *split*
+    /// rather than a figure called "wasted": a cancelled run bought nothing
+    /// durable, but a failed one can still have left a complete index behind.
+    #[serde(default)]
+    pub usd_by_run_state: std::collections::BTreeMap<String, f64>,
+}
+
+/// Everything one indexed version holds, cost, and still agrees with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionStatistics {
+    pub library_id: String,
+    pub document_id: String,
+    pub version_id: String,
+    pub catalog: VersionCatalogLeg,
+    pub structure: VersionStructureLeg,
+    pub semantics: VersionSemanticsLeg,
+    pub retrieval: VersionRetrievalLeg,
+    pub ledger: VersionLedgerLeg,
+}
+
 /// What a removal destroyed, and what it deliberately did not.
 ///
 /// Both halves cross the boundary because an irreversible act reported only as
@@ -512,6 +1587,21 @@ pub struct Removal {
     pub catalog: std::collections::BTreeMap<String, i64>,
     #[serde(default)]
     pub kept: std::collections::BTreeMap<String, String>,
+}
+
+/// What promoting a withheld version touched.
+///
+/// Every document holding these bytes, not just the one asked about: a version
+/// can be shared — byte-identical files at two paths are two documents and one
+/// version — and promoting it for one while leaving the other on an older
+/// version would make the same content answer differently depending on which
+/// copy was asked about.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Activation {
+    pub version_id: String,
+    #[serde(default)]
+    pub documents: Vec<String>,
 }
 
 /// The rebuild's one-question gate. One stage here can spend, not a table of
@@ -697,6 +1787,16 @@ pub struct RunSummary {
     /// the document it was spent on, deliberately.
     pub title: Option<String>,
     pub library_id: Option<String>,
+    /// Billed so far, summed from the ledger. `None`, never zero: a run still in
+    /// its free stages and a run whose model has no known price are both "no
+    /// figure", and zero would claim the run was free.
+    ///
+    /// **It lags during the stage that costs most.** Semantic extraction records
+    /// its spend when the activity finishes, not per chunk, so a run 260 calls
+    /// into it still reports only what embedding cost. That is the reason
+    /// `RunProgress` earns its place beside this rather than duplicating it.
+    #[serde(default)]
+    pub usd_so_far: Option<f64>,
 }
 
 /// A whole library as nodes and weighted edges.
@@ -862,6 +1962,50 @@ pub struct ConceptClaims {
 /// the API is there and did not finish in time. Collapsing them cost two
 /// investigations aimed at the wrong component — once at a port allocator that
 /// was innocent, once at a control API that had logged `200 OK`.
+/// Bytes in, whole events out.
+///
+/// Pulled out of `chat_stream` because the interesting part cannot be reached
+/// through it: what is worth asserting is what happens at a *chunk boundary*,
+/// and a boundary is decided by the network. As a struct it takes a table of
+/// byte slices instead.
+///
+/// **Decoding waits for a newline.** A chunk can end in the middle of a
+/// multi-byte character, and this corpus is Spanish — decoding each chunk as it
+/// arrived would turn every accent unlucky enough to straddle a boundary into a
+/// replacement character, in the one text the reader is actually reading. A
+/// newline is ASCII and cannot appear inside a UTF-8 sequence, so a line that
+/// ends with one is always safe to decode.
+#[derive(Default)]
+struct SseBuffer {
+    buf: Vec<u8>,
+}
+
+impl SseBuffer {
+    /// Feed a chunk; get the events it completed. Anything after the last
+    /// newline is a partial line and is kept for the next call.
+    fn push(&mut self, chunk: &[u8]) -> Vec<ChatEvent> {
+        self.buf.extend_from_slice(chunk);
+        let mut out = Vec::new();
+        while let Some(at) = self.buf.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = self.buf.drain(..=at).collect();
+            let line = String::from_utf8_lossy(&line);
+            let line = line.trim_end_matches(['\r', '\n']);
+            let Some(payload) = line.strip_prefix("data: ") else {
+                // Blank separators between events, and any SSE field this build
+                // does not read (`event:`, `id:`, `retry:`, a `:` comment).
+                continue;
+            };
+            // An event this build cannot parse is dropped rather than ending the
+            // stream: the answer is still arriving, and the authoritative copy
+            // is in the catalog either way.
+            if let Ok(event) = serde_json::from_str::<ChatEvent>(payload) {
+                out.push(event);
+            }
+        }
+        out
+    }
+}
+
 fn unreachable(url: String, source: reqwest::Error) -> AppError {
     if source.is_timeout() {
         AppError::ControlTimeout { url, source }
@@ -870,17 +2014,51 @@ fn unreachable(url: String, source: reqwest::Error) -> AppError {
     }
 }
 
+/// The credentials the paid plane needs, and the local one refuses to have.
+///
+/// `Debug` is written by hand so a token cannot reach a log through a
+/// `{:?}` on `Control` — which every derived `Debug` above this would have
+/// done for free.
+#[derive(Clone)]
+pub struct Auth {
+    pub token: String,
+    /// `X-Tenant-Id`. Absent is correct for an account in exactly one
+    /// organisation; the server refuses to guess for one in several.
+    pub tenant: Option<String>,
+}
+
+impl std::fmt::Debug for Auth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Auth")
+            .field("token", &"<redacted>")
+            .field("tenant", &self.tenant)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Control {
     base: String,
     http: reqwest::Client,
+    auth: Option<Auth>,
 }
 
 impl Control {
-    pub fn new(port: u16) -> Self {
+    /// The free plane: loopback, no credentials, and none possible.
+    pub fn local(port: u16) -> Self {
         Self {
             base: format!("http://127.0.0.1:{port}"),
             http: reqwest::Client::new(),
+            auth: None,
+        }
+    }
+
+    /// The paid plane. `base` is validated where it is set, not here.
+    pub fn cloud(base: String, auth: Auth) -> Self {
+        Self {
+            base,
+            http: reqwest::Client::new(),
+            auth: Some(auth),
         }
     }
 
@@ -917,17 +2095,54 @@ impl Control {
         .await
     }
 
-    async fn send<T: serde::de::DeserializeOwned>(
+    async fn put_json<B: Serialize, T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        timeout: Duration,
+    ) -> Result<T> {
+        self.send(
+            self.http.put(format!("{}{path}", self.base)).json(body),
+            path,
+            timeout,
+        )
+        .await
+    }
+
+    /// Attach credentials, send, and check the status. The body is untouched.
+    ///
+    /// Every helper funnels through here, which is what makes "credentials are
+    /// attached in exactly one place" true rather than a convention — a new
+    /// helper cannot be added that forgets them.
+    ///
+    /// `timeout` is a **total** budget and is therefore wrong for a response
+    /// whose body arrives over the life of an answer. `None` leaves it off, and
+    /// the one caller that passes `None` — `chat_stream` — bounds itself per
+    /// read instead. See `CHAT_STREAM_IDLE`.
+    async fn send_raw(
         &self,
         req: reqwest::RequestBuilder,
         path: &str,
-        timeout: Duration,
-    ) -> Result<T> {
+        timeout: Option<Duration>,
+    ) -> Result<reqwest::Response> {
         let url = format!("{}{path}", self.base);
+        let req = match &self.auth {
+            Some(auth) => {
+                let req = req.bearer_auth(&auth.token);
+                match &auth.tenant {
+                    Some(tenant) => req.header("X-Tenant-Id", tenant),
+                    None => req,
+                }
+            }
+            None => req,
+        };
+        let req = match timeout {
+            Some(t) => req.timeout(t),
+            None => req,
+        };
         // See `unreachable`: which of the two this becomes is decided by the
         // cause, not by the call site.
         let response = req
-            .timeout(timeout)
             .send()
             .await
             .map_err(|source| unreachable(url.clone(), source))?;
@@ -935,18 +2150,41 @@ impl Control {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(AppError::ControlStatus {
-                status: status.as_u16(),
-                // Bodies here are FastAPI error payloads; a truncated one is
-                // still diagnostic and keeps a runaway response out of the UI.
-                body: body.chars().take(500).collect(),
-            });
+            // The whole body, because the constructor reads the control
+            // API's `detail.kind` out of it before cutting it down for a
+            // person to read. Truncating here would sometimes take the tag.
+            return Err(AppError::control_status(status.as_u16(), body));
         }
+        Ok(response)
+    }
 
-        response
+    async fn send<T: serde::de::DeserializeOwned>(
+        &self,
+        req: reqwest::RequestBuilder,
+        path: &str,
+        timeout: Duration,
+    ) -> Result<T> {
+        let url = format!("{}{path}", self.base);
+        self.send_raw(req, path, Some(timeout))
+            .await?
             .json::<T>()
             .await
             .map_err(|source| unreachable(url, source))
+    }
+
+    /// A request whose success carries no body, such as a 204.
+    ///
+    /// Separate from `send` rather than decoding into `()`: serde cannot make
+    /// `()` out of an empty body, so a 204 through the JSON path fails *after*
+    /// the server has already done the thing — which reads as "the delete did
+    /// not work" about a delete that did.
+    async fn send_empty(
+        &self,
+        req: reqwest::RequestBuilder,
+        path: &str,
+        timeout: Duration,
+    ) -> Result<()> {
+        self.send_raw(req, path, Some(timeout)).await.map(|_| ())
     }
 
     pub async fn health(&self) -> Result<Health> {
@@ -955,6 +2193,71 @@ impl Control {
 
     pub async fn ping(&self) -> Result<PingResult> {
         self.post("/ping", PING_TIMEOUT).await
+    }
+
+    /// Hand a local file to the paid plane, and get back the path the worker
+    /// will read it by.
+    ///
+    /// Only cloud mode has this. In local mode the worker and the app share a
+    /// filesystem through the compose volume, so a copy over HTTP would be an
+    /// upload to oneself; `stage_source` in `lib.rs` returns the path unchanged
+    /// there and never calls this.
+    ///
+    /// **The file is read into memory.** The server caps a body at 200 MB and
+    /// this is a desktop app, so the simplicity is worth more than the
+    /// streaming; if that cap ever rises, this is what has to change first.
+    ///
+    /// The filename is sent because the server records it as `source_key` — the
+    /// human-facing name of the document — but the server does **not** use it
+    /// to name what it writes. That is its decision to make and it makes it;
+    /// nothing here should depend on the two agreeing.
+    pub async fn upload_source(&self, path: &std::path::Path) -> Result<StagedSource> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "documento".to_string());
+        let bytes = std::fs::read(path).map_err(|e| AppError::io(path.display(), e))?;
+        let part = reqwest::multipart::Part::bytes(bytes).file_name(name);
+        let form = reqwest::multipart::Form::new().part("file", part);
+        self.send(
+            self.http
+                .post(format!("{}/uploads", self.base))
+                .multipart(form),
+            "/uploads",
+            UPLOAD_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Put audio this machine downloaded into the organisation's own inbox.
+    ///
+    /// The counterpart of `upload_source`, and a separate route rather than a
+    /// second use of `/uploads` for two reasons: that one refuses anything
+    /// outside `SUPPORTED_FORMATS`, which is a list of *document* extensions
+    /// and rightly so; and it buffers the whole body in memory, which is a
+    /// 200 MB cap chosen for a 900-page PDF and the wrong shape for an hour of
+    /// audio. `/videos/audio` streams to disk and answers with the path
+    /// `VideoRequest.audio_path` wants.
+    ///
+    /// Cloud mode only. In local mode the worker's own address is answered by
+    /// YouTube, so `fetch_audio` runs where it always did and no file crosses
+    /// anything.
+    pub async fn upload_audio(&self, path: &std::path::Path) -> Result<StagedAudio> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "audio.m4a".to_string());
+        let bytes = std::fs::read(path).map_err(|e| AppError::io(path.display(), e))?;
+        let part = reqwest::multipart::Part::bytes(bytes).file_name(name);
+        let form = reqwest::multipart::Form::new().part("file", part);
+        self.send(
+            self.http
+                .post(format!("{}/videos/audio", self.base))
+                .multipart(form),
+            "/videos/audio",
+            AUDIO_UPLOAD_TIMEOUT,
+        )
+        .await
     }
 
     pub async fn start_ingest(
@@ -970,6 +2273,43 @@ impl Control {
             START_TIMEOUT,
         )
         .await
+    }
+
+    /// Start a video run. Free until the gate is answered.
+    ///
+    /// The body pairs the request and the switches by name, exactly as
+    /// `/ingest` does — the embedded shape rather than the bare one, because
+    /// that is what both planes serve for a two-body-parameter route.
+    pub async fn start_video(
+        &self,
+        request: &VideoRequest,
+        options: &StageOptions,
+    ) -> Result<StartedRun> {
+        self.post_json(
+            "/videos",
+            &serde_json::json!({ "request": request, "options": options }),
+            START_TIMEOUT,
+        )
+        .await
+    }
+
+    /// A video run's gate, or `Ok(None)` while the probe is still running.
+    ///
+    /// Its own route, not `/runs/{id}/gate`: the two reports differ in shape,
+    /// and decoding one into the other drops every field they do not share
+    /// without failing — the same reason `rebuild-gate` is separate.
+    pub async fn video_gate(&self, workflow_id: &str) -> Result<Option<VideoGateReport>> {
+        match self
+            .get::<VideoGateReport>(
+                &format!("/runs/{workflow_id}/video-gate"),
+                HEALTH_TIMEOUT,
+            )
+            .await
+        {
+            Ok(report) => Ok(Some(report)),
+            Err(AppError::ControlStatus { status: 409, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// The gate report, or `Ok(None)` while the free stages are still running.
@@ -988,11 +2328,68 @@ impl Control {
         }
     }
 
+    /// Whether a run is still going, or what it ended as.
+    ///
+    /// Proxied because the gate alone cannot say. `gate` models a 409 as
+    /// `Ok(None)`, and a run that died before publishing its report answers 409
+    /// forever — so a screen polling the gate on an interval waits for
+    /// something that is never coming unless it can ask this.
+    pub async fn run_status(&self, workflow_id: &str) -> Result<RunState> {
+        self.get(&format!("/runs/{workflow_id}"), HEALTH_TIMEOUT)
+            .await
+    }
+
+    /// The persistent queue: every run this organisation has, newest first.
+    ///
+    /// Catalog only, so it answers with the stack's Temporal down — which is
+    /// what lets the Import screen show a queue rather than an error panel while
+    /// the worker is restarting.
+    pub async fn runs(&self, query: &str) -> Result<RunListPage> {
+        let path = if query.is_empty() {
+            "/runs".to_string()
+        } else {
+            format!("/runs?{query}")
+        };
+        self.get(&path, RUNS_TIMEOUT).await
+    }
+
+    /// What the run did, stage by stage, and what each stage cost.
+    pub async fn run_audit(&self, workflow_id: &str) -> Result<RunAudit> {
+        self.get(&format!("/runs/{workflow_id}/audit"), AUDIT_TIMEOUT)
+            .await
+    }
+
+    /// The raw workflow history — retries and timeouts no application code saw.
+    pub async fn run_events(&self, workflow_id: &str) -> Result<RunEventPage> {
+        self.get(&format!("/runs/{workflow_id}/events"), EVENTS_TIMEOUT)
+            .await
+    }
+
     pub async fn approve(&self, workflow_id: &str, approval: &Approval) -> Result<()> {
         let _: serde_json::Value = self
             .post_json(
                 &format!("/runs/{workflow_id}/approve"),
                 approval,
+                START_TIMEOUT,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Stop a run that is already spending.
+    ///
+    /// The counterpart of `approve`. A gate that can only be opened is half a
+    /// gate: before this the only way to stop an ingest 260 generation calls into
+    /// semantic extraction was `temporal workflow cancel` from a shell.
+    ///
+    /// `POST` with no body, because the workflow id in the path is the whole
+    /// request — there is nothing to decide, unlike an approval which carries the
+    /// stage switches.
+    pub async fn cancel_run(&self, workflow_id: &str) -> Result<()> {
+        let _: serde_json::Value = self
+            .post_json(
+                &format!("/runs/{workflow_id}/cancel"),
+                &serde_json::json!({}),
                 START_TIMEOUT,
             )
             .await?;
@@ -1010,6 +2407,19 @@ impl Control {
 
     /// Which libraries exist. Free, and the first call every screen needs: a
     /// library id is not something a person can be expected to type.
+    pub async fn answer_styles(&self) -> Result<AnswerStyles> {
+        self.get("/answer-styles", HEALTH_TIMEOUT).await
+    }
+
+    pub async fn set_answer_style(
+        &self,
+        effort: &str,
+        body: &AnswerStyleUpdate,
+    ) -> Result<AnswerStyleSaved> {
+        self.put_json(&format!("/answer-styles/{effort}"), body, HEALTH_TIMEOUT)
+            .await
+    }
+
     pub async fn libraries(&self) -> Result<Libraries> {
         self.get("/libraries", HEALTH_TIMEOUT).await
     }
@@ -1024,6 +2434,24 @@ impl Control {
 
     // -- Library verbs -----------------------------------------------------
 
+    /// What one indexed version holds, what it cost, and what still agrees.
+    ///
+    /// Read-only across all three stores. Every leg degrades on its own, so a
+    /// stopped Memgraph comes back as a leg saying so rather than as an error —
+    /// which is why this returns a body where another read would return a
+    /// status code.
+    pub async fn version_statistics(
+        &self,
+        library_id: &str,
+        version_id: &str,
+    ) -> Result<VersionStatistics> {
+        self.get(
+            &format!("/libraries/{library_id}/versions/{version_id}/statistics"),
+            STATISTICS_TIMEOUT,
+        )
+        .await
+    }
+
     pub async fn document_detail(
         &self,
         library_id: &str,
@@ -1034,6 +2462,91 @@ impl Control {
             HEALTH_TIMEOUT,
         )
         .await
+    }
+
+    // -- conversations -----------------------------------------------------
+
+    pub async fn chat_create(&self, body: &NewConversation) -> Result<ConversationStarted> {
+        self.post_json("/chat", body, ASK_TIMEOUT).await
+    }
+
+    pub async fn chat_list(&self) -> Result<Conversations> {
+        self.get("/chat", RUNS_TIMEOUT).await
+    }
+
+    pub async fn chat_read(&self, conversation_id: &str) -> Result<ConversationDetail> {
+        self.get(&format!("/chat/{conversation_id}"), RUNS_TIMEOUT).await
+    }
+
+    pub async fn chat_delete(&self, conversation_id: &str) -> Result<()> {
+        self.send_empty(
+            self.http
+                .delete(format!("{}/chat/{conversation_id}", self.base)),
+            &format!("/chat/{conversation_id}"),
+            REMOVE_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn chat_turn(&self, conversation_id: &str, body: &NewTurn) -> Result<TurnStarted> {
+        self.post_json(&format!("/chat/{conversation_id}/turn"), body, ASK_TIMEOUT)
+            .await
+    }
+
+    /// Follow one turn's answer as it is written, handing each event to `on_event`.
+    ///
+    /// The only streaming call in this client, and the only one that passes no
+    /// total timeout — see `CHAT_STREAM_IDLE` for why a total budget is the
+    /// wrong shape here. It still goes through `send_raw`, so it cannot be the
+    /// request that forgets its credentials.
+    ///
+    /// **Bytes are buffered and split on newlines before being decoded.** A
+    /// chunk boundary can fall in the middle of a multi-byte character, and this
+    /// corpus is Spanish — decoding each chunk as it arrives would turn every
+    /// accent unlucky enough to straddle one into a replacement character. A
+    /// newline is ASCII and cannot appear inside a UTF-8 sequence, so a complete
+    /// line is always safe to decode.
+    ///
+    /// `since` is the resume point: pass the highest `seq` already seen and only
+    /// what follows is sent. That is what makes reopening a window cost nothing.
+    pub async fn chat_stream<F>(
+        &self,
+        conversation_id: &str,
+        turn_seq: u32,
+        since: u32,
+        mut on_event: F,
+    ) -> Result<()>
+    where
+        F: FnMut(ChatEvent),
+    {
+        let path = format!("/chat/{conversation_id}/turn/{turn_seq}/stream?since={since}");
+        let url = format!("{}{path}", self.base);
+        let mut response = self
+            .send_raw(self.http.get(&url), &path, None)
+            .await?;
+
+        let mut lines = SseBuffer::default();
+        loop {
+            let chunk = match tokio::time::timeout(CHAT_STREAM_IDLE, response.chunk()).await {
+                Err(_) => {
+                    return Err(AppError::ControlStreamStalled {
+                        url,
+                        seconds: CHAT_STREAM_IDLE.as_secs(),
+                    })
+                }
+                Ok(Err(source)) => return Err(unreachable(url, source)),
+                Ok(Ok(None)) => break,
+                Ok(Ok(Some(bytes))) => bytes,
+            };
+            for event in lines.push(&chunk) {
+                let terminal = event.event == "done" || event.event == "error";
+                on_event(event);
+                if terminal {
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
     }
 
     pub async fn remove_document(
@@ -1051,6 +2564,23 @@ impl Control {
     pub async fn remove_version(&self, library_id: &str, version_id: &str) -> Result<Removal> {
         self.delete(
             &format!("/libraries/{library_id}/versions/{version_id}"),
+            REMOVE_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Promote a version the pipeline deliberately withheld.
+    ///
+    /// Costs nothing: the index it activates is the one already paid for. The
+    /// other way out of a structural block is re-importing with `ignore_profile`,
+    /// which says the inherited rules were wrong and pays for a full run.
+    pub async fn activate_version(
+        &self,
+        library_id: &str,
+        version_id: &str,
+    ) -> Result<Activation> {
+        self.post(
+            &format!("/libraries/{library_id}/versions/{version_id}/activate"),
             REMOVE_TIMEOUT,
         )
         .await
@@ -1248,6 +2778,151 @@ mod tests {
         assert!(parsed.concepts[0].r#type.is_none());
     }
 
+    // --- one version's statistics -----------------------------------------
+    //
+    // Both directions matter here more than anywhere else in this file: the
+    // route's whole contract is that a leg which could not answer carries *no
+    // figures*, and a `#[serde(default)]` that quietly supplies a zero would
+    // turn "the graph is stopped" into "this version has no concepts" at
+    // exactly the layer nothing else checks.
+
+    /// Trimmed from a real response for `ver_0ebf4f0b50a27202db3fcca6`.
+    const STATS: &str = r#"{
+        "library_id": "lib_pruebas",
+        "document_id": "doc_0b797166a685ce47ff7dc859",
+        "version_id": "ver_0ebf4f0b50a27202db3fcca6",
+        "catalog": {"available": true, "detail": "",
+            "content_sha256": "0ebf4f0b", "byte_size": 3177305, "page_count": null,
+            "state": "indexed", "active": true, "created_at": "2026-08-31T18:16:19Z",
+            "activated_at": null, "failed_reason": null, "runs": 4,
+            "rebuild_run_id": "ingest-1788215710194-a367fb3a",
+            "profile_warnings": [{"id": 41, "profile_id": "01-retodedios",
+                "collides_with": "libro", "similarity": 0.0, "detail": "…",
+                "comparable": false}]},
+        "structure": {"available": true, "detail": "",
+            "source_run": "ingest-1788215710194-a367fb3a",
+            "scope": {"tenant_id": "tnt_1", "version_id": "ver_x"},
+            "graph": {"available": true, "detail": "",
+                "chunks": 600, "sections": 38, "citations": 600, "claims": 0,
+                "kinds": {"cuerpo": 502, "preguntas": 98},
+                "section_levels": {"1": 38}},
+            "qdrant": {"available": true, "detail": "", "points": 600},
+            "artifacts": {"available": true, "detail": "",
+                "stream": "extracted", "stream_verifies_completely": true,
+                "streams_considered": {
+                    "extracted": {"bytes": 484856, "spans_verified": 600, "spans_mismatched": 0},
+                    "raw": {"bytes": 487032, "spans_verified": 8, "spans_mismatched": 592}},
+                "spans": {"chunks": 600, "spans_verified": 600, "spans_mismatched": 0,
+                          "bytes": 484856},
+                "sequence": {"indices": 600, "contiguous": true, "missing_indices": [],
+                             "duplicate_indices": [], "bytes_covered": 482321,
+                             "bytes_total": 484856, "coverage": 0.9948}},
+            "counts_agree": true},
+        "semantics": {"available": true, "detail": "",
+            "source_run": "reindex-1", "extractor_model": "gemini-3.6-flash",
+            "in_store": {"claims": 3055, "with_a_quote": 3044,
+                "by_status": {"afirma": 2635, "atribuido": 373, "niega": 47},
+                "concepts": 2519},
+            "diff": {"available": true, "detail": "",
+                "claims": {"produced": 3055, "in_store": 3055, "converged": 3055,
+                           "left_behind": 0, "missing": 0, "stale_share": 0.0},
+                "concepts": {"names_extracted": 2634, "produced": 2517,
+                             "in_store": 2519, "converged": 2517, "left_behind": 2,
+                             "missing": 0, "stale_share": 0.0008},
+                "mentions": {"produced": 3497, "in_store": 3497, "converged": 3497,
+                             "left_behind": 0, "missing": 0, "stale_share": 0.0},
+                "stale_claim_quotes": {"with_a_quote": 0, "quote_no_longer_locates": 0}}},
+        "retrieval": {"available": true, "detail": "",
+            "source_run": "ingest-1", "scores": {"recall_at_1": 0.5375,
+                "recall_at_5": 0.825, "mrr_at_10": 0.6742,
+                "recall_at_5_dense_only": 0.8625, "noise_floor": 0.5142,
+                "chunks": 600, "eval_questions": 80, "margin": 0.041,
+                "leakage": "no sign", "misses": 14},
+            "floor": {"min_score": 0.6, "noise_floor": 0.5142, "headroom": 0.0858,
+                      "honest": true}},
+        "ledger": {"available": true, "detail": "",
+            "by_stage": {"embedding": {"usd": 0.035484,
+                "runs": ["ingest-a", "ingest-b"], "unpriced_entries": 0}},
+            "total_usd": 14.927211,
+            "charged_in_more_than_one_run": ["embedding", "semantics"],
+            "usd_by_run_state": {"failed": 9.992302, "succeeded": 4.909946}}
+    }"#;
+
+    #[test]
+    fn version_statistics_survive_the_round_trip_to_the_webview() {
+        let parsed: VersionStatistics = serde_json::from_str(STATS).unwrap();
+        let out = serde_json::to_value(&parsed).unwrap();
+
+        assert_eq!(out["libraryId"], "lib_pruebas");
+        assert_eq!(out["structure"]["graph"]["sectionLevels"]["1"], 38);
+        assert_eq!(out["structure"]["artifacts"]["streamVerifiesCompletely"], true);
+        assert_eq!(out["semantics"]["inStore"]["withAQuote"], 3044);
+        assert_eq!(out["ledger"]["usdByRunState"]["failed"], 9.992302);
+        // The snake_case spellings must be gone, or the webview reads both and
+        // one of them silently wins.
+        assert!(out["structure"]["counts_agree"].is_null());
+        assert!(out["semantics"]["in_store"].is_null());
+        assert_eq!(out["structure"]["countsAgree"], true);
+    }
+
+    #[test]
+    fn the_map_keys_are_never_renamed_with_the_fields() {
+        // Chunk kinds and claim statuses are Qdrant payload values and graph
+        // properties. `rename_all` renames struct fields and not map keys, and
+        // this is what says so — a camelCased `sinEstado` would match nothing
+        // the UI has a label for, and renaming them in the store would break
+        // every existing collection.
+        let parsed: VersionStatistics = serde_json::from_str(STATS).unwrap();
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(out["structure"]["graph"]["kinds"]["preguntas"], 98);
+        assert_eq!(out["semantics"]["inStore"]["byStatus"]["atribuido"], 373);
+    }
+
+    #[test]
+    fn a_leg_that_could_not_answer_carries_no_figures() {
+        // The property the whole route is built on, checked at the hop that
+        // would otherwise invent a default. A stopped Memgraph is not a version
+        // with no concepts, and a run nobody measured is not a recall of zero.
+        let json = r#"{
+            "library_id": "l", "document_id": "d", "version_id": "v",
+            "catalog": {"available": false, "detail": "sin fila"},
+            "structure": {"available": true, "detail": "",
+                "graph": {"available": false,
+                          "detail": "bolt://127.0.0.1:7789: refused"},
+                "qdrant": {"available": false, "detail": "6433: refused"},
+                "artifacts": {"available": false,
+                              "detail": "ningún run conserva chunks.jsonl"},
+                "counts_agree": null},
+            "semantics": {"available": false, "detail": "refused"},
+            "retrieval": {"available": false,
+                          "detail": "ningún run midió esta versión"},
+            "ledger": {"available": true, "detail": ""}
+        }"#;
+        let parsed: VersionStatistics = serde_json::from_str(json).unwrap();
+
+        assert!(parsed.structure.graph.chunks.is_none());
+        assert!(parsed.structure.qdrant.points.is_none());
+        assert!(parsed.structure.artifacts.spans.is_none());
+        assert!(parsed.semantics.in_store.is_none());
+        assert!(parsed.retrieval.scores.is_none());
+        assert!(parsed.catalog.page_count.is_none());
+        // "Could not compare" and "they disagree" are different claims.
+        assert!(parsed.structure.counts_agree.is_none());
+        // An empty ledger is a real answer: this version spent nothing.
+        assert!(parsed.ledger.available && parsed.ledger.by_stage.is_empty());
+        assert_eq!(parsed.structure.graph.detail, "bolt://127.0.0.1:7789: refused");
+    }
+
+    #[test]
+    fn a_page_count_nothing_wrote_stays_absent_rather_than_zero() {
+        // `register_version` runs before extraction, so the column is never
+        // filled. A `u32` with a serde default would render "0 pages" on every
+        // document in the catalog.
+        let parsed: VersionStatistics = serde_json::from_str(STATS).unwrap();
+        assert!(parsed.catalog.page_count.is_none());
+        assert_eq!(parsed.catalog.byte_size, Some(3177305));
+    }
+
     #[test]
     fn a_related_document_names_a_document_not_only_a_version() {
         let json = r#"{
@@ -1324,6 +2999,135 @@ mod request_direction {
     }
 
     #[test]
+    fn a_video_request_travels_webview_to_python_like_an_ingest_request() {
+        let from_webview = r#"{
+            "libraryId": "lib_videos",
+            "url": "https://youtu.be/dQw4w9WgXcQ",
+            "autoApprove": false,
+            "libraryName": ""
+        }"#;
+        let parsed: VideoRequest = serde_json::from_str(from_webview).unwrap();
+        assert_eq!(parsed.library_id, "lib_videos");
+        assert!(parsed.url.ends_with("dQw4w9WgXcQ"));
+
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(out["library_id"], "lib_videos");
+        assert!(out.get("libraryId").is_none());
+        assert_eq!(out["auto_approve"], false);
+        // Absent, not null, when this machine did not resolve the video — which
+        // is every local-mode run. `VideoRequest.resolved` defaults to `None`
+        // in Python, so either would decode; absent is what says "the webview
+        // sent nothing" rather than "something decided there was nothing".
+        assert!(out.get("resolved").is_none());
+        assert!(out.get("audio_path").is_none());
+    }
+
+    #[test]
+    fn a_resolved_video_reaches_python_under_pythons_own_spelling() {
+        // The one type in this file that must **not** rename on serialize. It
+        // is nested inside a request, so it travels Rust → Python only, and
+        // `duration_s` arriving as `durationS` would be dropped by the
+        // dataclass converter without failing — the exact shape of the
+        // `style_effort` defect, which existed and was invisible because
+        // `asdict` serialises declared fields and nothing else.
+        let mut request: VideoRequest = serde_json::from_str(
+            r#"{"libraryId": "lib_videos", "url": "https://youtu.be/jNQXAC9IVRw"}"#,
+        )
+        .unwrap();
+        request.resolved = Some(crate::ytdlp::VideoInfo {
+            video_id: "jNQXAC9IVRw".into(),
+            title: "Me at the zoo".into(),
+            channel: "jawed".into(),
+            duration_s: 19,
+            upload_date: "20050424".into(),
+            format_id: "395+251".into(),
+            tracks: vec![CaptionTrack {
+                language: "en".into(),
+                kind: "manual".into(),
+                ext: "vtt".into(),
+                name: String::new(),
+            }],
+            chosen: Some(CaptionTrack {
+                language: "en".into(),
+                kind: "manual".into(),
+                ext: "vtt".into(),
+                name: String::new(),
+            }),
+            caption_url: "https://www.youtube.com/api/timedtext?v=jNQXAC9IVRw".into(),
+        });
+        request.audio_path = "/workspace/tenants/t/inbox/audio.m4a".into();
+
+        let out = serde_json::to_value(&request).unwrap();
+        let resolved = &out["resolved"];
+        assert_eq!(resolved["video_id"], "jNQXAC9IVRw");
+        assert_eq!(resolved["duration_s"], 19);
+        assert_eq!(resolved["upload_date"], "20050424");
+        assert_eq!(resolved["format_id"], "395+251");
+        assert_eq!(resolved["caption_url"], "https://www.youtube.com/api/timedtext?v=jNQXAC9IVRw");
+        assert!(resolved.get("videoId").is_none());
+        assert!(resolved.get("durationS").is_none());
+        // `CaptionTrack` renames on serialize and is unaffected only because
+        // every one of its fields is a single word. A field added to it would
+        // have to be too, or this nesting starts lying.
+        assert_eq!(resolved["chosen"]["language"], "en");
+        assert_eq!(resolved["chosen"]["kind"], "manual");
+        assert_eq!(out["audio_path"], "/workspace/tenants/t/inbox/audio.m4a");
+    }
+
+    #[test]
+    fn a_video_gate_travels_python_to_webview_the_other_way() {
+        // The opposite direction, and therefore the opposite rename. A report
+        // that renamed on deserialize would arrive with every field undefined
+        // in TypeScript and the gate would render a video with no title, no
+        // duration and no transcript source — without failing anywhere.
+        let from_python = r#"{
+            "run_id": "video-1",
+            "document_id": "doc_v",
+            "version_id": "ver_v",
+            "probe": {
+                "video_id": "dQw4w9WgXcQ",
+                "canonical_url": "https://youtu.be/dQw4w9WgXcQ",
+                "source_key": "youtube/dQw4w9WgXcQ",
+                "title": "Charla",
+                "channel": "Canal",
+                "duration_s": 1800,
+                "upload_date": "20260101",
+                "tracks": [],
+                "chosen": null,
+                "warnings": []
+            },
+            "estimate": {
+                "stages": [], "total_usd": null, "price_source": "x",
+                "unpriced_stages": [], "total_usd_high": null
+            },
+            "preview": null,
+            "transcript": null,
+            "warnings": [],
+            "recommended": {
+                "correct": true, "embed": true, "extract_semantics": false,
+                "generate_evalset": false, "learn_profile": false,
+                "ignore_profile": false, "review_correction": false,
+                "tune": false, "condense_descriptions": false
+            }
+        }"#;
+        let parsed: VideoGateReport = serde_json::from_str(from_python).unwrap();
+        assert_eq!(parsed.probe.duration_s, 1800);
+        // `null` and not a fabricated preview: without captions there is no
+        // text to preview until the transcription is paid for.
+        assert!(parsed.preview.is_none());
+        assert!(parsed.recommended.as_ref().unwrap().correct);
+
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(out["probe"]["durationS"], 1800);
+        assert_eq!(out["probe"]["canonicalUrl"], "https://youtu.be/dQw4w9WgXcQ");
+        assert!(out["probe"].get("duration_s").is_none());
+        assert_eq!(out["recommended"]["correct"], true);
+        // The seven switches a video run has no stage for are dropped rather
+        // than offered.
+        assert!(out["recommended"].get("extractSemantics").is_none());
+    }
+
+    #[test]
     fn stage_options_accept_what_the_gate_actually_sends() {
         let from_webview = r#"{
             "correct": true, "embed": true, "extractSemantics": false,
@@ -1362,11 +3166,38 @@ mod request_direction {
     fn a_question_stays_snake_case_on_both_sides() {
         // The exception, pinned rather than left to be rediscovered: this is the
         // one request type the TypeScript side spells the Python way.
-        let from_webview = r#"{"library_id": "lib_1", "text": "¿qué?"}"#;
+        let from_webview =
+            r#"{"library_id": "lib_1", "text": "¿qué?", "effort": "thorough"}"#;
         let parsed: Question = serde_json::from_str(from_webview).unwrap();
         assert_eq!(parsed.library_id, "lib_1");
+        assert_eq!(parsed.effort, "thorough");
         let out = serde_json::to_value(&parsed).unwrap();
         assert_eq!(out["library_id"], "lib_1");
+        assert_eq!(out["effort"], "thorough");
+    }
+
+    #[test]
+    fn a_question_omitting_the_effort_still_asks_at_the_default() {
+        // A webview older than this shell sends no `effort`. Without the serde
+        // default that is not a question asked at the default level, it is a
+        // body serde refuses outright — so the whole Ask screen would stop
+        // working rather than degrade.
+        let parsed: Question =
+            serde_json::from_str(r#"{"library_id": "lib_1", "text": "¿qué?"}"#).unwrap();
+        assert_eq!(parsed.effort, "standard");
+        assert_eq!(parsed.top_k, None);
+    }
+
+    #[test]
+    fn a_question_that_names_no_top_k_omits_the_key_rather_than_nulling_it() {
+        // `top_k` absent means "the level decides", and that decision belongs to
+        // one place — the worker's effort table. Sending `null` would make both
+        // control planes answer a question they should never be asked: what does
+        // an explicitly-null top_k mean?
+        let parsed: Question =
+            serde_json::from_str(r#"{"library_id": "lib_1", "text": "¿qué?"}"#).unwrap();
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert!(out.get("top_k").is_none(), "got {out}");
     }
 
     #[test]
@@ -1554,7 +3385,7 @@ mod gate_report {
         // The distinction this asserts is the whole point: "it may still be
         // starting" is a lie about an API that answered late, and it was
         // printed over a run the API had logged as 200 OK.
-        let control = Control::new(silent_server());
+        let control = Control::local(silent_server());
         let error = control
             .send::<Health>(
                 control.http.get(format!("{}/health", control.base)),
@@ -1569,7 +3400,7 @@ mod gate_report {
 
     #[tokio::test]
     async fn a_refused_connection_still_reads_as_unreachable() {
-        let control = Control::new(dead_port());
+        let control = Control::local(dead_port());
         let error = control
             .send::<Health>(
                 control.http.get(format!("{}/health", control.base)),
@@ -1580,6 +3411,96 @@ mod gate_report {
             .expect_err("nothing is listening");
 
         assert_eq!(error.kind(), "control_unreachable", "{error}");
+    }
+
+    /// A one-request server that records what it was sent.
+    fn recording_server() -> (u16, std::sync::mpsc::Receiver<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            if let Ok((mut socket, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let read = socket.read(&mut buf).unwrap_or(0);
+                let _ = tx.send(String::from_utf8_lossy(&buf[..read]).to_string());
+                let _ = socket.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+                );
+            }
+        });
+        (port, rx)
+    }
+
+    #[tokio::test]
+    async fn the_local_plane_is_sent_no_credentials() {
+        // It has none and can have none: it is loopback-only and unauthenticated,
+        // and a bearer sent there would be a token leaked to a process that
+        // never asked for one.
+        let (port, rx) = recording_server();
+        let control = Control::local(port);
+        let _: std::result::Result<serde_json::Value, _> = control
+            .send(
+                control.http.get(format!("{}/health", control.base)),
+                "/health",
+                Duration::from_secs(5),
+            )
+            .await;
+        let request = rx.recv_timeout(Duration::from_secs(5)).expect("una petición");
+        assert!(!request.to_lowercase().contains("authorization"), "{request}");
+        assert!(!request.to_lowercase().contains("x-tenant-id"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn the_paid_plane_gets_the_bearer_and_the_tenant() {
+        let (port, rx) = recording_server();
+        let control = Control::cloud(
+            format!("http://127.0.0.1:{port}"),
+            Auth {
+                token: "abc.def.ghi".into(),
+                tenant: Some("tnt_x".into()),
+            },
+        );
+        let _: std::result::Result<serde_json::Value, _> = control
+            .send(
+                control.http.get(format!("{}/health", control.base)),
+                "/health",
+                Duration::from_secs(5),
+            )
+            .await;
+        let request = rx.recv_timeout(Duration::from_secs(5)).expect("una petición");
+        assert!(request.contains("authorization: Bearer abc.def.ghi"), "{request}");
+        assert!(request.contains("x-tenant-id: tnt_x"), "{request}");
+    }
+
+    #[tokio::test]
+    async fn no_tenant_means_no_header_rather_than_an_empty_one() {
+        // An account in exactly one organisation sends nothing and lets the
+        // server use its sole membership. An empty header would be a value.
+        let (port, rx) = recording_server();
+        let control = Control::cloud(
+            format!("http://127.0.0.1:{port}"),
+            Auth { token: "t".into(), tenant: None },
+        );
+        let _: std::result::Result<serde_json::Value, _> = control
+            .send(
+                control.http.get(format!("{}/health", control.base)),
+                "/health",
+                Duration::from_secs(5),
+            )
+            .await;
+        let request = rx.recv_timeout(Duration::from_secs(5)).expect("una petición");
+        assert!(!request.to_lowercase().contains("x-tenant-id"), "{request}");
+    }
+
+    #[test]
+    fn a_token_cannot_reach_a_log_through_debug() {
+        // Every other type here derives `Debug`; this one is written by hand so
+        // a `{:?}` on a `Control` cannot print a bearer.
+        let auth = Auth { token: "muy-secreto".into(), tenant: Some("tnt_x".into()) };
+        let rendered = format!("{auth:?}");
+        assert!(!rendered.contains("muy-secreto"), "{rendered}");
+        assert!(rendered.contains("tnt_x"), "{rendered}");
     }
 }
 
@@ -1637,6 +3558,57 @@ mod estimate_range {
         assert_eq!(out["totalUsdHigh"], 0.1209);
         assert_eq!(out["stages"][0]["usdHigh"], 0.1199);
         assert_eq!(out["stages"][0]["outputTokensHigh"], 12882);
+    }
+
+    #[test]
+    fn a_run_carries_its_spend_and_a_plane_without_it_still_parses() {
+        // `usd_so_far` is `#[serde(default)]` for the reason `RunState`'s fields
+        // are: a control plane that has not been upgraded must lose the figure,
+        // not the whole call. Both directions are asserted because only one of
+        // them is obvious.
+        let with: RunSummary = serde_json::from_str(
+            r#"{"id":"r1","workflow_id":"w1","kind":"index","state":"running",
+                "stage":"semantics","started_at":"2026-08-31T02:50:14Z",
+                "finished_at":null,"error_kind":null,"title":"Un libro",
+                "library_id":"lib_teologia","usd_so_far":0.025}"#,
+        )
+        .unwrap();
+        assert_eq!(with.usd_so_far, Some(0.025));
+
+        let without: RunSummary = serde_json::from_str(
+            r#"{"id":"r1","workflow_id":"w1","kind":"index","state":"running",
+                "stage":"semantics","started_at":"2026-08-31T02:50:14Z",
+                "finished_at":null,"error_kind":null,"title":null,
+                "library_id":null}"#,
+        )
+        .unwrap();
+        assert_eq!(without.usd_so_far, None);
+
+        // Serialised camelCase, because the webview reads `usdSoFar`.
+        let out = serde_json::to_value(&with).unwrap();
+        assert_eq!(out["usdSoFar"], 0.025);
+    }
+
+    #[test]
+    fn progress_is_read_when_the_activity_reports_and_absent_when_it_does_not() {
+        // The absence is the common case and must not be an error: only
+        // `extract_semantics` heartbeats, and no run older than that code does.
+        let live: RunState = serde_json::from_str(
+            r#"{"workflow_id":"w1","stage":"semantics","state":"running",
+                "progress":{"activity":"extract_semantics","done":260,"total":598}}"#,
+        )
+        .unwrap();
+        let progress = live.progress.as_ref().expect("a reported progress must survive");
+        assert_eq!((progress.done, progress.total), (260, 598));
+
+        let quiet: RunState = serde_json::from_str(
+            r#"{"workflow_id":"w1","stage":"correcting","state":"running"}"#,
+        )
+        .unwrap();
+        assert!(quiet.progress.is_none());
+
+        let out = serde_json::to_value(&live).unwrap();
+        assert_eq!(out["progress"]["done"], 260);
     }
 
     // -- the overview endpoints --------------------------------------------
@@ -1783,5 +3755,407 @@ mod estimate_range {
         let parsed: LibraryGraph = serde_json::from_str(GRAPH).unwrap();
         assert_eq!(parsed.concepts[0].documents, 51);
         assert_eq!(parsed.edges.len(), 1);
+    }
+
+    // -- the audit trail ----------------------------------------------------
+
+    /// A real body from `GET /runs/{id}/audit`, snake_case as both planes emit it.
+    const AUDIT: &str = r#"{
+      "run": {"id": "ingest-1", "workflow_id": "ingest-1", "kind": "index",
+              "state": "failed", "stage": "semantics",
+              "started_at": "2026-09-01T14:00:00+00:00",
+              "finished_at": "2026-09-01T14:10:00+00:00",
+              "error_kind": "activity_failed", "error_detail": "503",
+              "title": "Institución", "library_id": "lib_teologia",
+              "document_id": "doc_1", "version_id": "ver_1"},
+      "stages": [
+        {"seq": 1, "stage": "correcting", "at": "2026-09-01T14:00:00+00:00",
+         "ended_at": "2026-09-01T14:04:00+00:00", "seconds": 240.0,
+         "outcome": null, "detail": null,
+         "cost": {"input_tokens": 1000, "output_tokens": 500, "usd": 0.0334,
+                  "unpriced_entries": 0,
+                  "entries": [{"stage": "correction", "provider": "vertex",
+                               "model": "gemini-3.6-flash", "input_tokens": 1000,
+                               "output_tokens": 500, "usd": 0.0334}]},
+         "artifacts": [{"name": "corrected_text", "rel_path": "runs/x/corrected.txt",
+                        "sha256": "aa", "size_bytes": 10}]},
+        {"seq": 2, "stage": "chunking", "at": "2026-09-01T14:04:00+00:00",
+         "ended_at": null, "seconds": null, "outcome": null, "detail": null,
+         "cost": null, "artifacts": []}
+      ],
+      "totals": {"input_tokens": 1000, "output_tokens": 500, "usd": 0.0334,
+                 "unpriced_entries": 0},
+      "warnings": [{"profile_id": "p1", "collides_with": "otro.pdf",
+                    "similarity": 0.0, "detail": "colisión"}]
+    }"#;
+
+    #[test]
+    fn the_ledger_reaches_the_webview_camel_cased() {
+        // Renamed on the serialize side only, so the Python field names still
+        // deserialize and the webview still gets idiomatic JavaScript.
+        let parsed: RunAudit = serde_json::from_str(AUDIT).unwrap();
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert!(out["run"].get("workflow_id").is_none());
+        assert_eq!(out["run"]["workflowId"], "ingest-1");
+        assert_eq!(out["stages"][0]["endedAt"], "2026-09-01T14:04:00+00:00");
+        assert_eq!(out["totals"]["unpricedEntries"], 0);
+    }
+
+    #[test]
+    fn a_free_stage_stays_null_rather_than_becoming_a_zero() {
+        // The distinction the whole payload is built around: "this stage does
+        // not spend" and "this stage's charge was not recorded" are different
+        // claims, and a defaulted zero would render as the first.
+        let parsed: RunAudit = serde_json::from_str(AUDIT).unwrap();
+        assert!(parsed.stages[1].cost.is_none());
+        assert_eq!(parsed.stages[0].cost.as_ref().unwrap().usd, Some(0.0334));
+    }
+
+    #[test]
+    fn a_history_that_aged_out_is_unavailable_rather_than_empty() {
+        let gone: RunEventPage =
+            serde_json::from_str(r#"{"available": false, "truncated": false, "events": []}"#)
+                .unwrap();
+        assert!(!gone.available && gone.events.is_empty());
+
+        let live: RunEventPage = serde_json::from_str(
+            r#"{"available": true, "truncated": true, "events": [
+                 {"id": 12, "at": "2026-09-01T14:07:25+00:00",
+                  "type": "ActivityTaskStarted", "activity": "extract_semantics",
+                  "attempt": 2, "detail": null}]}"#,
+        )
+        .unwrap();
+        // `type` is a Rust keyword, so the field is `kind` and renamed on the
+        // deserialize side only — the webview gets `kind`, which is what the
+        // other tagged payloads in this file already use.
+        assert_eq!(live.events[0].kind, "ActivityTaskStarted");
+        assert_eq!(live.events[0].attempt, Some(2));
+        assert!(live.truncated);
+    }
+
+    #[test]
+    fn a_control_plane_that_predates_the_ledger_loses_a_field_not_the_call() {
+        // Every optional is `#[serde(default)]` for the reason the cost range's
+        // new fields were: an older plane must cost the caller one field, never
+        // the whole response.
+        let thin: RunListPage =
+            serde_json::from_str(r#"{"runs": [{"id": "r1", "workflow_id": "r1",
+                "kind": "index", "state": "running",
+                "started_at": "2026-09-01T14:00:00+00:00"}]}"#)
+                .unwrap();
+        assert_eq!(thin.runs[0].id, "r1");
+        assert!(thin.runs[0].usd_so_far.is_none());
+        assert!(thin.next_before.is_none());
+    }
+
+    #[test]
+    fn a_cursor_survives_the_query_string_it_travels_in() {
+        // `+00:00` unencoded is decoded by the server as a space, so the cursor
+        // parses as an invalid date, the route falls back to the first page, and
+        // the queue pages forever over the same rows.
+        let encoded = crate::percent_encode("2026-09-01T14:00:00+00:00|ingest-1");
+        assert!(!encoded.contains('+'), "{encoded}");
+        assert!(!encoded.contains('|'), "{encoded}");
+        assert!(encoded.contains("%2B"), "{encoded}");
+    }
+
+    // -- conversations -----------------------------------------------------
+
+    const TURN: &str = r#"{
+        "seq": 2,
+        "question": "¿y su muerte?",
+        "searched": "¿Qué dice el corpus sobre la muerte de Jesucristo?",
+        "answer": "Los fragmentos dicen…",
+        "state": "answered",
+        "effort": "standard",
+        "style_effort": "brief",
+        "citations": [{
+            "chunk_id": "chk_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "Cap 1 · [1:2]",
+            "claim": "algo",
+            "page": null,
+            "section_title": null
+        }],
+        "cited_evidence": [{
+            "chunk_id": "chk_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "title": "El Reto de Dios",
+            "breadcrumb": "Cap 1",
+            "text": "…",
+            "kind": "cuerpo",
+            "score": 0.81,
+            "source": "vector",
+            "locator": "Cap 1 · [1:2]",
+            "version_id": "ver_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "document_id": "doc_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "page": null,
+            "claims": []
+        }],
+        "error": null,
+        "asked_at": "2026-09-06T01:00:00+00:00",
+        "answered_at": "2026-09-06T01:00:09+00:00"
+    }"#;
+
+    #[test]
+    fn a_turn_arrives_snake_case_and_leaves_camel_case() {
+        let turn: ConversationTurn = serde_json::from_str(TURN).unwrap();
+        assert_eq!(turn.seq, 2);
+        assert_eq!(turn.searched.as_deref(), Some("¿Qué dice el corpus sobre la muerte de Jesucristo?"));
+        assert_eq!(turn.citations.len(), 1);
+        // Evidence carries fields this struct does not declare — serde drops
+        // them, which is what lets the server add one without breaking a build.
+        assert_eq!(turn.cited_evidence[0].title, "El Reto de Dios");
+
+        let out = serde_json::to_value(&turn).unwrap();
+        assert_eq!(out["styleEffort"], "brief");
+        assert_eq!(out["citedEvidence"][0]["chunkId"], "chk_aaaaaaaaaaaaaaaaaaaaaaaa");
+        assert_eq!(out["askedAt"], "2026-09-06T01:00:00+00:00");
+        // The snake_case names must not survive to the webview, or a component
+        // reading either spelling would work by accident until somebody tidied.
+        assert!(out.get("style_effort").is_none());
+        assert!(out.get("cited_evidence").is_none());
+    }
+
+    #[test]
+    fn a_new_turn_arrives_camel_case_and_leaves_snake_case() {
+        let body: NewTurn = serde_json::from_str(r#"{"text":"¿y su muerte?","effort":"thorough"}"#)
+            .unwrap();
+        let out = serde_json::to_value(&body).unwrap();
+        assert_eq!(out["text"], "¿y su muerte?");
+        assert_eq!(out["effort"], "thorough");
+    }
+
+    #[test]
+    fn a_turn_with_no_level_omits_the_key_rather_than_sending_null() {
+        // The same decision `ask.service.ts` records: omitting the key is how
+        // the payload says "whatever the server's default is", and a `null`
+        // would be a value the server has to interpret.
+        let body: NewTurn = serde_json::from_str(r#"{"text":"¿?"}"#).unwrap();
+        let out = serde_json::to_value(&body).unwrap();
+        assert!(out.get("effort").is_none());
+    }
+
+    #[test]
+    fn a_conversation_summary_survives_the_round_trip() {
+        let row: Conversation = serde_json::from_str(
+            r#"{"id":"cnv_1","library_id":"lib_a","title":"La fe","title_generated":true,
+                "turns":2,"created_at":"t0","last_message_at":"t1"}"#,
+        )
+        .unwrap();
+        let out = serde_json::to_value(&row).unwrap();
+        assert_eq!(out["libraryId"], "lib_a");
+        assert_eq!(out["titleGenerated"], true);
+        assert_eq!(out["lastMessageAt"], "t1");
+        assert!(out.get("library_id").is_none());
+    }
+
+    // -- the stream ---------------------------------------------------------
+
+    fn events(chunks: &[&[u8]]) -> Vec<ChatEvent> {
+        let mut buf = SseBuffer::default();
+        chunks.iter().flat_map(|c| buf.push(c)).collect()
+    }
+
+    #[test]
+    fn a_whole_event_in_one_chunk() {
+        let got = events(&[b"data: {\"type\":\"token\",\"seq\":1,\"text\":\"hola\"}\n\n"]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].event, "token");
+        assert_eq!(got[0].text.as_deref(), Some("hola"));
+        assert_eq!(got[0].seq, Some(1));
+    }
+
+    #[test]
+    fn an_event_split_across_chunks_is_held_until_it_is_whole() {
+        let got = events(&[
+            b"data: {\"type\":\"tok",
+            b"en\",\"seq\":1,\"text\":\"hola\"}",
+            b"\n\n",
+        ]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text.as_deref(), Some("hola"));
+    }
+
+    #[test]
+    fn an_accent_split_across_a_chunk_boundary_survives() {
+        // The reason decoding waits for a newline. `ó` is two bytes, and a chunk
+        // boundary can fall between them — this corpus is Spanish, so that is
+        // not a rare case. Decoding per chunk would put a replacement character
+        // in the text the reader is reading.
+        let line = "data: {\"type\":\"token\",\"text\":\"predicación\"}\n";
+        let whole = line.as_bytes();
+        // One byte into the two-byte `ó`, computed rather than guessed.
+        let cut = line.find('ó').unwrap() + 1;
+        assert!(std::str::from_utf8(&whole[..cut]).is_err(), "the split must be mid-character");
+        let got = events(&[&whole[..cut], &whole[cut..]]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text.as_deref(), Some("predicación"));
+    }
+
+    #[test]
+    fn several_events_in_one_chunk_all_come_out_in_order() {
+        let got = events(&[
+            b"data: {\"type\":\"token\",\"seq\":1,\"text\":\"a\"}\n\ndata: {\"type\":\"token\",\"seq\":2,\"text\":\"b\"}\n\n",
+        ]);
+        assert_eq!(
+            got.iter().map(|e| e.text.clone().unwrap()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+    }
+
+    #[test]
+    fn the_done_event_carries_the_settled_turn() {
+        // Compacted first: `TURN` is pretty-printed, and an SSE `data:` line
+        // ends at the first newline — embedding it raw would frame one event as
+        // a dozen broken ones. Worth knowing before writing another of these.
+        let turn: serde_json::Value = serde_json::from_str(TURN).unwrap();
+        let line = format!(
+            "data: {}\n\n",
+            serde_json::json!({"type": "done", "turn": turn})
+        );
+        let got = events(&[line.as_bytes()]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].event, "done");
+        let turn = got[0].turn.as_ref().expect("done carried no turn");
+        assert_eq!(turn.state, "answered");
+        assert_eq!(turn.citations.len(), 1);
+    }
+
+    #[test]
+    fn an_error_event_keeps_the_kind_the_ui_keys_on() {
+        let got = events(&[
+            b"data: {\"type\":\"error\",\"kind\":\"catalog_unreachable\",\"message\":\"no\"}\n\n",
+        ]);
+        assert_eq!(got[0].kind.as_deref(), Some("catalog_unreachable"));
+    }
+
+    #[test]
+    fn lines_that_are_not_data_are_ignored_rather_than_breaking_the_stream() {
+        // Blank separators, comments and any SSE field this build does not read.
+        let got = events(&[
+            b": keep-alive\n\nevent: token\nid: 7\ndata: {\"type\":\"token\",\"text\":\"x\"}\n\n",
+        ]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text.as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn an_event_this_build_cannot_parse_is_dropped_not_fatal() {
+        // A newer server sending something unknown must not take the stream
+        // down: the answer is still arriving and the authoritative copy is in
+        // the catalog either way.
+        let got = events(&[
+            b"data: not json at all\n\ndata: {\"type\":\"token\",\"text\":\"sigue\"}\n\n",
+        ]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text.as_deref(), Some("sigue"));
+    }
+
+    #[test]
+    fn an_unknown_event_type_arrives_as_data_rather_than_failing() {
+        let got = events(&[b"data: {\"type\":\"stage\",\"seq\":3}\n\n"]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].event, "stage");
+    }
+
+    #[test]
+    fn the_event_type_is_spelled_type_on_the_way_out_too() {
+        // Rust calls it `event` because `type` is a keyword; the webview must
+        // still see the same discriminator the server sent.
+        let got = events(&[b"data: {\"type\":\"token\",\"text\":\"x\"}\n\n"]);
+        let out = serde_json::to_value(&got[0]).unwrap();
+        assert_eq!(out["type"], "token");
+        assert!(out.get("event").is_none());
+    }
+
+    /// One turn's stream, captured from the running control API on 2026-09-05.
+    ///
+    /// A real sample rather than a handwritten one, for the reason
+    /// `test_the_raw_history_translates_against_a_real_temporal` gives on the
+    /// Python side: a double built from the same assumptions as the code agrees
+    /// with them. This is Spanish prose with real accents, a real settled turn
+    /// and real citations, framed exactly as the server frames it.
+    const REAL: &[u8] = include_bytes!("../fixtures/chat-turn.sse");
+
+    #[test]
+    fn the_real_stream_decodes_however_it_is_cut_up() {
+        // The property that matters, asserted at *every* byte boundary rather
+        // than at boundaries somebody thought to pick. A chunk can end anywhere,
+        // and this corpus is Spanish: 6.7 kB of it holds hundreds of two-byte
+        // characters, so a decoder that split them would be caught here even if
+        // no handwritten case happened to land on one.
+        let whole = events(&[REAL]);
+        assert_eq!(whole.len(), 1, "the capture should hold exactly one event");
+        assert_eq!(whole[0].event, "done");
+        let expected = whole[0].turn.as_ref().expect("no turn in the capture");
+
+        for cut in 1..REAL.len() {
+            let got = events(&[&REAL[..cut], &REAL[cut..]]);
+            assert_eq!(got.len(), 1, "cut at {cut} produced {} events", got.len());
+            let turn = got[0].turn.as_ref().expect("no turn");
+            assert_eq!(turn.answer, expected.answer, "answer differs when cut at {cut}");
+            assert_eq!(turn.question, expected.question, "question differs when cut at {cut}");
+            assert_eq!(turn.searched, expected.searched, "searched differs when cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn the_real_stream_carries_what_the_screen_needs() {
+        let got = events(&[REAL]);
+        let turn = got[0].turn.as_ref().unwrap();
+        assert_eq!(turn.state, "answered");
+        // The substitution the whole feature exists for: what was asked is not
+        // what was searched.
+        assert_ne!(turn.searched.as_deref(), Some(turn.question.as_str()));
+        assert!(turn.searched.as_deref().unwrap().contains("justificación"));
+        // Every citation the screen offers must carry a locator, because a
+        // citation nobody can open is one `answer._verify` would have dropped.
+        assert!(!turn.citations.is_empty());
+        for c in &turn.citations {
+            assert!(!c.locator.is_empty(), "a citation reached the client with no locator");
+        }
+        assert_eq!(turn.cited_evidence.len(), turn.citations.len());
+    }
+
+    #[test]
+    fn a_stage_event_survives_the_proxy_with_its_counts() {
+        // serde drops what it does not declare, so a proxy missing these fields
+        // would leave the window on one unchanging line for the nine tenths of a
+        // turn they exist to cover — and nothing would error.
+        let got = events(&[
+            b"data: {\"type\":\"stage\",\"seq\":4,\"stage\":\"evidence\",\"chunks\":48,\"dense\":27}\n\n",
+        ]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].event, "stage");
+        assert_eq!(got[0].stage.as_deref(), Some("evidence"));
+        assert_eq!(got[0].chunks, Some(48));
+        assert_eq!(got[0].dense, Some(27));
+
+        let out = serde_json::to_value(&got[0]).unwrap();
+        assert_eq!(out["stage"], "evidence");
+        assert_eq!(out["chunks"], 48);
+    }
+
+    #[test]
+    fn a_stage_with_no_counts_reports_absence_rather_than_zero() {
+        // `dense: 0` is a question the corpus does not support; `None` is a
+        // stage that never measured it. The two must not render the same.
+        let got = events(&[b"data: {\"type\":\"stage\",\"stage\":\"planning\"}\n\n"]);
+        assert_eq!(got[0].stage.as_deref(), Some("planning"));
+        assert_eq!(got[0].chunks, None);
+        assert_eq!(got[0].dense, None);
+    }
+
+    #[test]
+    fn a_stage_carries_no_text_so_it_cannot_be_appended_to_an_answer() {
+        let got = events(&[
+            b"data: {\"type\":\"token\",\"text\":\"a\"}\n\ndata: {\"type\":\"stage\",\"stage\":\"generating\"}\n\ndata: {\"type\":\"token\",\"text\":\"b\"}\n\n",
+        ]);
+        let prose: String = got
+            .iter()
+            .filter(|e| e.event == "token")
+            .filter_map(|e| e.text.clone())
+            .collect();
+        assert_eq!(prose, "ab");
+        assert!(got.iter().any(|e| e.event == "stage" && e.text.is_none()));
     }
 }

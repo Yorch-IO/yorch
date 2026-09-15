@@ -19,7 +19,11 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 from dataclasses import dataclass, field
+
+#: The shape `graph.schema` mints and the query binder accepts.
+_TENANT_ID = re.compile(r"tnt_[0-9a-f]{24}")
 
 DEFAULT_SECRETS_FILE = "/run/secrets/providers.env"
 
@@ -34,6 +38,72 @@ class Paths:
     """Everything the pipeline writes, rooted at the mounted workspace volume."""
 
     root: pathlib.Path
+
+    def for_tenant(self, tenant: str) -> "Paths":
+        """This organisation's corner of the volume — its *inbox*, not its artifacts.
+
+        The legacy tenant keeps the root itself, and that is not a shortcut: a
+        `run_artifact` row stores a **workspace-relative** path, so rerooting an
+        existing corpus would invalidate every one of them at once — the same
+        reasoning that keeps its derived ids unsalted. Everything minted since
+        lands under `tenants/<id>/`.
+
+        **What this scopes is the inbox.** `stage_source` calls `contains()`
+        before it hashes, so a `source_path` must fall inside the caller's own
+        tree; that is the boundary this function exists to draw, and the second
+        clause of `contains()` is what keeps the legacy root from swallowing it.
+
+        **Run artifacts are not scoped by it.** This docstring used to claim the
+        opposite — that rows written under a tenant were relative to that tenant's
+        root — and reading it that way is how a migration on 2026-08-31 moved 34
+        run directories out of reach of the code that opens them, leaving 157 of
+        159 `chunks`/`semantics` files unreachable and `rebuild` broken until they
+        were moved back. All twelve sites that build an `ArtifactStore` pass
+        `settings.workspace`, so `ArtifactStore._relative` measures from the
+        volume root and a run's artifacts live at `<workspace>/runs/<run_id>/…`
+        whoever owns them. `test_a_reference_is_relative_to_the_workspace` is what
+        fixes that, and it is the behaviour to trust over any prose.
+
+        That leaves a known isolation gap, the third beside `profiles/` and the
+        correction cache: one organisation's run artifacts sit where another could
+        read them. Unlike the cache — content-addressed, so sharing an entry means
+        already holding that paragraph — this one is a real crossing. Closing it is
+        those twelve call sites plus moving the artifacts each organisation already
+        has, and it has not been judged to block anything yet.
+        """
+        from .graph.schema import LEGACY_TENANT_ID
+
+        if tenant == LEGACY_TENANT_ID:
+            return self
+        if not _TENANT_ID.fullmatch(tenant):
+            # A path segment built from an unchecked string is how a workspace
+            # gets escaped. Refused here rather than at the filesystem.
+            raise ValueError(f"not a tenant id: {tenant!r}")
+        return Paths(root=self.root / "tenants" / tenant)
+
+    def contains(self, path: pathlib.Path) -> bool:
+        """Whether `path` is inside this organisation's tree.
+
+        Used to refuse an ingest whose `source_path` points somewhere else —
+        including another tenant's inbox, which is the case a plain "is it under
+        the workspace" check would wave through.
+
+        **The legacy tenant needs the second clause, and it is not symmetry for
+        its own sake.** Its root is the volume itself, so `tenants/<other>/…` is
+        under it: without excluding that subtree the one organisation that
+        predates tenancy could read every organisation that came after. A test
+        found this after the first version shipped the containment check alone.
+        """
+        try:
+            resolved = path.resolve()
+            root = self.root.resolve()
+            if not resolved.is_relative_to(root):
+                return False
+            # Everything below `tenants/` belongs to somebody more specific.
+            others = root / "tenants"
+            return not resolved.is_relative_to(others)
+        except (OSError, ValueError):
+            return False
 
     @property
     def inbox(self) -> pathlib.Path:
@@ -50,6 +120,21 @@ class Paths:
     @property
     def cache(self) -> pathlib.Path:
         return self.root / "cache"
+
+    @property
+    def embed_cache(self) -> pathlib.Path:
+        """Embeddings already paid for.
+
+        At the volume root rather than under a tenant, for the reason the
+        correction cache is: an entry is keyed by the model, the width, the task
+        and the text, so reading one requires already holding that text. That is
+        a saving, not a channel.
+
+        Here rather than beside its callers because there are now two — indexing
+        and *answering* — and a second copy of this path would be a cache that
+        silently never hits, which is the failure mode a cache cannot report.
+        """
+        return self.cache / "embed"
 
     @property
     def snapshots(self) -> pathlib.Path:
@@ -164,6 +249,17 @@ class Gemini:
             "correction": 0,
             "semantics": 0,
             "profile": 0,
+            # Rewriting a follow-up into a standalone question is substitution:
+            # "¿y su muerte?" plus the previous turn becomes "¿qué dice el
+            # corpus sobre la muerte de Jesucristo?". It is the same kind of
+            # mechanical work as `planning`, on a prompt a few hundred tokens
+            # long, and it sits between the user pressing enter and anything
+            # appearing — so reasoning there buys nothing and is paid for in
+            # latency as well as tokens.
+            "chat-rewrite": 0,
+            # Naming a conversation from its first exchange, once. Same
+            # reasoning, and the output is a handful of words.
+            "chat-title": 0,
         }
     )
 
@@ -211,6 +307,44 @@ class Gemini:
 
 
 @dataclass(frozen=True)
+class Aws:
+    """Amazon Transcribe, and the bucket the audio passes through.
+
+    Note what is *not* here, for the same reason `Gemini` says it: a credential.
+    The worker runs in a container on an EC2 host whose instance profile already
+    carries the permissions, and ``http_put_response_hop_limit = 2`` on that
+    instance is what lets a *container* reach IMDS — set so google-auth could,
+    and boto3 takes the same route. So the ordinary deployment configures a
+    region and a bucket and nothing secret. A developer running off the host
+    falls back to boto3's standard chain, which reads its own environment.
+
+    ``usd_per_minute`` is the batch rate for the standard model. **Published, not
+    measured** — the same caveat `ledger.py` carries about its token prices, and
+    it should be repeated wherever this figure reaches a screen. Zero means "no
+    price known", which surfaces as "sin precio" and never as free.
+    """
+
+    region: str = ""
+    bucket: str = ""
+    #: Where the audio and Transcribe's own output both live. One prefix,
+    #: because a single S3 lifecycle rule then retires both — and the instance
+    #: role is deliberately granted no `s3:DeleteObject` anywhere, so that rule
+    #: is the cleanup rather than a call this code makes.
+    prefix: str = "transcribe"
+    usd_per_minute: float = 0.0
+
+    @property
+    def configured(self) -> bool:
+        """Whether a Transcribe job could be started at all.
+
+        Checked before the gate quotes one, so "this deployment cannot
+        transcribe" is a refusal somebody reads while deciding, rather than a
+        failure forty minutes into a run they approved.
+        """
+        return bool(self.region and self.bucket)
+
+
+@dataclass(frozen=True)
 class Settings:
     workspace: pathlib.Path
     temporal_target: str
@@ -227,6 +361,14 @@ class Settings:
     log_level: str
     secrets_file: pathlib.Path
     gemini: "Gemini" = field(default_factory=lambda: Gemini())
+    aws: "Aws" = field(default_factory=lambda: Aws())
+    #: The queue that serves the two activities which talk to YouTube, when this
+    #: deployment cannot. Empty means "the same queue as everything else".
+    #:
+    #: Read here and put into `VideoRequest.fetch_queue` by the route that starts
+    #: the workflow — never read inside the workflow, which may only decide on
+    #: what its own history holds.
+    fetch_task_queue: str = ""
     api_host: str = "127.0.0.1"
     api_port: int = 8000
     secrets: dict[str, str] = field(default_factory=dict, repr=False)
@@ -303,6 +445,7 @@ def load() -> Settings:
         temporal_target=_env("BRAIN_TEMPORAL_TARGET", "127.0.0.1:7233"),
         temporal_namespace=_env("BRAIN_TEMPORAL_NAMESPACE", "default"),
         task_queue=_env("BRAIN_TASK_QUEUE", "brain-ingest"),
+        fetch_task_queue=_env("BRAIN_FETCH_TASK_QUEUE", ""),
         qdrant_url=_env("BRAIN_QDRANT_URL", "http://127.0.0.1:6333"),
         qdrant_collection=_env("BRAIN_QDRANT_COLLECTION", "brain"),
         # Bolt, not HTTP: Memgraph speaks the Bolt protocol and the driver
@@ -326,6 +469,12 @@ def load() -> Settings:
             ),
             stage_thinking=_stage_thinking(),
             max_gleaning=max(0, int(_env("BRAIN_MAX_GLEANING", "0"))),
+        ),
+        aws=Aws(
+            region=_env("BRAIN_AWS_REGION", ""),
+            bucket=_env("BRAIN_TRANSCRIBE_BUCKET", ""),
+            prefix=_env("BRAIN_TRANSCRIBE_PREFIX", "transcribe"),
+            usd_per_minute=float(_env("BRAIN_TRANSCRIBE_USD_PER_MINUTE", "0") or 0),
         ),
         # Loopback by default. The API has no authentication — it is reachable
         # only because nothing off the machine can route to it — so binding all

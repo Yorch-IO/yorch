@@ -18,6 +18,7 @@ collection. (Inherited invariant #14.)
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -77,12 +78,53 @@ def tokenize(text: str) -> list[str]:
         if len(tok) >= MIN_TOKEN_LEN and tok not in STOPWORDS:
             out.append(tok)
 
-    for ch in text.translate(_FOLD).lower():
+    folded = text.translate(_FOLD).lower()
+    for ch in folded:
         if ch.isalnum():
             buf.append(ch)
         else:
             flush()
     flush()
+    out.extend(scripture_tokens(folded))
+    return out
+
+
+# A scripture reference, matched against the *folded, lowercased* text so it sees
+# "gen. 2:15" for "Gén. 2:15". The optional leading digit carries the numbered
+# books ("1 sam. 10:24"); the book token must not be a stopword, which is what
+# keeps a clock time ("a las 10:30") from minting a reference.
+#
+# The book may be up to **16** letters, not 12: "Tesalonicenses" is 14 and
+# "Lamentaciones" 13, so at 12 the longest book names in the canon were the ones
+# this rule could not reach — "1 Tesalonicenses 5:23" indexed as `tesalonicenses`
+# with the chapter and verse dropped for being under `MIN_TOKEN_LEN`, which is
+# the exact failure the rule exists to prevent. Measured 2026-09-03 over the 45
+# corrected texts: 17 references missed, and widening the cap mints **13 extra
+# tokens, every one of them a real reference** (ten in 1 Tesalonicenses, three
+# in Lamentaciones) and no junk at all.
+_SCRIPTURE_RE = re.compile(r"\b(?:([123])\s*)?([a-zñ]{2,16})\.?\s*(\d{1,3}):(\d{1,3})")
+
+
+def scripture_tokens(folded: str) -> list[str]:
+    """Compound tokens for the scripture references in already-folded text.
+
+    ``tokenize`` splits on non-alphanumerics and drops tokens under
+    ``MIN_TOKEN_LEN``, so "Juan 10:6" reduces to ``juan`` — the chapter and verse
+    are gone and every citation of John is the same term. Measured on
+    02-PuertasEternas: **42 of its 49 distinct references lost their
+    chapter:verse entirely**, so a query for "Juan 10:9" retrieved every John
+    reference in the book indifferently.
+
+    This mints one extra token per reference, ``juan10v6``, alphanumeric so the
+    character walk would never have split it. The plain ``juan`` is still emitted
+    beside it, so a query naming only the book is unaffected. ``query_sparse_vector``
+    tokenizes with the same function, so both legs agree with no configuration.
+    """
+    out: list[str] = []
+    for num, book, chapter, verse in _SCRIPTURE_RE.findall(folded):
+        if book in STOPWORDS or len(book) < 2:
+            continue
+        out.append(f"{num}{book}{chapter}v{verse}")
     return out
 
 

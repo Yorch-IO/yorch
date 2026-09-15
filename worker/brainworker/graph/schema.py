@@ -132,16 +132,71 @@ def document_id(library: str, source_key: str) -> str:
     return f"doc_{_digest(library, source_key)}"
 
 
-def version_id(content_sha256: str) -> str:
-    """Identity of one exact byte sequence, independent of where it was found.
+#: The tenant every row minted before tenancy existed belongs to. Matches the
+#: column default in `20260826120000_tenancy` and the constant the NestJS plane
+#: uses.
+LEGACY_TENANT_ID = "tnt_000000000000000000000001"
 
-    Deliberately *not* salted with the document: two identical files must
-    resolve to one version so their chunks are embedded once. See the module
-    docstring.
+
+def tenant_id(slug: str) -> str:
+    """Identity of an organisation, derived from its slug.
+
+    Same shape as every other id here (`_digest`, 24 hex), which is what lets
+    `tnt` join the `_ID` regex in `graph/queries.py` rather than needing a second
+    form of identifier. Derived rather than random so that seeding the same
+    organisation twice — a script re-run, a second environment built from the
+    same list — produces the same row instead of a duplicate, and so an operator
+    can compute the id of a slug without reading the database.
+
+    The slug is the identity, so it must be settled before anything is indexed:
+    renaming an organisation is free, re-slugging it is not, because every
+    `ver_` and `con_` under it is salted with this value.
+
+    `LEGACY_TENANT_ID` is deliberately **not** this function's output for any
+    slug — it is a literal, minted before this existed, and `_salt` recognises
+    it by value.
+    """
+    return f"tnt_{_digest(slug)}"
+
+
+def _salt(tenant: str) -> tuple[str, ...]:
+    """The tenant's contribution to a derived id, and why it is conditional.
+
+    Every id below is a digest of its inputs, so adding a tenant to the inputs
+    changes the id. For a corpus minted before tenancy existed that would
+    invalidate every `ver_`, `sec_`, `chk_`, `clm_` and `cit_` in the graph and
+    every point id in Qdrant at once — and the projections could only be rebuilt
+    from artifacts. **Measured on this installation on 2026-08-26: 69 indexed
+    versions, all 69 with a `chunks` artifact recorded, and only 31 with the
+    file still on disk.** The other 38 would have needed the full pipeline
+    re-run, correction included, against source files that in many cases are no
+    longer recorded either.
+
+    So the legacy tenant keeps the derivation it already has. That is not a
+    special case bolted on: it is what a schema migration does when it preserves
+    existing keys, and it is the difference between a rename and losing 38
+    books' worth of paid work. Every tenant minted since salts normally, so no
+    two tenants can collide — legacy's inputs are a strict prefix of nobody's.
+    """
+    return () if tenant == LEGACY_TENANT_ID else (tenant,)
+
+
+def version_id(content_sha256: str, tenant: str) -> str:
+    """Identity of one exact byte sequence *within one tenant*.
+
+    Not salted with the document, deliberately: two identical files in the same
+    library must resolve to one version so their chunks are embedded once. It
+    *is* salted with the tenant, because the opposite is worse — two customers
+    importing the same PDF computed the same id, and `document_version.id` is a
+    primary key, so the second import collided on it before the widened
+    `UNIQUE (tenant_id, content_sha256)` could even be reached.
     """
     if not _SHA256.fullmatch(content_sha256):
         raise ValueError(f"not a sha256 hex digest: {content_sha256!r}")
-    return f"ver_{content_sha256[:24]}"
+    salt = _salt(tenant)
+    if not salt:
+        return f"ver_{content_sha256[:24]}"
+    return f"ver_{_digest(tenant, content_sha256)}"
 
 
 def section_id(version: str, path: tuple[int, ...]) -> str:
@@ -161,15 +216,23 @@ def chunk_id(version: str, index: int) -> str:
     return f"chk_{_digest(version, str(index))}"
 
 
-def concept_id(name: str) -> str:
-    """Identity of a concept, canonicalised so the graph converges.
+def concept_id(name: str, tenant: str) -> str:
+    """Identity of a concept, canonicalised so the graph converges — per tenant.
 
-    Concepts are the one node type meant to be shared across documents — that
-    sharing is what makes graph traversal worth having — so the same idea
-    written "Justificación por la fe", "justificacion por la fe" and
-    "JUSTIFICACIÓN POR LA FE" has to land on one node.
+    Concepts are the one node type meant to be shared across documents, and that
+    sharing is what makes graph traversal worth having: the same idea written
+    "Justificación por la fe", "justificacion por la fe" and "JUSTIFICACIÓN POR
+    LA FE" has to land on one node.
+
+    Shared across *tenants* is a different thing, and it is a leak rather than a
+    feature. `Concept.description_raw` accumulates a description per chunk that
+    mentions it, so one node would carry two customers' text; and the degree a
+    reader uses to judge whether a concept joins anything would count another
+    customer's books. Filtering the traversal cannot fix either — the content is
+    already on the node.
     """
-    return f"con_{_digest(canonical_concept(name))}"
+    salt = _salt(tenant)
+    return f"con_{_digest(*salt, canonical_concept(name))}"
 
 
 def claim_id(source_chunk: str, text: str) -> str:

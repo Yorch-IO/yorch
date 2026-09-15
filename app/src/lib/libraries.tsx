@@ -28,23 +28,24 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { api, errorMessage, type LibraryRow } from "./api";
+import { scopedKey, useBackend } from "./backend";
 
 const REMEMBERED = "companyBrain.libraryId";
 
 /** localStorage throws outright in some webview configurations, so every access
  *  is guarded and a failure degrades to "nothing remembered" rather than a
  *  blank screen. */
-function remembered(): string | null {
+function remembered(identity: string): string | null {
   try {
-    return window.localStorage.getItem(REMEMBERED);
+    return window.localStorage.getItem(scopedKey(REMEMBERED, identity));
   } catch {
     return null;
   }
 }
 
-function remember(id: string): void {
+function remember(id: string, identity: string): void {
   try {
-    window.localStorage.setItem(REMEMBERED, id);
+    window.localStorage.setItem(scopedKey(REMEMBERED, identity), id);
   } catch {
     /* not worth telling the user about */
   }
@@ -63,6 +64,7 @@ interface LibrariesState {
 const Ctx = createContext<LibrariesState | null>(null);
 
 export function LibrariesProvider({ children }: { children: ReactNode }) {
+  const { identity } = useBackend();
   const [rows, setRows] = useState<LibraryRow[]>([]);
   const [selected, setSelected] = useState("");
   const [loading, setLoading] = useState(false);
@@ -80,7 +82,7 @@ export function LibrariesProvider({ children }: { children: ReactNode }) {
         // by indexed content, so the first row is the one that can answer.
         const ids = new Set(libraries.map((l) => l.id));
         if (current && ids.has(current)) return current;
-        const saved = remembered();
+        const saved = remembered(identity);
         if (saved && ids.has(saved)) return saved;
         return libraries[0]?.id ?? "";
       });
@@ -89,19 +91,31 @@ export function LibrariesProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [identity]);
 
   // One fetch for the whole app. The stack may not be up yet on first paint,
   // in which case this fails and the picker offers a retry rather than the
   // screens each failing on their own.
+  //
+  // It runs again on every change of plane, and the rows it replaces are the
+  // defect: the two planes hold different libraries and the picker used to keep
+  // whichever set it had fetched at launch. The selection is dropped *before*
+  // the fetch, because `reload`'s first branch keeps an id that exists in the
+  // new list — and an id existing in both planes is precisely the case that
+  // must not be silently carried across. What survives instead is whatever this
+  // identity remembered on its own, which `reload` reads next.
   useEffect(() => {
+    setSelected("");
     void reload();
-  }, [reload]);
+  }, [identity, reload]);
 
-  const select = useCallback((id: string) => {
-    setSelected(id);
-    remember(id);
-  }, []);
+  const select = useCallback(
+    (id: string) => {
+      setSelected(id);
+      remember(id, identity);
+    },
+    [identity],
+  );
 
   const value = useMemo<LibrariesState>(
     () => ({ rows, selected, select, reload, loading, error }),
@@ -132,6 +146,24 @@ export function useLibraries(): LibrariesState {
  * Nothing is dropped in that form: the counts and the not-ready warning are the
  * reason it shows a `<select>` rather than an id.
  */
+/**
+ * What to call a library in the picker.
+ *
+ * The name when there is one, and the id when the name *is* the id — which is
+ * every library indexed before `ensure_library` stopped being handed the id in
+ * both positions. Showing "lib_teologia · lib_teologia" would be worse than
+ * showing the id once, and dropping the id entirely would take away the value
+ * a person has to type into a runbook or a curl.
+ *
+ * Exported and tested on its own for the reason `lib/radial.ts` gives: the
+ * property is a decision about two strings, and asserting it directly beats
+ * rendering a `<select>` to find out which one came back.
+ */
+export function libraryLabel(library: LibraryRow): string {
+  const named = library.name.trim();
+  return named === "" || named === library.id ? library.id : `${named} (${library.id})`;
+}
+
 export function LibraryPicker({ compact = false }: { compact?: boolean }) {
   const { t } = useTranslation();
   const { rows, selected, select, reload, loading, error } = useLibraries();
@@ -163,7 +195,7 @@ export function LibraryPicker({ compact = false }: { compact?: boolean }) {
       <select value={selected} onChange={(e) => select(e.target.value)}>
         {rows.map((l) => (
           <option key={l.id} value={l.id}>
-            {l.id} ·{" "}
+            {libraryLabel(l)} ·{" "}
             {t("libraries.counts", {
               documents: l.documents,
               indexed: l.indexedVersions,

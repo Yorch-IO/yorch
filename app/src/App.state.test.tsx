@@ -77,7 +77,9 @@ function willAnswer(a: Answer) {
 beforeEach(() => {
   window.localStorage.clear();
   libraries.mockResolvedValue({
-    libraries: [{ id: "lib_a", documents: 2, indexedVersions: 2 }],
+    libraries: [
+      { id: "lib_a", name: "Biblioteca A", language: "es", documents: 2, indexedVersions: 2 },
+    ],
   });
   willAnswer(answer("la respuesta"));
 });

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import uuid
 
+from datetime import datetime
+
 import pytest
 from temporalio import activity
 from temporalio.client import Client
@@ -122,13 +124,45 @@ async def activate_version(*_args) -> None:
     return None
 
 
+#: What the rebuild recorded, as (seq, stage, outcome). See `test_ingest.py`:
+#: typed like the real activities on purpose, because a `*args` double accepts
+#: any arity and Temporal lines payloads up with parameters *by* arity.
+EVENTS: list[tuple[int, str, str | None]] = []
+
+
 @activity.defn(name="record_run_outcome")
-async def record_run_outcome(*_args) -> None:
+async def record_run_outcome(
+    run_id: str,
+    state: str,
+    error_kind: str | None = None,
+    error_detail: str | None = None,
+    seq: int | None = None,
+    at: datetime | None = None,
+    stage: str | None = None,
+) -> None:
+    if seq is not None and stage is not None:
+        EVENTS.append((seq, stage, state))
+    return None
+
+
+@activity.defn(name="record_run_events")
+async def record_run_events(run_id: str, events: list[dict]) -> None:
+    for e in events:
+        EVENTS.append((int(e["seq"]), str(e["stage"]), None))
     return None
 
 
 @activity.defn(name="set_run_stage")
-async def set_run_stage(*_args) -> None:
+async def set_run_stage(
+    run_id: str,
+    stage: str,
+    state: str | None = None,
+    seq: int | None = None,
+    at: datetime | None = None,
+    detail: str | None = None,
+) -> None:
+    if seq is not None:
+        EVENTS.append((seq, stage, detail))
     return None
 
 
@@ -136,7 +170,7 @@ def activities(*, semantics: ArtifactRef | None = SEMANTICS):
     return [
         loader(semantics=semantics), estimate_cost, embed_and_index,
         project_structure, replay_semantics, activate_version,
-        record_run_outcome, set_run_stage,
+        record_run_outcome, set_run_stage, record_run_events,
     ]
 
 

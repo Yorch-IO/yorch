@@ -10,36 +10,77 @@ in docker-compose.yaml, and breaking it would need to be a deliberate act.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import pathlib
 import time
-from collections import OrderedDict
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass
-from typing import Any
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
+from typing import Annotated, Any, Literal
+
+from pydantic import Field
 from uuid import uuid4
 
 import httpx
 import psycopg
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client
 
-from .. import config
+from .. import auditlog, auditversion as av, config
 from ..artifacts import ArtifactRef, ArtifactStore
-from ..catalog import Catalog, MigrationError, current_version, migrate
+from ..catalog import Catalog, MigrationError, current_version, require_schema
 from ..graph import DEFAULT_CONFIDENCE_FLOOR, Graph, GraphError
 from ..graph.queries import TemplateError, bind, get
-from ..graph.schema import SEMANTIC_EDGES
+from ..answering.effort import DEFAULT_EFFORT, MAX_STYLE_CHARS
+from ..chat.title import fallback as fallback_title
+from ..chat.types import (
+    MAX_MESSAGE_CHARS,
+    WINDOW_ANSWER_CHARS,
+    WINDOW_TURNS,
+    ChatStart,
+    ChatTurn,
+    TurnRecord,
+)
+from ..graph.schema import LEGACY_TENANT_ID, SEMANTIC_EDGES
 from ..activities.rebuild import REQUIRED_ARTIFACT
+from ..answering.retrieve import MIN_SCORE
+from ..indexing import version_scope
+
+#: The artifact a measured run leaves behind. Named here rather than written as a
+#: literal at the two call sites, for the reason `REQUIRED_ARTIFACT` exists: the
+#: probe and the reader must not be able to drift apart.
+SCORES_ARTIFACT = "scores"
 from ..answering import Question, ask
-from ..pipeline import SUPPORTED_FORMATS, IngestRequest, StageOptions
+from .. import videosource
+from ..pipeline import (
+    SUPPORTED_FORMATS,
+    IngestRequest,
+    StageOptions,
+    VideoRequest,
+)
+from ..workflows.ask import AskWorkflow
+from ..workflows.chat import ChatWorkflow
 from ..workflows.ingest import Approval, IngestWorkflow
 from ..workflows.rebuild import RebuildWorkflow
+from ..workflows.video import VideoIngestWorkflow
 from ..workflows.ping import PingWorkflow
 
 log = logging.getLogger(__name__)
 
 PROBE_TIMEOUT = 5.0
+
+#: How long to wait for a workflow to answer a `stage` query before giving up.
+#:
+#: Short on purpose. A workflow inside a long activity does not answer at all —
+#: measured against a real ingest mid-semantics, where `describe()` came back in
+#: 0.00s and the query had not answered after 15 — so this is not "how long the
+#: query takes" but "how long to block a route that has better sources for the
+#: same fact". `state` comes from `describe()` and the catalog keeps a `stage`;
+#: the query is the nicety, not the answer.
+STAGE_QUERY_TIMEOUT = 2.0
 
 #: Why the catalog schema is not usable, or None when it is. Startup does not
 #: fail on a database that is still coming up — /health has to stay answerable
@@ -49,11 +90,18 @@ _schema_error: str | None = "not attempted"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Migrate the catalog before serving.
+    """Check the catalog schema before serving; do not change it.
 
-    Running migrations here rather than as a separate step is what keeps the
-    schema version and the code that reads it from ever disagreeing: there is no
-    window in which a new binary talks to an old catalog.
+    This used to apply migrations, which is what kept the schema and the code
+    reading it from ever disagreeing. Prisma owns the schema now
+    (`yorch-tauri-backend/prisma/migrations`), applied by the `migrate` service
+    before either plane starts, so what is left here is the check that closes
+    the same window from the other side: the API asks whether the migration this
+    code was written against is present, and reports the answer on /health.
+
+    Startup still does not fail. A control plane whose /health is how an
+    operator finds out what is wrong must be able to answer while Postgres is
+    still coming up.
     """
     ensure_schema()
     yield
@@ -61,21 +109,110 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Company Brain control API", version="0.1.0", lifespan=lifespan)
 
+
+#: Stamped on every workflow this plane starts. This plane *is* the legacy
+#: organisation and always has been, so the value is a constant rather than a
+#: parameter — but it has to be written, because the paid plane reads it to
+#: decide whether a caller may see a run at all. A run with no memo forces that
+#: check back onto the catalog, and `AskWorkflow` never writes a catalog row.
+_OWNED_BY_LEGACY = {"tenant_id": LEGACY_TENANT_ID}
+
+
+@dataclass
+class AnswerStyleUpdate:
+    """The new wording for one effort level. Empty clears the override.
+
+    The cap is a field constraint rather than a hand-raised error so that
+    FastAPI answers it in its own 422-with-a-list shape — which is the shape the
+    paid plane's exception filter reproduces for `class-validator` failures. The
+    same reasoning as `Question.effort`: a hand-rolled kind here would make the
+    two planes answer one oversized body two different ways.
+    """
+
+    body: Annotated[str, Field(max_length=MAX_STYLE_CHARS)] = ""
+
+
+async def _describe(handle: Any) -> Any | None:
+    """One `describe()`, swallowed, so a caller wanting two facts pays once.
+
+    `None` means Temporal has forgotten the run, which is ordinary once
+    retention expires and is not a failure: the catalog still holds what the run
+    produced. Swallowed for the same reason the stage query is.
+    """
+    try:
+        return await handle.describe()
+    except Exception:
+        return None
+
+
+def _state_of(description: Any | None) -> str | None:
+    """Whether the run is still going, or what it ended as.
+
+    `stage` cannot answer this. A query against a *failed* workflow hands back
+    the last stage it recorded, which is indistinguishable from one still
+    working — observed 2026-08-28, when an ingest whose activity retries were
+    exhausted reported `"stage": "learning"` indefinitely while
+    `describe().status` already read FAILED.
+    """
+    status = getattr(description, "status", None)
+    return status.name.lower() if status is not None else None
+
+
+async def _run_state(handle: Any) -> str | None:
+    return _state_of(await _describe(handle))
+
+
+async def _run_progress(client: Any, description: Any | None) -> dict[str, Any] | None:
+    """How far the running activity has got, when it says.
+
+    Read off `pending_activities`, where `activity.heartbeat` leaves it. Only
+    `extract_semantics` reports today, and it is the one worth reporting: it is
+    one generation call per chunk, so a chunk count is a call count and a spend
+    count, and it is the stage long enough that a person wonders whether to wait.
+
+    `None` covers every honest absence, and they are deliberately not told apart:
+    nothing pending, an activity that does not heartbeat, a run older than this
+    code, or details that will not decode. All four mean the same thing to a
+    reader — this run is not reporting progress — and inventing four ways to say
+    it would be four things for a screen to handle.
+    """
+    raw = getattr(description, "raw_description", None)
+    if raw is None:
+        return None
+    for pending in raw.pending_activities:
+        if not pending.HasField("heartbeat_details"):
+            continue
+        try:
+            details = await client.data_converter.decode(
+                list(pending.heartbeat_details.payloads)
+            )
+        except Exception:
+            continue
+        if len(details) >= 2:
+            done, total = details[0], details[1]
+            if isinstance(done, int) and isinstance(total, int) and total > 0:
+                return {
+                    "activity": pending.activity_type.name,
+                    "done": done,
+                    "total": total,
+                }
+    return None
+
 _settings: config.Settings | None = None
 _client: Client | None = None
 
 
 def ensure_schema() -> str | None:
-    """Apply pending migrations. Returns the error, or None on success."""
+    """Check the catalog schema. Returns the error, or None when it is usable."""
     global _schema_error
     try:
-        applied = migrate(settings().database_url)
-        if applied:
-            log.info("catalog migrations applied: %s", ", ".join(applied))
+        applied = require_schema(settings().database_url)
+        log.info("catalog schema ok: %d migration(s), newest %s", len(applied), applied[-1])
         _schema_error = None
     except MigrationError as e:
-        # A migration that cannot be applied is a code/schema disagreement, not
-        # a transient outage. Retrying it every request would bury the cause.
+        # A schema behind the code is a version disagreement, not a transient
+        # outage, and it has a one-line fix the message names. Retrying it every
+        # request would bury the cause.
         log.error("catalog schema is unusable: %s", e)
         _schema_error = str(e)
     except Exception as e:
@@ -260,6 +397,7 @@ async def ping() -> dict[str, Any]:
         PingWorkflow.run,
         id=f"ping-{_ulid()}",
         task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
     )
     report = await handle.result()
     return {"workflow_id": handle.id, **asdict(report)}
@@ -310,8 +448,114 @@ async def start_ingest(request: IngestRequest, options: StageOptions | None = No
         args=[request, options or StageOptions()],
         id=f"ingest-{_ulid()}",
         task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
     )
     return {"workflow_id": handle.id, "state": "running"}
+
+
+#: `document.format` for a source located by a clock rather than a byte range.
+#: The same string `graph.projection.TIMED_FORMATS` branches on, and the reason
+#: it is a named constant in both places rather than a literal in either.
+TIMED_FORMAT = "youtube"
+
+
+@app.post("/videos")
+async def start_video(
+    request: VideoRequest, options: StageOptions | None = None
+) -> dict[str, Any]:
+    """Start a video run. Free until someone answers the gate.
+
+    The URL is validated **here as well as** inside `probe_video`, and that is
+    belt and braces on purpose — the same doubling `retrieve.search` keeps for
+    `tenant_id`. `videosource.video_id` is not only a parser: it is the host
+    allowlist, and yt-dlp is an SSRF-shaped dependency with ~1800 extractors and
+    a `generic` one that will fetch an arbitrary host. Unlike `stage_source`
+    there is no `Paths.contains` to inherit, so this is the check that stands in
+    its place, and refusing in the request that asked is what gets the user an
+    answer rather than a failed run to go and read.
+    """
+    s = settings()
+    try:
+        videosource.video_id(request.url)
+    except videosource.NotAVideoUrl as e:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "kind": "not_a_video_url",
+                "message": f"{request.url!r} no es el enlace de un vídeo de YouTube",
+                "detail": str(e),
+            },
+        ) from e
+
+    if request.resolved is not None:
+        # A record the *caller* produced, because the caller is on an address
+        # YouTube answers and this deployment may not be. Checked here for the
+        # reason the URL is checked here — the request that asked is where an
+        # answer is useful — and checked again in `probe_video`, which is the
+        # activity that actually fetches `caption_url`.
+        try:
+            videosource.check_resolved(request.url, request.resolved)
+        except videosource.ResolutionNotTrusted as e:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "kind": "resolution_not_trusted",
+                    "message": "los datos del vídeo no corresponden al enlace",
+                    "detail": str(e),
+                },
+            ) from e
+
+    client = await temporal()
+    handle = await client.start_workflow(
+        VideoIngestWorkflow.run,
+        # `fetch_queue` is decided here rather than inside the workflow, which
+        # may only decide on what its own history holds — reading an environment
+        # variable there would make replay depend on the machine replaying it.
+        # Empty unless this deployment's own egress is refused by YouTube, in
+        # which case it names the queue a worker on an acceptable address is
+        # serving. See `VideoRequest.fetch_queue`.
+        args=[replace(request, fetch_queue=s.fetch_task_queue or request.fetch_queue),
+              options or StageOptions()],
+        id=f"video-{_ulid()}",
+        task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
+    )
+    return {"workflow_id": handle.id, "state": "running"}
+
+
+@app.get("/runs/{workflow_id}/video-gate")
+async def video_gate(workflow_id: str) -> dict[str, Any]:
+    """A video run's gate, which is a different shape from a document's.
+
+    A separate route from `/runs/{id}/gate` even though both workflows name the
+    query `gate_report` — the same decision, for the same reason, as
+    `/runs/{id}/rebuild-gate`: querying through the ingest workflow's *typed*
+    handle would decode a `VideoGateReport` into a `GateReport` and drop every
+    field the two do not share, without failing.
+
+    They genuinely differ. `GateReport.preview` is a required `Preview` holding
+    two required artifact references, and a video with no captions has no text
+    to preview until the money has been spent — so here it is optional, and
+    `null` says so rather than quoting a count nobody measured.
+    """
+    handle = (await temporal()).get_workflow_handle(workflow_id)
+    try:
+        report = await handle.query(VideoIngestWorkflow.gate_report)
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail={"kind": "run_not_found", "message": f"{type(e).__name__}: {e}"},
+        ) from e
+    if report is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "kind": "gate_not_ready",
+                "message": "todavía se está examinando el vídeo",
+                "stage": await handle.query(VideoIngestWorkflow.stage),
+            },
+        )
+    return asdict(report)
 
 
 @app.get("/runs/{workflow_id}/gate")
@@ -332,6 +576,11 @@ async def gate(workflow_id: str) -> dict[str, Any]:
                 "kind": "gate_not_ready",
                 "message": "las etapas gratuitas aún no han terminado",
                 "stage": await handle.query(IngestWorkflow.stage),
+                # Beside the stage, because the Import screen polls this on an
+                # interval and reads a 409 as "keep waiting". A run that died
+                # before publishing its gate answers `None` forever, so without
+                # this the screen spins for a run that is never coming.
+                "run_state": await _run_state(handle),
             },
         )
     return asdict(report)
@@ -349,6 +598,38 @@ async def approve(workflow_id: str, approval: Approval) -> dict[str, str]:
             detail={"kind": "run_not_found", "message": f"{type(e).__name__}: {e}"},
         ) from e
     return {"workflow_id": workflow_id, "approved": str(approval.approved).lower()}
+
+
+@app.post("/runs/{workflow_id}/cancel")
+async def cancel_run(workflow_id: str) -> dict[str, Any]:
+    """Stop a run that is already spending.
+
+    **Cancel, not terminate.** Cancellation is delivered to the workflow, which
+    unwinds — `record_run_outcome` still writes `cancelled`, the artifacts it has
+    already produced stay, and the version is left importable. Terminating kills
+    it where it stands and the catalog keeps whatever state it happened to be in,
+    which is how a run ends up reading `running` forever.
+
+    The reason this route exists at all is that the alternative was the Temporal
+    CLI. A real ingest ran 598 chunks of semantic extraction — one generation
+    call each, projected at ~$3.87 from this corpus's own measured rate — and the
+    only way to stop it was `temporal workflow cancel` from a shell. A spend gate
+    that can only be opened, never closed, is half a gate.
+
+    Idempotent by nature: cancelling a workflow that has already finished is not
+    an error here, because the caller's intent — "do not let this spend more" —
+    is already true. A workflow Temporal has forgotten is a 404, which is the
+    same thing every other route on this path says.
+    """
+    handle = (await temporal()).get_workflow_handle(workflow_id)
+    try:
+        await handle.cancel()
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail={"kind": "run_not_found", "message": f"{type(e).__name__}: {e}"},
+        ) from e
+    return {"workflow_id": workflow_id, "cancelled": True}
 
 
 def _semantics_counts(
@@ -390,6 +671,57 @@ def _semantics_counts(
         return None
 
 
+def _measured_scores(
+    workspace: pathlib.Path, run_id: str, artifacts: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """What this run's index can actually be asked, or None if nobody asked.
+
+    Read from the run's own `scores.json` for the reason `_semantics_counts`
+    gives: a run that predates the measurement reports *nothing*, honestly,
+    rather than a zero somebody would read as a broken index. Recall of 0.00 and
+    "this was never measured" are different statements and only one of them is a
+    fact about the corpus.
+
+    The noise floor travels with the recall deliberately. Recall says how often
+    the right chunk came back; the floor says what a *wrong* one scores, and
+    without it a reader cannot tell an index that discriminates from one that
+    returns everything at a similar distance.
+    """
+    ref = next((a for a in artifacts if a.get("name") == "scores"), None)
+    if ref is None:
+        return None
+    try:
+        payload = ArtifactStore(workspace, run_id).read_json(
+            ArtifactRef(
+                kind="scores",
+                path=ref["rel_path"],
+                sha256=ref["sha256"],
+                bytes=ref["size_bytes"],
+            )
+        )
+    except Exception as e:
+        log.warning("could not read %s's scores: %s", run_id, e)
+        return None
+
+    scores = payload.get("scores") or {}
+    if not scores.get("eval_questions"):
+        # An eval set that produced no questions measured nothing. Rendering its
+        # zeros would put "recall 0.00" on a perfectly good index.
+        return None
+    return {
+        "recall_at_1": scores.get("recall_at_1"),
+        "recall_at_5": scores.get("recall_at_5"),
+        "mrr_at_10": scores.get("mrr_at_10"),
+        "recall_at_5_dense_only": scores.get("recall_at_5_dense_only"),
+        "noise_floor": scores.get("noise_floor"),
+        "chunks": scores.get("chunks"),
+        "eval_questions": scores.get("eval_questions"),
+        "margin": payload.get("margin"),
+        "leakage": payload.get("leakage"),
+        "misses": len(payload.get("misses") or []),
+    }
+
+
 @app.get("/runs/{workflow_id}")
 async def run_status(workflow_id: str) -> dict[str, Any]:
     """Live stage from Temporal, plus what the catalog recorded.
@@ -399,9 +731,23 @@ async def run_status(workflow_id: str) -> dict[str, Any]:
     outlives the workflow's retention period.
     """
     s = settings()
-    handle = (await temporal()).get_workflow_handle(workflow_id)
+    client = await temporal()
+    handle = client.get_workflow_handle(workflow_id)
+    # **Bounded, because an unbounded query hangs this whole route.** A query is
+    # answered by the workflow, and a workflow sitting inside a long activity does
+    # not answer: measured 2026-08-31 against a real ingest 260 generation calls
+    # into semantic extraction, where `describe()` returned in 0.00s and
+    # `query("stage")` had still not answered after 15 — so `GET /runs/{id}`
+    # returned nothing at all, for the whole hour that stage lasts. The import
+    # screen polls this route to tell a dead run from a slow one, so the hang
+    # landed on exactly the screen that exists to say what is happening.
+    #
+    # Losing the query costs little: `state` comes from `describe()`, `progress`
+    # from the activity's heartbeat, and the catalog holds a `stage` of its own.
     try:
-        stage = await handle.query(IngestWorkflow.stage)
+        stage = await asyncio.wait_for(
+            handle.query(IngestWorkflow.stage), timeout=STAGE_QUERY_TIMEOUT
+        )
     except Exception:
         stage = None
 
@@ -409,18 +755,295 @@ async def run_status(workflow_id: str) -> dict[str, Any]:
         artifacts = catalog.artifacts(workflow_id)
         costs = catalog.total_cost(workflow_id)
 
+    # One `describe()` for both the state and the progress: they come off the
+    # same response, and this endpoint is polled once per active run.
+    description = await _describe(handle)
+
     body: dict[str, Any] = {
         "workflow_id": workflow_id,
         "stage": stage,
+        "state": _state_of(description),
         "artifacts": artifacts,
         "cost": costs,
     }
+    # Omitted, never zeroed, for the same reason `semantics` is below: "not
+    # reporting progress" and "0 of 598 done" are different claims.
+    if (progress := await _run_progress(client, description)) is not None:
+        body["progress"] = progress
     # Omitted rather than zeroed when there is nothing to count: "this run
     # extracted no semantics" and "0 of 0 claims are verifiable" are different
     # statements, and only one of them is true of a structure-only run.
     if (semantics := _semantics_counts(s.workspace, workflow_id, artifacts)) is not None:
         body["semantics"] = semantics
+    # Same rule again: absent means "this run was not asked to measure", which is
+    # true of every run indexed before the stage existed and of every run whose
+    # gate declined it.
+    if (scores := _measured_scores(s.workspace, workflow_id, artifacts)) is not None:
+        body["scores"] = scores
     return body
+
+
+# ---------------------------------------------------------------------------
+# The queue, and what a run actually did
+# ---------------------------------------------------------------------------
+#
+# `GET /runs/{id}` answers "where is this now", and it answers it from Temporal.
+# That is the right source for a live run and the wrong one for a finished one:
+# Temporal forgets a run when retention expires, at which point that route
+# reports `state: null` and `stage: null` for a run whose every column is still
+# in Postgres. These three routes are the other half.
+#
+# `/runs` is the queue. `/runs/{id}/audit` is the durable ledger and reads only
+# the catalog. `/runs/{id}/events` is the raw Temporal history — the one source
+# that shows retries and heartbeat timeouts no application code recorded, and
+# the one that goes away.
+
+
+#: How many raw history events to translate before saying "truncated".
+#:
+#: A history is a few dozen events for an ordinary import and grows with retries.
+#: The cap is about the *reader*, not the transport: past a few hundred lines
+#: nobody is reading, and the ledger above already says what happened.
+EVENT_CAP = 500
+
+#: The event types worth showing a person.
+#:
+#: `WorkflowTaskScheduled/Started/Completed` are the bulk of any history and say
+#: nothing anybody can act on — they are the workflow being woken up to decide
+#: what to do next. `WorkflowTaskFailed` is kept, because that one is a bug.
+_EVENTS_SHOWN = frozenset(
+    {
+        "WorkflowExecutionStarted",
+        "WorkflowExecutionCompleted",
+        "WorkflowExecutionFailed",
+        "WorkflowExecutionCanceled",
+        "WorkflowExecutionTerminated",
+        "WorkflowExecutionTimedOut",
+        "WorkflowExecutionSignaled",
+        "WorkflowTaskFailed",
+        "ActivityTaskScheduled",
+        "ActivityTaskStarted",
+        "ActivityTaskCompleted",
+        "ActivityTaskFailed",
+        "ActivityTaskTimedOut",
+        "ActivityTaskCancelRequested",
+        "ActivityTaskCanceled",
+        "TimerStarted",
+        "TimerFired",
+        "TimerCanceled",
+    }
+)
+
+
+def _cursor(value: str | None) -> tuple[datetime, str] | None:
+    """Decode `before`, which is `{started_at ISO}|{run id}`.
+
+    Two parts because the sort is `(started_at, id)`: `started_at` defaults to
+    `now()` and several runs enqueued from one multi-file drop land in the same
+    microsecond, so a timestamp alone would drop or repeat a row at the page
+    boundary. A cursor that will not parse is ignored rather than refused — the
+    caller gets the first page, which is a recoverable answer, instead of a 400
+    on a string they did not construct.
+    """
+    if not value:
+        return None
+    stamp, _, run_id = value.partition("|")
+    try:
+        return datetime.fromisoformat(stamp), run_id
+    except ValueError:
+        return None
+
+
+@app.get("/runs")
+async def runs(
+    limit: int = 25,
+    before: str | None = None,
+    kinds: str | None = None,
+    states: str | None = None,
+    library_id: str | None = None,
+    document_id: str | None = None,
+    version_id: str | None = None,
+) -> dict[str, Any]:
+    """The persistent queue: every run this organisation has, newest first.
+
+    Catalog only, and therefore answerable when Temporal is down — the same
+    reasoning `/project-summary` records for `recent_runs`. What a run is
+    *doing* belongs to `/runs/{id}`; what it *was* belongs here, and that is what
+    makes an import queue survive the window being closed.
+
+    Not an extension of `/project-summary`: that route is the landing screen's,
+    is capped at ten, and has no cursor because nobody scrolls it.
+    """
+    s = settings()
+    capped = max(1, min(limit, 100))
+    with Catalog(s.database_url) as catalog:
+        rows = catalog.runs(
+            # This plane *is* the legacy organisation, and saying so at the call
+            # site is what makes it a decision rather than an accident.
+            tenant_id=LEGACY_TENANT_ID,
+            limit=capped + 1,
+            before=_cursor(before),
+            kinds=_csv(kinds),
+            states=_csv(states),
+            library_id=library_id,
+            document_id=document_id,
+            version_id=version_id,
+        )
+    # One more than asked for, so "is there another page" is answered without a
+    # count over the whole table.
+    more = len(rows) > capped
+    rows = rows[:capped]
+    return {
+        "runs": [asdict(r) for r in rows],
+        "next_before": (
+            f"{rows[-1].started_at.isoformat()}|{rows[-1].id}" if more and rows else None
+        ),
+    }
+
+
+@app.get("/runs/{workflow_id}/audit")
+async def run_audit(workflow_id: str) -> dict[str, Any]:
+    """Every stage the run passed through, what it cost, and what it produced.
+
+    Reads only the catalog, deliberately, so it answers for a run Temporal has
+    forgotten — which is every run older than the retention period, and which is
+    exactly when somebody goes looking. A 404 here means no such run in this
+    organisation, never "Temporal does not remember it".
+    """
+    s = settings()
+    with Catalog(s.database_url) as catalog:
+        run = catalog.run(workflow_id, tenant_id=LEGACY_TENANT_ID)
+        if run is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "kind": "run_not_found",
+                    "message": f"no existe la ejecución {workflow_id!r}",
+                },
+            )
+        events = catalog.run_events(workflow_id, tenant_id=LEGACY_TENANT_ID)
+        costs = catalog.costs(workflow_id, tenant_id=LEGACY_TENANT_ID)
+        artifacts = catalog.artifacts(workflow_id)
+        # Keyed by version rather than by run, which is why this is fetched
+        # separately and is empty for a run that never reached one. The row
+        # carries no `kind`, so a caller cannot tell a plain collision from the
+        # heading disagreement that withholds activation — that distinction
+        # exists only on the Temporal payload today.
+        warnings = (
+            catalog.open_profile_warnings(run.version_id) if run.version_id else []
+        )
+    return auditlog.build(run, events, costs, artifacts, warnings)
+
+
+@app.get("/runs/{workflow_id}/events")
+async def run_events(workflow_id: str) -> dict[str, Any]:
+    """The raw workflow history: retries, timeouts, signals, and what caused them.
+
+    This is the only source that shows what no application code recorded. The
+    run that charged semantic extraction twice looked, from every other angle,
+    like one long stage — the heartbeat timeout, the closed attempt and the
+    second identical pass are visible here and nowhere else.
+
+    **`available: false` rather than a 404 or an empty list.** Temporal keeps
+    history only for its retention period, and "the history has aged out" and
+    "this run did nothing" must not render the same — the rule
+    `/project-summary` already applies to a leg it could not read. A caller that
+    sees `[]` with `available: true` is looking at a run that genuinely produced
+    no events worth showing.
+    """
+    client = await temporal()
+    handle = client.get_workflow_handle(workflow_id)
+    events: list[dict[str, Any]] = []
+    truncated = False
+    # Which activity each scheduled event was for.
+    #
+    # **Only `ActivityTaskScheduled` carries the activity type.** Started,
+    # Completed, Failed and TimedOut reference it by `scheduled_event_id`
+    # instead, so reading the name off each event leaves two thirds of the log
+    # anonymous — and the row that matters most is one of them, because the
+    # *attempt* is on `ActivityTaskStarted`. Without this, the single line this
+    # panel exists to show reads "ActivityTaskStarted · intento 2" with no
+    # indication of which activity retried.
+    named: dict[int, str] = {}
+    try:
+        async for event in handle.fetch_history_events():
+            kind = _event_kind(event)
+            if kind not in _EVENTS_SHOWN:
+                continue
+            if len(events) >= EVENT_CAP:
+                truncated = True
+                break
+            events.append(_event_row(event, kind, named))
+    except Exception as e:
+        log.info("no history for %s: %s", workflow_id, e)
+        return {"available": False, "truncated": False, "events": []}
+    return {"available": True, "truncated": truncated, "events": events}
+
+
+def _event_kind(event: Any) -> str:
+    """`EVENT_TYPE_ACTIVITY_TASK_STARTED` -> `ActivityTaskStarted`.
+
+    The CamelCase form is what Temporal's own UI shows and what anybody
+    searching for one of these will type.
+
+    **`event_type` is a plain `int`, not an enum object.** protobuf's Python
+    runtime represents enum fields as integers, so `getattr(t, "name", str(t))`
+    reads as careful and silently yields `"3"` — which matches nothing in
+    `_EVENTS_SHOWN`, so the whole history filters down to an empty list and the
+    route reports a run that did nothing. Found by translating a real history
+    rather than a hand-built double, which would have agreed with the
+    assumption.
+    """
+    name = EventType.Name(event.event_type).removeprefix("EVENT_TYPE_")
+    return "".join(part.capitalize() for part in name.split("_"))
+
+
+def _event_row(event: Any, kind: str, named: dict[int, str]) -> dict[str, Any]:
+    """One line, with the activity and attempt when the event carries them.
+
+    Attributes live on a per-type `*_event_attributes` field, so this reads
+    whichever one is set rather than branching per type — a new event type then
+    renders with whatever it happens to carry instead of rendering blank.
+
+    `named` carries the activity forward from the scheduling event to the ones
+    that only reference it. See `run_events`: without it the retry line, which
+    is the reason this panel exists, has no name on it.
+    """
+    attrs = None
+    for field in event.DESCRIPTOR.fields:
+        if field.name.endswith("_event_attributes") and event.HasField(field.name):
+            attrs = getattr(event, field.name)
+            break
+
+    activity = None
+    if attrs is not None and hasattr(attrs, "activity_type"):
+        activity = attrs.activity_type.name
+        named[event.event_id] = activity
+    elif attrs is not None:
+        scheduled = getattr(attrs, "scheduled_event_id", 0)
+        activity = named.get(scheduled)
+    attempt = getattr(attrs, "attempt", None) if attrs is not None else None
+
+    detail = None
+    failure = getattr(attrs, "failure", None) if attrs is not None else None
+    if failure is not None and getattr(failure, "message", ""):
+        detail = failure.message[:500]
+
+    stamp = event.event_time.ToDatetime().replace(tzinfo=timezone.utc)
+    return {
+        "id": event.event_id,
+        "at": stamp.isoformat(),
+        "type": kind,
+        "activity": activity,
+        "attempt": attempt or None,
+        "detail": detail,
+    }
+
+
+def _csv(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    return [part for part in (p.strip() for p in value.split(",")) if part] or None
 
 
 # ---------------------------------------------------------------------------
@@ -439,73 +1062,23 @@ async def run_status(workflow_id: str) -> dict[str, Any]:
 # separates the two clocks: a client timeout now applies to a poll, and the
 # answer survives the window being closed.
 #
-# The store is this process's memory on purpose. Surviving an API restart would
-# need a table, and the remedy for a question lost that way is to ask it again —
-# the same reasoning that keeps a question out of Temporal. It is safe only
-# because uvicorn runs a single worker (`entrypoint.py`); passing `workers=N`
-# there would send a poll to a process that never saw the question.
-
-
-@dataclass
-class _Asked:
-    #: "running" | "done" | "failed"
-    state: str
-    started: float
-    answer: dict[str, Any] | None = None
-    error: dict[str, str] | None = None
-
-
-#: Questions asked, oldest first. Bounded, so a long-lived API does not keep one
-#: answer per question ever asked; a running question is never evicted.
-_ASKED: OrderedDict[str, _Asked] = OrderedDict()
-_ASKED_LIMIT = 64
-_ASKED_TTL = 3600.0
-
-#: Strong references to the tasks in flight. asyncio holds only a weak one, so a
-#: task nothing else refers to can be collected mid-await and cancelled with no
-#: error anywhere — the answer would simply never arrive.
-_ASKING: set[asyncio.Task[None]] = set()
-
-
-def _reap(now: float) -> None:
-    """Drop finished questions that are old, then oldest-first over the cap."""
-    for question_id, entry in list(_ASKED.items()):
-        if entry.state != "running" and now - entry.started > _ASKED_TTL:
-            del _ASKED[question_id]
-    while len(_ASKED) > _ASKED_LIMIT:
-        for question_id, entry in _ASKED.items():
-            if entry.state != "running":
-                del _ASKED[question_id]
-                break
-        else:
-            break
-
-
-async def _answer_question(question_id: str, s: Any, question: Question) -> None:
-    entry = _ASKED[question_id]
-    try:
-        result = await asyncio.to_thread(ask, s, question)
-    except Exception as e:
-        log.warning("question %s failed: %s", question_id, e)
-        entry.error = {"kind": "ask_failed", "message": f"{type(e).__name__}: {e}"}
-        entry.state = "failed"
-    else:
-        entry.answer = asdict(result)
-        # State last, always. A poll landing between these two lines must not
-        # see a finished question with nothing in it.
-        entry.state = "done"
+# **The store used to be this process's memory, and is now the workflow's.**
+# That was safe only while exactly one process could hold it — uvicorn runs a
+# single worker, and passing `workers=N` would have sent a poll to a process
+# that never saw the question. A second control plane makes that assumption
+# false by construction, so the state moved to `AskWorkflow`, which both planes
+# reach by id. Durability came along as a side effect rather than as the motive;
+# the reasoning in `answering/service.py` about a question not needing to be a
+# workflow was about *durability*, and it was right.
 
 
 @app.post("/ask")
 async def ask_question(question: Question) -> dict[str, Any]:
-    """Start answering, and return the id to collect the answer with.
-
-    Answering runs in a threadpool rather than a workflow: a question is
-    interactive and short-lived, and durability buys nothing when the remedy for
-    a failure is to ask again.
-    """
+    """Start answering, and return the id to collect the answer with."""
     s = settings()
     if not s.gemini.configured:
+        # Refused here as well as in the activity, so a misconfigured project is
+        # answered by the request that asked rather than by a failed run.
         raise HTTPException(
             status_code=503,
             detail={
@@ -514,20 +1087,19 @@ async def ask_question(question: Question) -> dict[str, Any]:
             },
         )
 
-    now = time.monotonic()
-    _reap(now)
-    question_id = "q_" + uuid4().hex
-    _ASKED[question_id] = _Asked(state="running", started=now)
-
-    task = asyncio.create_task(_answer_question(question_id, s, question))
-    _ASKING.add(task)
-    task.add_done_callback(_ASKING.discard)
-
-    return {"question_id": question_id, "state": "running"}
+    client = await temporal()
+    handle = await client.start_workflow(
+        AskWorkflow.run,
+        question,
+        id=f"ask-{_ulid()}",
+        task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
+    )
+    return {"question_id": handle.id, "state": "running"}
 
 
 @app.get("/ask/{question_id}")
-def ask_result(question_id: str) -> dict[str, Any]:
+async def ask_result(question_id: str) -> dict[str, Any]:
     """Collect a question started earlier, or say it is still running.
 
     Note the three states an answer can carry. `answered` always has at least one
@@ -536,24 +1108,29 @@ def ask_result(question_id: str) -> dict[str, Any]:
     support an answer. `off_corpus` means nothing cleared the similarity floor at
     all, which is a different problem with a different fix.
     """
-    entry = _ASKED.get(question_id)
-    if entry is None:
+    client = await temporal()
+    handle = client.get_workflow_handle(question_id)
+    try:
+        outcome = await handle.query(AskWorkflow.result)
+    except Exception as e:
         raise HTTPException(
             status_code=404,
             detail={
                 "kind": "question_not_found",
                 "message": (
-                    "Esa pregunta ya no está en vuelo. Las preguntas viven en la "
-                    "memoria de la API y se pierden si se reinicia."
+                    "Esa pregunta ya no está en vuelo. Las preguntas viven en el "
+                    "historial de Temporal y se pierden cuando expira su "
+                    f"retención ({type(e).__name__})."
                 ),
             },
-        )
+        ) from e
     return {
         "question_id": question_id,
-        "state": entry.state,
-        "answer": entry.answer,
-        "error": entry.error,
+        "state": outcome.state,
+        "answer": asdict(outcome.answer) if outcome.answer is not None else None,
+        "error": outcome.error,
     }
+
 
 
 # ---------------------------------------------------------------------------
@@ -583,13 +1160,14 @@ def _graph_totals(s: config.Settings) -> dict[str, Any]:
     """
     try:
         with Graph(s.memgraph_url, timeout=PROBE_TIMEOUT) as graph:
+            scope = {"tenant_id": LEGACY_TENANT_ID}
             nodes = {
                 row.data["label"]: row.data["total"]
-                for row in graph.query("graph_node_counts", {})
+                for row in graph.query("graph_node_counts", scope)
             }
             edges = {
                 row.data["label"]: row.data["total"]
-                for row in graph.query("graph_edge_counts", {})
+                for row in graph.query("graph_edge_counts", scope)
             }
     except Exception as e:
         return {
@@ -628,8 +1206,12 @@ def _catalog_totals(s: config.Settings, runs: int) -> dict[str, Any]:
     """
     try:
         with Catalog(s.database_url, pooled=False) as catalog:
-            totals = catalog.project_totals()
-            recent = catalog.recent_runs(runs)
+            # This plane is the free, self-managed, single-tenant one, and its
+            # organisation is the legacy one. Named at the call site rather
+            # than defaulted in the repository, so two planes reading one
+            # catalog cannot disagree about whose figures these are.
+            totals = catalog.project_totals(tenant_id=LEGACY_TENANT_ID)
+            recent = catalog.recent_runs(runs, tenant_id=LEGACY_TENANT_ID)
     except Exception as e:
         return {
             "catalog": {
@@ -703,7 +1285,8 @@ def libraries() -> dict[str, Any]:
     """
     s = settings()
     with Catalog(s.database_url) as catalog:
-        rows = catalog.libraries()
+        # Single-tenant plane; see the note in the project summary above.
+        rows = catalog.libraries(tenant_id=LEGACY_TENANT_ID)
     return {
         "libraries": [
             {
@@ -923,6 +1506,19 @@ def document_detail(library_id: str, document_id: str) -> dict[str, Any]:
             for v in versions
         }
         shared = {v.id: catalog.documents_holding(v.id) for v in versions}
+        # The newest run of each version that measured anything, and what it
+        # measured. A version indexed before the stage existed — which is every
+        # version on this installation today — simply has none, and renders as
+        # "not measured" rather than as a zero.
+        scored_by = {
+            v.id: catalog.latest_run_with_artifact(v.id, SCORES_ARTIFACT)
+            for v in versions
+        }
+        scores = {
+            vid: _measured_scores(s.workspace, run, catalog.artifacts(run))
+            for vid, run in scored_by.items()
+            if run
+        }
         # Computed inside the `with`: the check reads the artifact row, and the
         # catalog is closed by the time the response below is assembled.
         can_rebuild = _replayable(s.workspace, catalog, rebuild_from.get(active))
@@ -950,6 +1546,8 @@ def document_detail(library_id: str, document_id: str) -> dict[str, Any]:
                 "active": v.id == active,
                 "created_at": v.created_at.isoformat() if v.created_at else None,
                 "rebuild_run_id": rebuild_from.get(v.id),
+                # None means nobody measured this version, never "it scored 0".
+                "scores": scores.get(v.id),
                 # Which other documents hold these same bytes. Removing this
                 # document leaves the version standing when this is non-empty,
                 # and the confirm dialog has to be able to say so.
@@ -1012,6 +1610,572 @@ async def remove_version(library_id: str, version_id: str) -> dict[str, Any]:
     return result.as_dict()
 
 
+@app.post("/libraries/{library_id}/versions/{version_id}/activate")
+async def activate_version_route(library_id: str, version_id: str) -> dict[str, Any]:
+    """Promote a version the pipeline deliberately did not.
+
+    An ingest that finds a structural collision indexes everything and withholds
+    only this step, because the fingerprint that selects a family profile is
+    structural and structure is not subject matter — and the retrieval metrics
+    provably cannot see the difference, since the eval questions come from the
+    very chunks the wrong rules produced. So the judgement is a person's, and
+    this is the half of it that says "the rules were right".
+
+    The other half is re-importing with `ignore_profile`, which says they were
+    wrong and costs another pipeline run. This costs nothing: the index it
+    promotes is the one already paid for.
+    """
+    import asyncio
+
+    from ..activation import ActivationError, activate_version
+
+    try:
+        result = await asyncio.to_thread(
+            activate_version,
+            library_id,
+            version_id,
+            # Named rather than defaulted, the same decision `reindex_document`
+            # records: this plane *is* the legacy organisation, it has no
+            # accounts, and saying so is what keeps the value from being an
+            # accident. It was an accident until 2026-08-31 — the parameter
+            # defaulted, so this route answered 404 for every version any other
+            # organisation owned, which is every version on this installation
+            # since the corpus moved to `preprod`. The paid plane reaches the
+            # same function through `ActivationWorkflow`, carrying its own.
+            tenant_id=LEGACY_TENANT_ID,
+        )
+    except ActivationError as e:
+        raise HTTPException(
+            status_code=404, detail={"kind": e.kind, "message": str(e)}
+        ) from e
+    return result.as_dict()
+
+
+# ---------------------------------------------------------------------------
+# One version's statistics
+# ---------------------------------------------------------------------------
+#
+# `document_detail` answers "what versions does this document have". This
+# answers the question underneath it — **how big is this thing, what did the
+# extractor find in it, is the index still coherent with what the run produced,
+# and what did it cost** — which until now was answerable only through
+# `scripts/audit_version.py`, a CLI, whose first real use found that $1.1965 of
+# one document's $3.7572 (31.8%) bought nothing because a cancelled run
+# generated the eval set twice.
+#
+# Five legs, each with its own `available` flag. `/project-summary`'s rule and
+# not `/libraries/{id}/graph`'s: a stopped Memgraph must render as "could not
+# ask", naming the URL it tried, never as a 503 and never as a version with no
+# concepts. **A leg that could not answer carries no figures at all**, so one
+# cannot be quoted by accident.
+#
+# Every comparison is `auditversion`'s. `choose_stream`, `verify_spans`,
+# `chunk_sequence`, `semantic_diff`, `quote_still_locates`, `floor_verdict`,
+# `cost_by_stage` and `claim_shape` are pure and have tests that need no store,
+# and a second implementation here would be a second opinion about the same
+# rows — which is exactly what `scripts/audit_version.py` now does *not* have,
+# because it calls the same functions.
+
+#: How many distinct chunks a stale claim may name before the quote check stops
+#: sampling. `chunk_texts` is clamped to `MAX_LIMIT` anyway; naming the number
+#: here says the check is a *sample* when a version is badly stale, rather than
+#: letting the clamp silently decide. The recorded worst case — 4 988 claims
+#: left behind — touched far fewer chunks than that, because a stale claim names
+#: a chunk that still exists.
+STALE_CHUNK_SAMPLE = 200
+
+#: The templates this route runs, named once so the one-session helper cannot
+#: drift from them.
+_STATISTICS_TEMPLATES = (
+    "version_counts",
+    "version_chunk_kinds",
+    "version_section_levels",
+    "version_claim_shape",
+    "version_concepts_reached",
+)
+
+
+def _iso(value: Any) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _graph_detail(memgraph_url: str, error: Exception) -> str:
+    """The URL that was tried, and Memgraph's own `kind` when it has one.
+
+    `graph_unreachable` and `graph_refused` are different problems — a stopped
+    container against a query the database rejected — and both reach a caller as
+    the same exception type. A leg that says only "unavailable" sends the reader
+    to restart something that is already running.
+    """
+    kind = getattr(error, "kind", None)
+    return f"{memgraph_url}: {f'[{kind}] ' if kind else ''}{error}"
+
+
+def _statistics_counts(
+    memgraph_url: str, version_id: str, tenant_id: str
+) -> tuple[dict[str, list[dict[str, Any]]] | None, str]:
+    """Run the five statistics templates in **one** session.
+
+    Not `_explore`, and the difference is why this exists: `_explore` turns a
+    `GraphError` into a 503, which is right for a screen whose entire content is
+    the graph and wrong for a pane where the graph is one leg of five. Returning
+    `None` with the detail lets each caller render `auditversion.unavailable`
+    rather than failing the whole request.
+
+    One session rather than five, because five connections to answer five counts
+    is five handshakes for reads measured at 2 ms each.
+    """
+    args = {"version_id": version_id, "tenant_id": tenant_id}
+    try:
+        with Graph(memgraph_url) as graph:
+            return {
+                name: [dict(row.data) for row in graph.query(name, args)]
+                for name in _STATISTICS_TEMPLATES
+            }, ""
+    except GraphError as e:
+        return None, _graph_detail(memgraph_url, e)
+
+
+def _statistics_streams(store: ArtifactStore) -> dict[str, bytes]:
+    """Every extracted stream this run left on disk, by label.
+
+    A `char_span` indexes one of `raw.txt`, `extracted.txt`, `corrected.txt` or
+    a video's `transcript.txt`, and **nothing records which** — no artifact, no
+    column, no event. Choosing by precedence reads as obvious and fails in the
+    expensive direction: measured on `ver_0ebf4f0b50a27202db3fcca6`, `raw.txt`
+    verifies 8 of 600 spans where `extracted.txt` verifies 600 of 600. So every
+    stream present is scored and `choose_stream` picks by the numbers.
+    """
+    out: dict[str, bytes] = {}
+    for name, label in av.STREAMS:
+        path = store.run_dir / name
+        if path.is_file():
+            out[label] = path.read_bytes()
+    return out
+
+
+def _artifact_ref(artifacts: list[dict[str, Any]], name: str) -> ArtifactRef | None:
+    row = next((a for a in artifacts if a.get("name") == name), None)
+    if row is None:
+        return None
+    return ArtifactRef(
+        kind=name,
+        path=row["rel_path"],
+        sha256=row["sha256"],
+        bytes=row["size_bytes"],
+    )
+
+
+def _structure_leg(
+    s: config.Settings,
+    *,
+    run_id: str | None,
+    tenant_id: str,
+    version_id: str,
+    artifacts: list[dict[str, Any]],
+    rows: dict[str, list[dict[str, Any]]] | None,
+    graph_detail: str,
+) -> dict[str, Any]:
+    """How big this version is, in the graph, in Qdrant, and against the bytes."""
+    if rows is None:
+        graph_leg: dict[str, Any] = av.unavailable(None, graph_detail)
+    else:
+        counts = (rows["version_counts"] or [{}])[0]
+        graph_leg = av.leg(
+            None,
+            {
+                "chunks": int(counts.get("chunks") or 0),
+                "sections": int(counts.get("sections") or 0),
+                "citations": int(counts.get("citations") or 0),
+                "claims": int(counts.get("claims") or 0),
+                # Spanish on the wire, like everywhere else these travel: chunk
+                # kinds are stored in Qdrant payloads and used in filters, so
+                # renaming them breaks every existing collection. The UI maps
+                # them to localised labels.
+                "kinds": {
+                    str(r["kind"]): int(r["chunks"])
+                    for r in rows["version_chunk_kinds"]
+                    if r.get("kind") is not None
+                },
+                "section_levels": {
+                    str(r["level"]): int(r["sections"])
+                    for r in rows["version_section_levels"]
+                    if r.get("level") is not None
+                },
+            },
+        )
+
+    scope = version_scope(tenant_id, version_id)
+    try:
+        from docagent.qdrant import Qdrant
+
+        with Qdrant(s.qdrant_url, s.qdrant_collection) as q:
+            # `count`, not `scroll`: exact, one round trip, and no payloads. The
+            # kind histogram the audit gets by scrolling comes from the graph
+            # here, which already holds `c.kind` — a page of JSON for two
+            # histograms is not a trade worth making on an interactive read.
+            qdrant_leg: dict[str, Any] = av.leg(None, {"points": q.count(scope)})
+    except Exception as e:  # noqa: BLE001 — any store failure degrades this leg
+        qdrant_leg = av.unavailable(
+            None, f"{s.qdrant_url}/{s.qdrant_collection}: {e}"
+        )
+
+    report: dict[str, Any] = {
+        "source_run": run_id,
+        "scope": scope,
+        "graph": graph_leg,
+        "qdrant": qdrant_leg,
+        # **Always present, and `None` until all three have answered.** A
+        # verdict that is sometimes absent and sometimes null is two spellings
+        # of the same fact, and a client reading `undefined` has to know which
+        # one it is looking at. `None` is "could not compare" throughout; only
+        # `False` is the claim that they disagree.
+        "counts_agree": None,
+    }
+
+    ref = _artifact_ref(artifacts, REQUIRED_ARTIFACT) if run_id else None
+    if run_id is None or ref is None:
+        # No `chunks.jsonl` is the same fact `document_detail.can_rebuild`
+        # reports. The graph and Qdrant halves still answer, so this is a leg
+        # with one half missing rather than a leg that could not run.
+        report["artifacts"] = av.unavailable(
+            None,
+            "ningún run conserva chunks.jsonl para esta versión, así que no hay "
+            "con qué comparar los tramos",
+        )
+        return av.leg(None, report)
+
+    try:
+        store = ArtifactStore(s.workspace, run_id)
+        chunks = store.read_jsonl(ref)
+        streams = _statistics_streams(store)
+    except Exception as e:  # noqa: BLE001
+        report["artifacts"] = av.unavailable(None, str(e))
+        return av.leg(None, report)
+
+    if not streams:
+        report["artifacts"] = av.unavailable(
+            None,
+            f"no hay flujo extraído bajo {store.run_dir}; se buscó "
+            + ", ".join(name for name, _ in av.STREAMS),
+        )
+        return av.leg(None, report)
+
+    picked = av.choose_stream(streams, chunks)
+    report["artifacts"] = av.leg(
+        None,
+        {
+            "stream": picked["chosen"],
+            "stream_verifies_completely": picked["unanimous"],
+            "streams_considered": picked["streams"],
+            "spans": picked["report"],
+            "sequence": av.chunk_sequence(chunks, len(streams[picked["chosen"]])),
+        },
+    )
+    if graph_leg["available"] and qdrant_leg["available"]:
+        report["counts_agree"] = (
+            graph_leg["chunks"] == picked["report"]["chunks"] == qdrant_leg["points"]
+        )
+    return av.leg(None, report)
+
+
+def _semantics_leg(
+    s: config.Settings,
+    *,
+    run_id: str | None,
+    tenant_id: str,
+    version_id: str,
+    artifacts: list[dict[str, Any]],
+    rows: dict[str, list[dict[str, Any]]] | None,
+    graph_detail: str,
+) -> dict[str, Any]:
+    """What the extractor found, and what the graph still holds of it."""
+    if rows is None:
+        return av.unavailable(None, graph_detail)
+
+    shape = av.claim_shape(rows["version_claim_shape"])
+    concepts_row = (rows["version_concepts_reached"] or [{}])[0]
+    report: dict[str, Any] = {
+        "source_run": run_id,
+        "in_store": {
+            "claims": shape["claims"],
+            # A claim carrying a quote the code located in its own chunk is one
+            # somebody can check; one without is not. They must not render
+            # alike, which is the whole reason `claims_verified` exists.
+            "with_a_quote": shape["with_a_quote"],
+            # `sin_estado` is its own key and never folded into `afirma`: a text
+            # expounding the doctrine it is about to rebut enunciates it in the
+            # same words as one who holds it.
+            "by_status": shape["by_status"],
+            "concepts": int(concepts_row.get("concepts") or 0),
+        },
+    }
+
+    ref = _artifact_ref(artifacts, "semantics") if run_id else None
+    if run_id is None or ref is None:
+        # The graph's own counts stand. What is absent is the *comparison*, and
+        # saying so is not the same as reporting convergence.
+        report["diff"] = av.unavailable(
+            None,
+            "ningún run conserva semantics.json para esta versión, así que no se "
+            "puede saber qué quedó de más o de menos",
+        )
+        return av.leg(None, report)
+
+    try:
+        doc = ArtifactStore(s.workspace, run_id).read_json(ref)
+    except Exception as e:  # noqa: BLE001
+        report["diff"] = av.unavailable(None, str(e))
+        return av.leg(None, report)
+
+    scope = {"version_id": version_id, "tenant_id": tenant_id}
+    try:
+        with Graph(s.memgraph_url) as graph:
+            # Templates rather than `auditversion`'s literals, and one session
+            # for all of them. The literals stay where they are — the audit
+            # script asks more of them than this does — but this route is served
+            # by both planes, and the paid one has no raw-Cypher path at all.
+            claims = [r.data for r in graph.query("version_claim_keys", scope)]
+            concepts = [r.data for r in graph.query("version_concept_ids", scope)]
+            mentions = [r.data for r in graph.query("version_mention_pairs", scope)]
+            stale = av.stale_claims(doc, claims)
+            # Text for the chunks a *stale* claim named, and no others. Every
+            # chunk's text is the whole document, and a converged version — the
+            # ordinary case — reads none of it.
+            chunk_rows = (
+                [
+                    r.data
+                    for r in graph.query(
+                        "chunk_texts",
+                        {
+                            **scope,
+                            "chunk_ids": sorted(
+                                {
+                                    c["source_chunk_id"]
+                                    for c in stale
+                                    if c.get("source_chunk_id")
+                                }
+                            )[:STALE_CHUNK_SAMPLE],
+                            "limit": STALE_CHUNK_SAMPLE,
+                        },
+                    )
+                ]
+                if stale
+                else []
+            )
+    except (GraphError, TemplateError) as e:
+        report["diff"] = av.unavailable(None, _graph_detail(s.memgraph_url, e))
+        return av.leg(None, report)
+
+    # A stale claim's quote *was* verified — against a chunk that has since been
+    # re-cut. Checking it against the text the chunk holds now is the one check
+    # `claims_verified` cannot make from inside its own run, and it is what
+    # separates harmless debris from a claim that reads exactly like a good one.
+    text_by_chunk = {c["id"]: c.get("text") for c in chunk_rows}
+    quoted = unlocatable = 0
+    for claim in stale:
+        verdict = av.quote_still_locates(
+            claim.get("quote"), text_by_chunk.get(claim.get("source_chunk_id"))
+        )
+        if verdict is None:
+            continue
+        quoted += 1
+        if not verdict:
+            unlocatable += 1
+
+    report["extractor_model"] = doc.get("extractor_model")
+    report["diff"] = av.leg(
+        None,
+        {
+            **av.semantic_diff(
+                doc, claims=claims, concepts=concepts, mentions=mentions
+            ),
+            "stale_claim_quotes": {
+                "with_a_quote": quoted,
+                "quote_no_longer_locates": unlocatable,
+            },
+        },
+    )
+    return av.leg(None, report)
+
+
+def _retrieval_leg(run_id: str | None, scores: dict[str, Any] | None) -> dict[str, Any]:
+    """What this index can actually be asked, and whether its floor is honest.
+
+    `scores is None` means **nobody measured**, which is true of every version
+    indexed before the eval stage existed and of every run whose gate declined
+    it. It is not a recall of zero, and the two must not render alike.
+    """
+    if scores is None:
+        return av.unavailable(
+            None,
+            "ningún run midió esta versión; no es lo mismo que una recuperación "
+            "de cero",
+        )
+    floor = scores.get("noise_floor")
+    return av.leg(
+        None,
+        {
+            "source_run": run_id,
+            "scores": scores,
+            # A `min_score` at or below the measured noise floor wins the metric
+            # by admitting exactly what the floor was measured to exclude — and
+            # it looks like an improvement, because every eval question has a
+            # right answer to find and none of them is off-corpus.
+            "floor": av.floor_verdict(MIN_SCORE, floor) if floor is not None else None,
+        },
+    )
+
+
+@app.get("/libraries/{library_id}/versions/{version_id}/statistics")
+def version_statistics(library_id: str, version_id: str) -> dict[str, Any]:
+    """What one indexed version holds, what it cost, and what still agrees.
+
+    Read-only across all three stores and the run's own artifacts. Nothing here
+    writes and nothing here spends.
+    """
+    s = settings()
+    with Catalog(s.database_url) as catalog:
+        # The predicate is `removal.remove_version`'s in shape: a version is
+        # reached through the documents that hold it, and a document is only
+        # this caller's if it is in this library and this organisation. **A
+        # salted id is not authorization** — it is `digest(tenant, content)`,
+        # and a tenant id is a value its own members hold, so a member of A who
+        # has the same file as B can recompute B's `ver_`. The lookup is what
+        # refuses. 404 and never 403, the same decision `activate_version`
+        # records: which organisations exist is not this caller's business.
+        holders = catalog.documents_holding(version_id)
+        owners = [
+            catalog.document(h, library_id=library_id, tenant_id=LEGACY_TENANT_ID)
+            for h in holders
+        ]
+        in_library = [d for d in owners if d is not None]
+        if not in_library:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "kind": "version_not_found",
+                    "message": (
+                        f"no existe la versión {version_id!r} en la biblioteca "
+                        f"{library_id!r}"
+                    ),
+                },
+            )
+        document = in_library[0]
+        tenant_id = document.tenant_id
+        version = next(
+            (v for v in catalog.versions_of(document.id) if v.id == version_id), None
+        )
+        active = catalog.active_version(document.id) == version_id
+        runs = catalog.runs(tenant_id=tenant_id, version_id=version_id, limit=50)
+        # Which run to read an artifact from is a question per *artifact*, not
+        # per version: a rebuild replays an older run's chunks while a later run
+        # measured the index, so the newest succeeded run holding that artifact
+        # is the honest source for it. `latest_run_with_artifact` already
+        # restricts itself to runs that succeeded.
+        chunks_run = catalog.latest_run_with_artifact(version_id, REQUIRED_ARTIFACT)
+        semantics_run = catalog.latest_run_with_artifact(version_id, "semantics")
+        scores_run = catalog.latest_run_with_artifact(version_id, SCORES_ARTIFACT)
+        artifacts_for = {
+            run: catalog.artifacts(run)
+            for run in {chunks_run, semantics_run, scores_run}
+            if run
+        }
+        scores = (
+            _measured_scores(s.workspace, scores_run, artifacts_for[scores_run])
+            if scores_run
+            else None
+        )
+        # **A version's bill is not one run's bill**, which is what this leg
+        # exists for: grouping `cost_entry` across every run of the version is
+        # what makes a stage charged in more than one of them visible at all.
+        ledger = av.cost_by_stage(
+            [
+                {
+                    "run_id": r.id,
+                    "state": r.state,
+                    "costs": [
+                        {
+                            "stage": c.stage,
+                            "usd": None if c.usd is None else float(c.usd),
+                        }
+                        for c in catalog.costs(r.id, tenant_id=tenant_id)
+                    ],
+                }
+                for r in runs
+            ]
+        )
+        warnings = catalog.open_profile_warnings(version_id)
+
+    catalog_leg = (
+        av.leg(
+            None,
+            {
+                "content_sha256": version.content_sha256,
+                "byte_size": version.byte_size,
+                # The column exists and nothing writes it: `register_version`
+                # runs before extraction, so the page count is not knowable
+                # there. `null` is the measurement rather than a zero — the
+                # field starts working by itself the day something fills it.
+                "page_count": version.page_count,
+                "state": version.state,
+                "active": active,
+                "created_at": _iso(version.created_at),
+                "activated_at": _iso(version.activated_at),
+                "failed_reason": version.failed_reason,
+                "runs": len(runs),
+                "rebuild_run_id": chunks_run,
+                "profile_warnings": [
+                    {
+                        **w,
+                        # `_topical_overlap` compares against the profile's
+                        # `learned_from` filename stem using evidence only
+                        # `pdf_text` fills in, so for a plain-text document it
+                        # returns 0.0 by construction — and 0.0 is documented as
+                        # the *most dangerous* case. Flagged rather than
+                        # repeated as though it were a measurement.
+                        "comparable": bool(w.get("similarity")),
+                    }
+                    for w in warnings
+                ],
+            },
+        )
+        if version is not None
+        else av.unavailable(
+            None, f"la versión {version_id!r} ya no tiene fila en el catálogo"
+        )
+    )
+
+    rows, graph_detail = _statistics_counts(s.memgraph_url, version_id, tenant_id)
+
+    return {
+        "library_id": library_id,
+        "document_id": document.id,
+        "version_id": version_id,
+        "catalog": catalog_leg,
+        "structure": _structure_leg(
+            s,
+            run_id=chunks_run,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            artifacts=artifacts_for.get(chunks_run or "", []),
+            rows=rows,
+            graph_detail=graph_detail,
+        ),
+        "semantics": _semantics_leg(
+            s,
+            run_id=semantics_run,
+            tenant_id=tenant_id,
+            version_id=version_id,
+            artifacts=artifacts_for.get(semantics_run or "", []),
+            rows=rows,
+            graph_detail=graph_detail,
+        ),
+        "retrieval": _retrieval_leg(scores_run, scores),
+        "ledger": av.leg(None, ledger),
+    }
+
+
 @app.post("/libraries/{library_id}/documents/{document_id}/reindex")
 async def reindex_document(
     library_id: str, document_id: str, options: StageOptions | None = None
@@ -1047,6 +2211,31 @@ async def reindex_document(
                 },
             )
 
+    if document.format == TIMED_FORMAT:
+        # A video's `source_path` is its URL, not a path. Handing it to
+        # `IngestWorkflow` puts it through `stage_source`, which checks tenant
+        # containment on a filesystem path and dies with
+        # `'https://youtu.be/…' is outside this organisation's workspace` —
+        # three frames from the cause, on a button whose whole purpose is to
+        # re-run what already worked once.
+        video = VideoRequest(
+            library_id=library_id,
+            url=document.source_path,
+            title=document.title,
+            author=document.author,
+            reindex=True,
+            tenant_id=LEGACY_TENANT_ID,
+        )
+        client = await temporal()
+        handle = await client.start_workflow(
+            VideoIngestWorkflow.run,
+            args=[video, options or StageOptions()],
+            id=f"video-{_ulid()}",
+            task_queue=s.task_queue,
+            memo=_OWNED_BY_LEGACY,
+        )
+        return {"workflow_id": handle.id, "state": "running", "kind": "video"}
+
     request = IngestRequest(
         library_id=library_id,
         source_path=document.source_path,
@@ -1057,6 +2246,12 @@ async def reindex_document(
         # Without this the workflow short-circuits on `already_indexed`, which
         # is the whole point of the button.
         reindex=True,
+        # Named rather than defaulted, for the reason the rebuild path learned
+        # the hard way: `project_structure` reads the tenant off this request,
+        # and a request that leaves it out projects into the legacy
+        # organisation silently. This plane *is* that organisation, so here the
+        # value is right — saying it is what makes that a decision.
+        tenant_id=LEGACY_TENANT_ID,
     )
     client = await temporal()
     handle = await client.start_workflow(
@@ -1064,6 +2259,7 @@ async def reindex_document(
         args=[request, options or StageOptions()],
         id=f"reindex-{_ulid()}",
         task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
     )
     return {"workflow_id": handle.id, "state": "running", "kind": "reindex"}
 
@@ -1084,6 +2280,7 @@ async def rebuild_document(library_id: str, document_id: str) -> dict[str, Any]:
         args=[library_id, document_id],
         id=f"rebuild-{_ulid()}",
         task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
     )
     return {"workflow_id": handle.id, "state": "running", "kind": "rebuild"}
 
@@ -1134,12 +2331,19 @@ async def rebuild_gate(workflow_id: str) -> dict[str, Any]:
 def _explore(template_id: str, args: dict[str, Any]) -> list[dict[str, Any]]:
     """Run one registered template and hand back plain rows.
 
+    The tenant is injected here rather than taken from the caller, and that is
+    the whole tenancy story of this plane: it is the free, self-managed one, it
+    has no accounts, and everything it can reach belongs to the tenant every
+    pre-tenancy row already carries. A route that accepted an organisation would
+    be offering a choice this product does not have.
+
     `Graph.query` validates the template and binds the parameters, which is where
     the limit clamp and the type checks live. A graph that is simply down is a
     503 naming the fix, not a 500: the answer is "start the stack", and a UI that
     can say so beats one echoing a Bolt error.
     """
     s = settings()
+    args = {**args, "tenant_id": LEGACY_TENANT_ID}
     try:
         # Validated *before* connecting, and the order is the point. `Graph.query`
         # binds after opening a session, so a malformed id sent while Memgraph
@@ -1170,6 +2374,478 @@ def _explore(template_id: str, args: dict[str, Any]) -> list[dict[str, Any]]:
                 "message": f"No se pudo consultar el grafo: {e}",
             },
         ) from e
+
+
+# ---------------------------------------------------------------------------
+# Conversations
+#
+# The same two-clock split `/ask` records above, plus the half a conversation
+# adds: **the answer is written in the worker and read in the API**, in another
+# process. `POST /chat/{id}/turn` claims a turn number and signals; the prose
+# arrives through `conversation_delta`, which the activity writes and the stream
+# route reads.
+#
+# A table rather than a notification because it replays. `?since=N` is what makes
+# a reader who reloads, or whose connection drops, resume from where they were
+# instead of from nothing — which is the same failure the `/ask` split exists to
+# prevent, arriving from the streaming direction.
+#
+# `LEGACY_TENANT_ID` is named at every call site here. This plane *is* the free,
+# self-managed, single-tenant one, and saying so is what makes it a decision
+# rather than a default that travelled.
+
+
+@dataclass
+class NewConversation:
+    library_id: str
+
+
+@dataclass
+class NewTurn:
+    """One message. The cap is a *field constraint* on purpose.
+
+    Both planes then answer an oversized body with FastAPI's own
+    422-with-a-list, the same decision `Question.effort` and
+    `AnswerStyleUpdate.body` already record — a hand-raised 400 carrying a `kind`
+    would make the two planes answer one bad request two different ways.
+    """
+
+    text: Annotated[str, Field(max_length=MAX_MESSAGE_CHARS)]
+    effort: Literal["brief", "standard", "thorough"] = DEFAULT_EFFORT
+
+
+def _turn_json(turn: Any) -> dict[str, Any]:
+    return {
+        "seq": turn.seq,
+        "question": turn.question,
+        "searched": turn.searched,
+        "answer": turn.answer,
+        "state": turn.state,
+        "effort": turn.effort,
+        "style_effort": turn.style_effort,
+        "citations": turn.citations,
+        "cited_evidence": turn.cited_evidence,
+        "error": turn.error,
+        "asked_at": turn.asked_at.isoformat() if turn.asked_at else None,
+        "answered_at": turn.answered_at.isoformat() if turn.answered_at else None,
+    }
+
+
+def _conversation_json(row: Any) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "library_id": row.library_id,
+        "title": row.title,
+        "title_generated": row.title_generated,
+        "turns": row.turns,
+        "created_at": row.created_at.isoformat(),
+        "last_message_at": row.last_message_at.isoformat(),
+    }
+
+
+def _unreachable(e: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "kind": "catalog_unreachable",
+            "message": f"No se pudo leer el catálogo ({type(e).__name__}: {e}).",
+        },
+    )
+
+
+_NO_CONVERSATION = HTTPException(
+    status_code=404,
+    detail={
+        "kind": "conversation_not_found",
+        "message": "Esa conversación no existe.",
+    },
+)
+
+
+@app.post("/chat")
+async def create_conversation(body: NewConversation) -> dict[str, Any]:
+    """Open a conversation. Must precede any turn.
+
+    Not an optimisation: `conversation_turn` and `conversation_delta` derive
+    their tenant in the INSERT from this row, so a turn signalled for a
+    conversation that does not exist would insert nothing at all — silently, the
+    same way an event written before its run row is silently dropped.
+    """
+    s = settings()
+    conversation_id = f"cnv_{uuid4().hex[:24]}"
+    try:
+        with Catalog(s.database_url, pooled=False) as catalog:
+            catalog.start_conversation(
+                conversation_id,
+                tenant_id=LEGACY_TENANT_ID,
+                library_id=body.library_id,
+                title="",
+            )
+    except Exception as e:
+        raise _unreachable(e) from e
+    return {"conversation_id": conversation_id, "library_id": body.library_id}
+
+
+@app.get("/chat")
+async def list_conversations(limit: int = 50) -> dict[str, Any]:
+    s = settings()
+    try:
+        with Catalog(s.database_url, pooled=False) as catalog:
+            rows = catalog.conversations(
+                tenant_id=LEGACY_TENANT_ID, limit=max(1, min(limit, 200))
+            )
+    except Exception as e:
+        raise _unreachable(e) from e
+    return {"conversations": [_conversation_json(r) for r in rows]}
+
+
+@app.get("/chat/{conversation_id}")
+async def read_conversation(conversation_id: str) -> dict[str, Any]:
+    """The whole transcript, which is what survives Temporal's retention."""
+    s = settings()
+    try:
+        with Catalog(s.database_url, pooled=False) as catalog:
+            row = catalog.conversation(conversation_id, tenant_id=LEGACY_TENANT_ID)
+            if row is None:
+                raise _NO_CONVERSATION
+            turns = catalog.turns(conversation_id, tenant_id=LEGACY_TENANT_ID)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _unreachable(e) from e
+    return {**_conversation_json(row), "turns_detail": [_turn_json(t) for t in turns]}
+
+
+@app.delete("/chat/{conversation_id}", status_code=204)
+async def delete_conversation(conversation_id: str) -> None:
+    s = settings()
+    try:
+        with Catalog(s.database_url, pooled=False) as catalog:
+            if not catalog.delete_conversation(
+                conversation_id, tenant_id=LEGACY_TENANT_ID
+            ):
+                raise _NO_CONVERSATION
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _unreachable(e) from e
+
+
+@app.post("/chat/{conversation_id}/turn")
+async def add_turn(conversation_id: str, body: NewTurn) -> dict[str, Any]:
+    """Claim a turn number and hand the question to the conversation's session.
+
+    **Signal-with-start**, so this is one call whether or not a session is live.
+    A conversation whose workflow has gone dormant — or aged out of Temporal
+    entirely — is resumed here from the catalog, which is what makes the record
+    outlive the retention that bounds the session.
+
+    The sequence number is claimed *before* the signal, in the same statement
+    that checks who owns the conversation, so the signal carries an id the
+    workflow can be idempotent on: a duplicated delivery names a turn already
+    queued and is dropped rather than asked and billed twice.
+    """
+    s = settings()
+    if not s.gemini.configured:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "kind": "provider_unconfigured",
+                "message": "Falta BRAIN_GEMINI_PROJECT_ID: no se puede conversar.",
+            },
+        )
+
+    try:
+        with Catalog(s.database_url, pooled=False) as catalog:
+            row = catalog.conversation(conversation_id, tenant_id=LEGACY_TENANT_ID)
+            if row is None:
+                raise _NO_CONVERSATION
+
+            # The window the session starts from, if this is the one that starts
+            # it. Only settled turns: a turn still running has no answer to
+            # resolve a pronoun against, and a failed one has none either.
+            history = [
+                TurnRecord(question=t.question, answer=t.answer[:WINDOW_ANSWER_CHARS])
+                for t in catalog.turns(
+                    conversation_id, tenant_id=LEGACY_TENANT_ID, limit=WINDOW_TURNS * 2
+                )
+                if t.answer
+            ][-WINDOW_TURNS:]
+
+            seq = catalog.open_turn(
+                conversation_id,
+                tenant_id=LEGACY_TENANT_ID,
+                question=body.text,
+                effort=body.effort,
+            )
+            if seq is None:
+                raise _NO_CONVERSATION
+
+            # The first question names the conversation until `chat-title` does.
+            # Written here rather than at creation because the title is the first
+            # *question*, and at creation there is not one yet.
+            if seq == 1:
+                catalog.set_conversation_title(
+                    conversation_id,
+                    fallback_title(body.text),
+                    tenant_id=LEGACY_TENANT_ID,
+                    generated=False,
+                )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _unreachable(e) from e
+
+    turn = ChatTurn(
+        conversation_id=conversation_id,
+        turn_seq=seq,
+        text=body.text,
+        library_id=row.library_id,
+        tenant_id=LEGACY_TENANT_ID,
+        effort=body.effort,
+    )
+    client = await temporal()
+    await client.start_workflow(
+        ChatWorkflow.run,
+        ChatStart(
+            conversation_id=conversation_id,
+            library_id=row.library_id,
+            tenant_id=LEGACY_TENANT_ID,
+            window=history,
+            answered=row.turns,
+        ),
+        id=f"chat-{conversation_id}",
+        task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
+        start_signal="ask",
+        start_signal_args=[turn],
+    )
+    return {"conversation_id": conversation_id, "turn_seq": seq, "state": "running"}
+
+
+#: How often the stream route looks for new prose. Fast enough that text reads as
+#: arriving rather than appearing, slow enough that a turn taking a minute costs
+#: a few hundred cheap indexed reads on one pooled connection.
+STREAM_POLL_SECONDS = 0.2
+
+#: A stream never outlives the turn it is following by more than this. The
+#: activity's own ceiling is `TURN_TIMEOUT`; this is the backstop for a turn whose
+#: row never settles at all — a worker killed mid-answer, say — so a generator
+#: cannot be left running for the lifetime of the process.
+STREAM_MAX_SECONDS = 20 * 60
+
+#: How long the wire may stay silent before an empty `ping` event is sent.
+#:
+#: **The stream is legitimately silent for most of a turn, and that silence used
+#: to be indistinguishable from a dead connection.** Nothing is emitted between
+#: `generating` and the first prose, because reasoning tokens produce no text and
+#: `FieldStreamer` withholds a tail on top of that — measured against Vertex on
+#: 2026-09-06: 8.4s on a `brief` turn and 11s on two `standard` ones, with the
+#: whole turn taking 10s and 16s. A client cannot tell that apart from a stalled
+#: upstream, and one really did stall: a `standard` turn opened its
+#: `streamGenerateContent` stream, produced not one chunk, and was still open 15
+#: minutes later when Temporal's `start_to_close` closed the activity. The
+#: desktop app gave up at its own 120s idle budget and told the person the turn
+#: "could not be answered", of a turn that was still running.
+#:
+#: So the client's idle budget must measure the *connection*, which is what it is
+#: for, and this is what lets it: a ping is a row-less event, costs no query and
+#: no tokens, and needs no client change — both clients already treat an
+#: unrecognised `type` as data rather than as a failure, which is the reason that
+#: decision was taken. Well under any client budget: `CHAT_STREAM_IDLE` is 120s.
+STREAM_PING_SECONDS = 10.0
+
+
+def _sse(payload: dict[str, Any]) -> str:
+    """One event. No `event:` name — the type is a field, so one handler reads
+    every event and an unknown one is data rather than a dropped message."""
+    return f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+
+@app.get("/chat/{conversation_id}/turn/{turn_seq}/stream")
+async def stream_turn(
+    conversation_id: str, turn_seq: int, since: int = 0
+) -> StreamingResponse:
+    """The answer, as it is written.
+
+    `since` is the resume point: pass the highest chunk sequence already seen and
+    only what follows it is sent. A reader who never disconnects passes 0 once.
+
+    Ends on the turn's own row settling, not on the relay going quiet — a model
+    that pauses mid-answer is not a model that has finished. The terminal `done`
+    event carries the whole settled turn, and **it is authoritative**: the prose
+    that streamed is a draft of one field, and a turn can stream fluently and
+    still come back `insufficient_evidence` because the citations, which arrive
+    last in the envelope, did not survive verification. A client must replace
+    what it showed rather than keep it.
+
+    A disconnected client stops the stream and **does not stop the turn**.
+    Generation is one call and is billed for what it produced, so cancelling
+    refunds nothing and would reproduce exactly the failure `/ask` split its two
+    calls to avoid: an answer computed, billed, and thrown away.
+    """
+    s = settings()
+
+    async def events():
+        deadline = time.monotonic() + STREAM_MAX_SECONDS
+        cursor = since
+        # Tracked rather than derived from the loop count: the ping's whole
+        # purpose is to say "the connection is alive" when nothing else has, so
+        # it has to be reset by every *real* event too, not only by another ping.
+        last_sent = time.monotonic()
+        try:
+            # Pooled, unlike every other read here: this one connection is used
+            # a few hundred times over a turn, and an unpooled catalog opens a
+            # fresh connection per statement.
+            with Catalog(s.database_url, min_size=1, max_size=2) as catalog:
+                while True:
+                    for row in catalog.relay(
+                        conversation_id, turn_seq,
+                        tenant_id=LEGACY_TENANT_ID, since=cursor,
+                    ):
+                        cursor = int(row["chunk_seq"])
+                        # One ordered stream, two kinds. A row whose kind is not
+                        # `token` is a stage, and its name goes on the wire as
+                        # the stage rather than as a fourth event type per
+                        # stage — so a stage added in the worker reaches an
+                        # older client as a `stage` event it can render or
+                        # ignore, instead of as an unknown event type.
+                        if row["kind"] == "token":
+                            yield _sse({
+                                "type": "token",
+                                "seq": cursor,
+                                "text": row["text"],
+                            })
+                        else:
+                            yield _sse({
+                                "type": "stage",
+                                "seq": cursor,
+                                "stage": row["kind"],
+                                **(row["detail"] or {}),
+                            })
+                        last_sent = time.monotonic()
+
+                    settled = next(
+                        (
+                            t
+                            for t in catalog.turns(
+                                conversation_id, tenant_id=LEGACY_TENANT_ID
+                            )
+                            if t.seq == turn_seq and t.state != "running"
+                        ),
+                        None,
+                    )
+                    if settled is not None:
+                        yield _sse({"type": "done", "turn": _turn_json(settled)})
+                        return
+                    if time.monotonic() > deadline:
+                        yield _sse({
+                            "type": "error",
+                            "kind": "turn_abandoned",
+                            "message": (
+                                "El turno no terminó dentro del tiempo previsto; "
+                                "vuelve a abrir la conversación para ver su estado."
+                            ),
+                        })
+                        return
+                    now = time.monotonic()
+                    if now - last_sent >= STREAM_PING_SECONDS:
+                        # Carries no sequence: it is not a position in the relay
+                        # and a client must never advance `since` past it.
+                        yield _sse({"type": "ping"})
+                        last_sent = now
+                    await asyncio.sleep(STREAM_POLL_SECONDS)
+        except asyncio.CancelledError:
+            # The reader went away. The turn keeps going and lands in the
+            # catalog; there is nothing to clean up and nothing to refund.
+            raise
+        except Exception as e:
+            # Never a 500 mid-flight: the response has already begun, so the only
+            # way to say what happened is to say it in the stream.
+            yield _sse({
+                "type": "error",
+                "kind": "catalog_unreachable",
+                "message": f"{type(e).__name__}: {e}",
+            })
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/answer-styles")
+def answer_styles() -> dict[str, Any]:
+    """How this organisation words an answer at each effort level.
+
+    Returns every level, always, with the text that would actually be used —
+    the organisation's override where there is one and the built-in default
+    where there is not — plus `custom`, which is what lets the screen show a
+    "restore the default" affordance only where it would do something.
+
+    `LEGACY_TENANT_ID` is named at the call site rather than defaulted, the way
+    every other listing on this plane names it: this plane *is* that
+    organisation, and saying so is what makes it a decision.
+    """
+    from ..answering.effort import BUDGETS, EFFORT_LEVELS
+
+    try:
+        with Catalog(settings().database_url, pooled=False) as catalog:
+            saved = catalog.answer_styles(tenant_id=LEGACY_TENANT_ID)
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"kind": "catalog_unreachable", "message": str(e)},
+        ) from e
+
+    return {
+        "levels": [
+            {
+                "effort": name,
+                "body": saved.get(name, BUDGETS[name].style),
+                "default_body": BUDGETS[name].style,
+                "custom": name in saved,
+            }
+            for name in EFFORT_LEVELS
+        ],
+        "max_chars": MAX_STYLE_CHARS,
+    }
+
+
+@app.put("/answer-styles/{effort}")
+def set_answer_style(effort: str, payload: AnswerStyleUpdate) -> dict[str, Any]:
+    """Override one level's wording, or clear the override.
+
+    An empty body clears it, so "restore the default" is the same request as
+    "save an empty box" and the two cannot drift into different states.
+
+    The level is validated against the table rather than trusted: a row written
+    for a level that does not exist would be invisible — reads are keyed by the
+    level being asked for — so it would look like a save that silently did
+    nothing.
+    """
+    from ..answering.effort import EFFORT_LEVELS
+
+    if effort not in EFFORT_LEVELS:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "kind": "effort_not_found",
+                "message": f"no existe el nivel {effort!r}",
+            },
+        )
+    try:
+        with Catalog(settings().database_url, pooled=False) as catalog:
+            catalog.set_answer_style(
+                effort, payload.body, tenant_id=LEGACY_TENANT_ID
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"kind": "catalog_unreachable", "message": str(e)},
+        ) from e
+    return {"effort": effort, "custom": bool(payload.body.strip())}
 
 
 @app.get("/versions/{version_id}/outline")

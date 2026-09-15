@@ -140,6 +140,13 @@ class Validation:
     findings: list[Finding] = field(default_factory=list)
     # Feedback handed back to the model on a refine round.
     feedback: list[str] = field(default_factory=list)
+    #: Which heading levels the learned patterns validated for.
+    #:
+    #: Level 1 and level 2 are checked separately but report under one rule
+    #: name, so `failed_rules()` cannot tell them apart — and a rejected level-2
+    #: pattern would then discard a level-1 pattern that passed. That is the
+    #: same mistake `passed` records for whole proposals, one level down.
+    heading_levels_ok: set[int] = field(default_factory=set)
     #: Which rules block a refine round **for this document**.
     #:
     #: Not simply ``ESSENTIAL_RULES``, because whether ``heading_patterns``
@@ -163,8 +170,21 @@ class Validation:
         back to defaults with no header pattern, so 175 running-header lines stayed
         in the text — 552 paragraphs instead of 377, 135 chunks carrying the header
         as noise, and a paid correction pass over 175 copies of the same line.
+
+        **A promoted `heading_patterns` does not block when a level validated.**
+        The two heading levels report under one rule name, so an over-reaching
+        level-2 pattern marks the rule failed even when the level-1 pattern that
+        gives the document its outline passed — and on a document that numbers
+        nothing, `validate` promotes that name to essential. The two together
+        blocked a proposal whose good half `adopt` was about to keep, sending
+        the run back for a refine round it could not improve on and, after three
+        attempts, to the built-in defaults and no table of contents at all.
+        Observed shape on `01_RetoDeDios_INT-S.pdf`: level 1 OK, level 2 FAIL.
         """
-        return not (self.failed_rules() & self.essential)
+        failed = self.failed_rules()
+        if "heading_patterns" in failed and self.heading_levels_ok:
+            failed = failed - {"heading_patterns"}
+        return not (failed & self.essential)
 
     @property
     def fully_passed(self) -> bool:
@@ -382,7 +402,7 @@ def _check_heading_guards(p: Proposal, v: Validation, lines: list[str]) -> None:
 
     if not l1_numbers:
         proposed = bool(p.heading_l1_pattern or p.heading_l2_pattern)
-        if proposed and "heading_patterns" not in v.failed_rules():
+        if proposed and v.heading_levels_ok:
             # A document that numbers its parts in words ("LIBRO PRIMERO") has no
             # numbered heading for these guards to admit, and never will. Failing
             # here would block adoption of the very rule that gives such a
@@ -434,6 +454,43 @@ def _check_heading_guards(p: Proposal, v: Validation, lines: list[str]) -> None:
             "Súbelo, o propón un heading_l1_pattern si los encabezados no llevan número."
         )
         return
+
+    # A learned pattern that validated and explains strictly more level-1
+    # headings than the numeric path is what supplies this document's outline;
+    # the numbered path is then measuring something else. Observed on
+    # `01_RetoDeDios_INT-S.pdf`: 30 "Capítulo N" headings against 16 numbered
+    # lines that are this publisher's footnotes ("2. Ibídem."), which restart at
+    # 1 in every chapter and so produce duplicates [2, 3, 4]. `heading_guards`
+    # is essential, so that FAIL discarded a pattern the checker had just
+    # confirmed against the document, and a 304-page book indexed with no
+    # outline at all.
+    #
+    # This is the same reasoning as the "no numbered headings" branch above,
+    # applied to a document that has a few spurious ones rather than none. The
+    # comparison is strict and by count, so it cannot fire on a document whose
+    # real chapters are numbered — there the numeric path explains at least as
+    # much, and the arithmetic check stands.
+    if p.heading_l1_pattern and 1 in v.heading_levels_ok:
+        try:
+            rx = re.compile(p.heading_l1_pattern)
+        except re.error:
+            rx = None
+        if rx is not None:
+            by_pattern = sum(
+                1 for ln in lines if rx.match(ln) and len(ln) <= p.heading_l1_max
+            )
+            if by_pattern > len(l1_numbers):
+                v.findings.append(
+                    Finding(
+                        "heading_guards",
+                        True,
+                        f"the learned pattern explains {by_pattern} level-1 "
+                        f"headings against {len(l1_numbers)} numbered lines, so "
+                        "the numbered path is footnote noise here and its "
+                        "sequence is not the signal",
+                    )
+                )
+                return
 
     duplicates = sorted({n for n in l1_numbers if l1_numbers.count(n) > 1})
     if duplicates:
@@ -522,6 +579,7 @@ def _check_heading_patterns(
     ):
         if not pattern:
             continue
+        before = sum(1 for f in v.findings if f.rule == "heading_patterns" and not f.ok)
         try:
             rx = re.compile(pattern)
         except re.error:
@@ -599,6 +657,10 @@ def _check_heading_patterns(
                 f"({ratio:.1%} de los párrafos)",
             )
         )
+        assert before == sum(
+            1 for f in v.findings if f.rule == "heading_patterns" and not f.ok
+        ), "a level that reached here added no failure of its own"
+        v.heading_levels_ok.add(level)
 
 
 def _check_kind_patterns(
@@ -736,8 +798,21 @@ def adopt(
         doc_rules = DocRules()
     if "heading_guards" in failed:
         chunk_rules = ChunkRules()
+    # Per level, not per rule name: the two heading levels report under one name,
+    # so dropping both because one failed discards work the checker confirmed.
+    # Same reasoning as partial adoption above, one granularity down — observed
+    # when a level-2 pattern matching 32% of the paragraphs took a level-1
+    # pattern that explained the book's 30 chapters down with it.
     if "heading_patterns" in failed:
-        chunk_rules = replace(chunk_rules, heading_l1_pattern=None, heading_l2_pattern=None)
+        chunk_rules = replace(
+            chunk_rules,
+            heading_l1_pattern=(
+                chunk_rules.heading_l1_pattern if 1 in validation.heading_levels_ok else None
+            ),
+            heading_l2_pattern=(
+                chunk_rules.heading_l2_pattern if 2 in validation.heading_levels_ok else None
+            ),
+        )
 
     return profiles.Profile(
         fingerprint=fingerprint,

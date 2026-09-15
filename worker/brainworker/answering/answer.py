@@ -18,9 +18,13 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 
 from ..pipeline import Spend
 from ..providers import Provider, VertexAdapter
+from ..providers.adapter import TruncatedResponse
+from .effort import budget_for, compose_system
+from .jsonstream import FieldStreamer
 from .types import Answer, Citation, Evidence, Plan, Question
 
 log = logging.getLogger(__name__)
@@ -51,6 +55,31 @@ Reglas, en orden de importancia:
    sabe, no que lo afirme.
 6. Respondes en el idioma de la pregunta, con la terminología del documento."""
 
+#: A ceiling on what one answering call may bill, reasoning included.
+#:
+#: `_prepare` warns against setting this — "a budget that looks generous for the
+#: answer can be consumed entirely by reasoning" — and that warning is about a
+#: number near the answer's length. This is four times the widest figure ever
+#: measured here, and it exists because the unbounded direction turned out to
+#: have its own failure: measured 2026-09-06 on the real corpus, one `standard`
+#: turn spent **65,521 output tokens and $0.497373** over 6m42s and produced not
+#: one character of prose. 65,521 is `gemini-3.6-flash`'s own 65,536-token
+#: ceiling, so the only thing bounding that call was the model's.
+#:
+#: The numbers it is set against, all measured: a normal `standard` turn is
+#: 1,772-2,414 output tokens; the widest recorded is `thorough` at 3,582 with no
+#: reasoning budget named. 16,384 is 4.5x that, so no answer this product has
+#: ever produced comes close — and a call that does reach it is the runaway, not
+#: a long answer.
+#:
+#: **It caps the bill, not the reasoning.** Every effort level deliberately
+#: names no `thinking_budget`, on a measured A/B where `None` beat 8192 on four
+#: questions, and this does not touch that: the model still chooses how hard to
+#: think, up to a total the product can afford to throw away. A call that hits
+#: it now says so — see `TruncatedResponse` — instead of arriving as a verdict
+#: on the corpus.
+MAX_OUTPUT_TOKENS = 16384
+
 SCHEMA = {
     "type": "object",
     "properties": {
@@ -73,25 +102,104 @@ SCHEMA = {
 }
 
 
+def _thinking_override(provider: Provider, question: Question) -> int | None:
+    """The effort level's reasoning budget, unless an operator has spoken.
+
+    Configuration wins over a per-question level, in both of the two ways it can
+    be expressed, and the second is the one that is easy to miss:
+
+    * ``BRAIN_THINKING_ANSWERING`` puts ``"answering"`` in ``stage_thinking``.
+      Somebody naming this stage explicitly means this stage.
+    * ``BRAIN_THINKING_BUDGET`` sets the global fallback. ``answering`` is
+      deliberately *absent* from the stage map so that a global reaches it —
+      `config.py` says so in as many words: "someone turning off every reasoning
+      cost means it." A guard that checked only the per-stage map would let
+      ``thorough`` spend against an operator who had globally set zero, which is
+      exactly the promise that comment makes.
+
+    So the level's override applies only when neither is set — that is, only when
+    the resolved budget would have been the model's own default anyway.
+    """
+    gemini = provider.settings
+    if "answering" in gemini.stage_thinking or gemini.thinking_budget is not None:
+        return None
+    return budget_for(question.effort).thinking_override
+
+
 def compose(
     provider: Provider,
     question: Question,
     evidence: list[Evidence],
     plan: Plan | None = None,
+    style: str = "",
+    on_delta: Callable[[str], None] | None = None,
 ) -> Answer:
+    """Compose an answer, or refuse.
+
+    `on_delta` makes this stream: it receives the answer's prose as the model
+    writes it, decoded out of the JSON envelope by `FieldStreamer`. It changes
+    nothing else. **Every branch below the call is shared**, which is the reason
+    it is a parameter rather than a second function — `suficiente`, `_verify`,
+    `_clean` and all four refusals have exactly one implementation, so a streamed
+    answer and a whole one carry the same guarantees.
+
+    The consequence a caller has to handle: `citas` is the *last* field in
+    `SCHEMA`, so verification cannot run until the envelope closes. A turn can
+    therefore stream fluent prose and still come back
+    `insufficient_evidence` — because the model cited nothing, or cited chunks it
+    was never shown. What streamed is a draft; the returned `Answer` is the
+    document, and a caller showing the draft must replace it rather than keep it.
+    """
     if not evidence:
         return Answer(
             state="insufficient_evidence",
             reason="la búsqueda no devolvió ningún fragmento de esta biblioteca",
             plan=plan,
+            effort=question.effort,
         )
 
     adapter = VertexAdapter(provider)
     prompt = _prompt(question, evidence)
 
+    call = dict(
+        system=compose_system(SYSTEM, style),
+        schema=SCHEMA,
+        stage="answering",
+        thinking_budget=_thinking_override(provider, question),
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+    )
     try:
-        raw = adapter.generate_json(
-            prompt, system=SYSTEM, schema=SCHEMA, stage="answering"
+        if on_delta is None:
+            raw = adapter.generate_json(prompt, **call)
+        else:
+            raw = _streamed(adapter, prompt, call, on_delta)
+    except TruncatedResponse as e:
+        # Told apart from every other failure because the remedy is different and
+        # the wrong one is actively misleading. This is not the corpus coming up
+        # short: it is the model spending its whole output allowance reasoning
+        # and never writing the answer. Reporting it as "not enough evidence"
+        # sends somebody to look at their library, where there is nothing to
+        # find, instead of at a call that billed for nothing.
+        #
+        # It stays `insufficient_evidence` rather than becoming a state of its
+        # own: `off_corpus` earned a state because a *reader* acts on it
+        # differently, while the action here is the same one either refusal
+        # asks for — ask again. What had to change is the sentence, and the
+        # sentence now reaches both clients, because `_settle` carries a
+        # refusal's `reason` into `error.message`.
+        log.warning("answer generation truncated: %s", e)
+        return Answer(
+            state="insufficient_evidence",
+            reason=(
+                "el modelo agotó su límite de salida razonando y no llegó a "
+                f"escribir la respuesta ({e.output_tokens} tokens de salida, "
+                "ningún texto): vuelve a preguntar, o formula la pregunta de "
+                "forma más concreta"
+            ),
+            evidence=evidence,
+            plan=plan,
+            spend=[_spend(provider, adapter)],
+            effort=question.effort,
         )
     except Exception as e:
         log.warning("answer generation failed: %s", e)
@@ -101,6 +209,7 @@ def compose(
             evidence=evidence,
             plan=plan,
             spend=[_spend(provider, adapter)],
+            effort=question.effort,
         )
 
     spend = [_spend(provider, adapter)]
@@ -112,6 +221,7 @@ def compose(
             evidence=evidence,
             plan=plan,
             spend=spend,
+            effort=question.effort,
         )
 
     citations, invented = _verify(raw.get("citas") or [], evidence)
@@ -135,6 +245,7 @@ def compose(
             evidence=evidence,
             plan=plan,
             spend=spend,
+            effort=question.effort,
         )
 
     return Answer(
@@ -144,7 +255,40 @@ def compose(
         evidence=evidence,
         plan=plan,
         spend=spend,
+        effort=question.effort,
     )
+
+
+def _streamed(
+    adapter: VertexAdapter,
+    prompt: str,
+    call: dict,
+    on_delta: Callable[[str], None],
+) -> dict:
+    """The same call, with `respuesta` relayed as it is decoded.
+
+    The envelope arrives as JSON, so what reaches `on_delta` here is the prose
+    of one field and nothing else — no braces, no field names, no escapes.
+
+    `finish()` matters on the failure path as much as the happy one: a stream cut
+    short by `MAX_TOKENS` never closes the string, and the characters already
+    decoded are the best draft there is. Withholding them because a closing quote
+    never arrived would lose the visible answer to a truncation that
+    `json.loads` is about to complain about anyway.
+    """
+    streamer = FieldStreamer("respuesta")
+
+    def relay(piece: str) -> None:
+        shown = streamer.feed(piece)
+        if shown:
+            on_delta(shown)
+
+    try:
+        return adapter.generate_json_stream(prompt, on_delta=relay, **call)
+    finally:
+        tail = streamer.finish()
+        if tail:
+            on_delta(tail)
 
 
 _INLINE_ID = re.compile(

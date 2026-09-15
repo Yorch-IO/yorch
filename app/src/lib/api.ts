@@ -14,10 +14,31 @@ export type AppErrorKind =
   | "compose_failed"
   | "control_unreachable"
   | "control_timeout"
+  // A stream that stopped delivering, which is not the same failure as a
+  // request that never answered: the turn behind it is still running.
+  | "control_stream_stalled"
   | "control_status"
   | "no_free_port"
   | "workspace_not_native"
   | "io"
+  | "not_signed_in"
+  // The bundled yt-dlp's own failures, carried rather than mapped: these are
+  // the names the *worker* already publishes for the same facts, so one
+  // guidance map serves both and the two cannot drift into saying different
+  // things about one situation.
+  //
+  // `youtube_refused_this_machine` is deliberately *not* the worker's
+  // `youtube_refused_this_host`. That one means the server was refused and the
+  // remedy is what this whole path is; being refused here means the remedy has
+  // already been tried, and the advice has to be different.
+  | "ytdlp_missing"
+  | "youtube_refused_this_machine"
+  | "youtube_timed_out"
+  | "youtube_unreadable"
+  | "video_unavailable"
+  | "video_is_live"
+  | "video_has_no_duration"
+  | "audio_unavailable"
   | "config";
 
 /**
@@ -28,7 +49,22 @@ export type AppErrorKind =
  * inside it to offer the right advice.
  */
 export type ControlErrorKind =
+  // The paid plane adds these. `tenant_scope_pending` had a phase-1 meaning —
+  // the graph and the pipeline answered only for the legacy organisation — and
+  // phase 2 left it exactly one use: that organisation has no inbox on this
+  // plane, because its workspace root *is* the volume and this plane's mount is
+  // read-only there. So it is a refusal on a *write*, not a narrower read, and
+  // the guidance says which backend does own that corpus. Writing the file to
+  // `tenants/<legacy>/inbox` instead returned 200 and a path `stage_source`
+  // then refused, which is the dead end the refusal replaced.
+  | "unauthenticated"
+  | "unknown_user"
+  | "user_inactive"
+  | "no_membership"
+  | "tenant_required"
+  | "tenant_scope_pending"
   | "unsupported_format"
+  | "not_a_video_url"
   | "run_not_found"
   | "gate_not_ready"
   | "provider_unconfigured"
@@ -38,11 +74,33 @@ export type ControlErrorKind =
   | "version_not_found"
   | "source_path_unknown"
   | "rebuild_unavailable"
-  | "question_not_found";
+  | "question_not_found"
+  /** A level name no effort table has. Only reachable by a hand-built request:
+   *  the settings screen renders one box per level it was given. */
+  | "effort_not_found"
+  /** The record this machine resolved does not match the link it was sent
+   *  with. Only reachable by a hand-built request from this app's own
+   *  `video_start`, which builds both from one URL. */
+  | "resolution_not_trusted"
+  /** Audio in a container Amazon Transcribe cannot read. */
+  | "audio_format_unsupported";
 
 export interface AppError {
   kind: AppErrorKind;
   message: string;
+  /**
+   * The *control API's* own `detail.kind`, read out by Rust.
+   *
+   * Rust does it because it holds the untruncated body: `message` is cut to 500
+   * characters for a person to read, and digging the tag out of it here needed
+   * a balanced `{…}` to survive — so a long body silently lost its guidance.
+   * `tenant_required` provoked it, carrying the caller's tenant ids as a
+   * sibling field.
+   *
+   * Absent when there is none, and absent from a shell older than this field —
+   * which is why `controlErrorKind` still falls back to reading the message.
+   */
+  controlKind?: string;
 }
 
 /** Narrow an unknown thrown value to our error shape. */
@@ -75,11 +133,20 @@ const GUIDANCE: Partial<Record<AppErrorKind, string>> = {
   compose_failed: "error.composeFailed",
   control_unreachable: "error.controlUnreachable",
   control_timeout: "error.controlTimeout",
+  control_stream_stalled: "error.controlStreamStalled",
+  not_signed_in: "error.notSignedIn",
+  ytdlp_missing: "error.ytdlpMissing",
+  youtube_refused_this_machine: "error.youtubeRefusedThisMachine",
+  youtube_timed_out: "error.youtubeTimedOut",
+  video_unavailable: "error.videoUnavailable",
+  video_is_live: "error.videoIsLive",
+  audio_unavailable: "error.audioUnavailable",
 };
 
 /** Advice keyed on the control API's own `kind`, read out of the error body. */
 const CONTROL_GUIDANCE: Partial<Record<ControlErrorKind, string>> = {
   unsupported_format: "error.unsupportedFormat",
+  not_a_video_url: "error.notAVideoUrl",
   provider_unconfigured: "error.providerUnconfigured",
   run_not_found: "error.runNotFound",
   graph_unreachable: "error.graphUnreachable",
@@ -88,18 +155,31 @@ const CONTROL_GUIDANCE: Partial<Record<ControlErrorKind, string>> = {
   rebuild_unavailable: "error.rebuildUnavailable",
   document_not_found: "error.documentNotFound",
   question_not_found: "error.questionNotFound",
+  unauthenticated: "error.unauthenticated",
+  unknown_user: "error.unknownUser",
+  user_inactive: "error.userInactive",
+  no_membership: "error.noMembership",
+  tenant_required: "error.tenantRequired",
+  tenant_scope_pending: "error.tenantScopePending",
+  resolution_not_trusted: "error.resolutionNotTrusted",
+  audio_format_unsupported: "error.audioFormatUnsupported",
 };
 
 /**
  * The control API's `kind`, when this error carries one.
  *
- * A `control_status` error's message is the raw FastAPI body, so the tag we
- * want is nested inside a JSON string. Parsing is best-effort: a body that is
- * not JSON, or is a truncated one, simply has no tag rather than throwing while
- * rendering an error screen.
+ * Rust reads it off the untruncated body and sends it as `controlKind`; that is
+ * the path that always works. The fallback below re-reads it out of the
+ * message, which is what this did on its own until the truncation was found to
+ * be eating tags — kept so a webview running against an older shell still gets
+ * its guidance rather than none.
+ *
+ * Best-effort either way: a body that is not JSON, or one cut mid-object,
+ * simply has no tag rather than throwing while an error screen renders.
  */
 export function controlErrorKind(e: unknown): ControlErrorKind | undefined {
   if (!isAppError(e) || e.kind !== "control_status") return undefined;
+  if (e.controlKind) return e.controlKind as ControlErrorKind;
   const match = e.message.match(/\{[\s\S]*\}/);
   if (!match) return undefined;
   try {
@@ -182,6 +262,120 @@ export interface IngestRequest {
   author?: string | null;
   folderId?: string | null;
   autoApprove?: boolean;
+  /** What to call the library, when this import is the one that creates it.
+   *  Empty leaves an existing name alone rather than replacing it with the id. */
+  libraryName?: string;
+}
+
+// -- video --------------------------------------------------------------------
+
+/** One video to index.
+ *
+ * A URL where `IngestRequest` carries a path, and that is the whole difference
+ * at this end: nothing is staged, so no `stageSource` call precedes this. A
+ * path typed by hand cannot work in either plane — the app and the container
+ * see two different namespaces — but a URL has no such problem, which is why
+ * this screen has a text box and the file one does not.
+ */
+export interface VideoRequest {
+  libraryId: string;
+  url: string;
+  title?: string;
+  author?: string | null;
+  autoApprove?: boolean;
+  reindex?: boolean;
+  libraryName?: string;
+  /** Caption languages to prefer, best first. Empty lets the worker choose. */
+  languages?: string[];
+}
+
+/**
+ * One step of getting a video ready, before the run exists.
+ *
+ * In cloud mode `videoStart` makes the two YouTube calls on this machine, and
+ * the second of them — only for a video with no captions at all — downloads
+ * the audio. Nothing is on screen for that yet: the run row is written by the
+ * workflow, which has not started. So these events are the only thing between
+ * pressing the button and the queue appearing.
+ *
+ * `total` is yt-dlp's own figure and is **0 when it did not offer one**, which
+ * is a different fact from "nothing to download" and must render as no
+ * percentage rather than as 0% — the rule `/project-summary` applies to a leg
+ * it could not ask, at the scale of one number.
+ */
+export interface VideoFetchEvent {
+  step: "resolving" | "downloading" | "uploading" | "starting";
+  bytes?: number;
+  total?: number;
+}
+
+export interface CaptionTrack {
+  language: string;
+  /** `manual` or `auto`. An automatic track is a machine transcript with no
+   *  punctuation, which is the one case correction is suggested for. */
+  kind: string;
+  ext: string;
+  name: string;
+}
+
+export interface VideoProbe {
+  videoId: string;
+  canonicalUrl: string;
+  sourceKey: string;
+  title: string;
+  channel: string;
+  durationS: number;
+  uploadDate: string;
+  tracks: CaptionTrack[];
+  /** null when Amazon Transcribe has to run, which is what turns a free
+   *  transcript into a paid one. */
+  chosen: CaptionTrack | null;
+  warnings: string[];
+}
+
+export interface Transcribed {
+  source: string;
+  paragraphs: number;
+  characters: number;
+  coveredS: number;
+  warnings: string[];
+}
+
+/** The two switches a video's gate offers. A video run has no profile,
+ *  semantics, eval-set or tuning stage, so those are not shown. */
+export interface RecommendedStages {
+  correct: boolean;
+  embed: boolean;
+}
+
+/** A video run's gate.
+ *
+ * `preview` is null when the video has no captions: there is no text to preview
+ * until the money has been spent, and saying so is the point of a gate. Do not
+ * render a zero there.
+ */
+export interface VideoGateReport {
+  runId: string;
+  documentId: string;
+  versionId: string;
+  probe: VideoProbe;
+  estimate: Estimate;
+  preview: Preview | null;
+  transcript: Transcribed | null;
+  warnings: string[];
+  recommended: RecommendedStages | null;
+}
+
+/** Where a staged file landed, as the *worker* sees it.
+ *
+ * `sourcePath` is meaningless on the user's own machine in cloud mode — it is a
+ * path inside the worker's container. It goes straight into `IngestRequest`
+ * and is never shown or opened.
+ */
+export interface StagedSource {
+  sourcePath: string;
+  sourceKey: string;
+  byteSize: number;
 }
 
 export interface StageOptions {
@@ -195,6 +389,14 @@ export interface StageOptions {
   /** Decline an inherited profile and use the engine's measured defaults. */
   ignoreProfile: boolean;
   reviewCorrection: boolean;
+  /** Try to improve retrieval, and measure whether it worked.
+   *
+   *  Off, and bounded to a single chunking candidate. The free half changes
+   *  nothing in the index; the paid half re-cuts the document and embeds every
+   *  chunk again — the largest single line the gate can show. It also raises the
+   *  eval sample, because at 40 questions the bootstrap margin cannot resolve
+   *  the effect the round is looking for. */
+  tune: boolean;
 }
 
 export const DEFAULT_STAGES: StageOptions = {
@@ -205,11 +407,241 @@ export const DEFAULT_STAGES: StageOptions = {
   learnProfile: true,
   ignoreProfile: false,
   reviewCorrection: false,
+  tune: false,
 };
+
+/**
+ * Whether a run is still going, or what it ended as.
+ *
+ * Distinct from `stage`, and that distinction is the whole point: a stage query
+ * against a failed workflow returns the last one it recorded, so a run whose
+ * activity retries were exhausted reported `stage: "learning"` for as long as
+ * anyone kept asking. Meanwhile the gate answers 409 — "not ready" — forever,
+ * and a screen polling it waits for something that is never coming.
+ *
+ * `state` is `null` when nobody could say: a control plane older than this
+ * field, or a run whose history has aged out of Temporal. Both mean *keep
+ * waiting*, never *it failed*.
+ */
+export interface RunState {
+  workflowId: string;
+  stage: string | null;
+  state: string | null;
+  /** How far the running activity has got, when it reports one.
+   *
+   *  Null for every honest absence and they are deliberately not told apart:
+   *  nothing pending, an activity that does not heartbeat, a run older than the
+   *  code that emits it. All of them mean "no progress to show". */
+  progress: RunProgress | null;
+  /** What the index this run wrote can actually be asked.
+   *
+   *  Null means nobody measured — true of every version indexed before the
+   *  stage existed, and of every run whose gate declined it. Never render it as
+   *  zero: a recall of 0.00 is a claim about the index, and it sends somebody to
+   *  fix one that is fine. */
+  scores: RunScores | null;
+}
+
+/** Measured retrieval quality for one index.
+ *
+ *  `recallAt5DenseOnly` and `noiseFloor` are not extras. The eval set's
+ *  questions are written *from* the chunks they must find, so they leak
+ *  vocabulary to the lexical leg and the hybrid figure alone flatters the index;
+ *  the gap between the two is that leakage. And recall says how often the right
+ *  chunk came back while the floor says what a *wrong* one scores — without it
+ *  a reader cannot tell an index that discriminates from one that returns
+ *  everything at a similar distance. Render them together or not at all. */
+export interface RunScores {
+  recallAt1: number;
+  recallAt5: number;
+  mrrAt10: number;
+  recallAt5DenseOnly: number;
+  noiseFloor: number;
+  chunks: number;
+  evalQuestions: number;
+  /** Below this a difference is noise. With σ ≈ 0.358 it takes about 80
+   *  questions to resolve a +0.040 MRR effect. */
+  margin: number;
+  leakage: string;
+  /** How many questions did not find their own chunk. */
+  misses: number;
+}
+
+/** Chunks done out of chunks total, off the activity's heartbeat.
+ *
+ *  Only semantic extraction reports, and it is the one worth reporting: one
+ *  generation call per chunk, so this counts calls and spend at the same time —
+ *  which is what somebody deciding whether to stop a run is weighing. */
+export interface RunProgress {
+  activity: string;
+  done: number;
+  total: number;
+}
 
 export interface StartedRun {
   workflowId: string;
   state: string;
+}
+
+/** One run as the queue lists it.
+ *
+ *  Every field comes from the catalog, which is what makes the queue survive a
+ *  stopped Temporal and a closed window: what a run is *doing* is `RunState`,
+ *  what it *was* is this. `usdSoFar` is null and never zero when no stage has
+ *  recorded a price — a run still in its free stages legitimately has none. */
+export interface RunListItem {
+  id: string;
+  workflowId: string;
+  kind: string;
+  state: string;
+  stage: string | null;
+  startedAt: string;
+  /** Null while it is still going. The queue filters on *this*, not on `state`,
+   *  because a run that died without recording an outcome keeps a stale state. */
+  finishedAt: string | null;
+  errorKind: string | null;
+  errorDetail: string | null;
+  title: string | null;
+  libraryId: string | null;
+  /** What the run knew about itself before it had a document: the URL for a
+   *  video, the picked file's basename for an import. `title` is the
+   *  *document's* title and a run that failed before registering one has none,
+   *  so the queue reads `title ?? label ?? workflowId`. */
+  label: string | null;
+  documentId: string | null;
+  versionId: string | null;
+  usdSoFar: number | null;
+}
+
+export interface RunListPage {
+  runs: RunListItem[];
+  /** Opaque cursor for the next page, or null at the end. Never parse it. */
+  nextBefore: string | null;
+}
+
+export interface AuditCostEntry {
+  stage: string;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  /** Null is "no price known for this model", rendered "sin precio". */
+  usd: number | null;
+}
+
+export interface AuditCost {
+  inputTokens: number;
+  outputTokens: number;
+  usd: number | null;
+  unpricedEntries: number;
+  entries: AuditCostEntry[];
+}
+
+export interface AuditArtifact {
+  name: string;
+  relPath: string;
+  sha256: string;
+  sizeBytes: number;
+}
+
+/** One row of the ledger.
+ *
+ *  `stage` is null on the trailing row that collects whatever no stage claimed —
+ *  the charges a question makes belong to no pipeline stage, and dropping them
+ *  would make the ledger a bill that does not add up.
+ *
+ *  `endedAt` null means one of two things `outcome` tells apart: the run is
+ *  still in this stage, or this row *is* the outcome and is an instant.
+ *
+ *  `cost` null means the stage does not spend. Deliberately not a zeroed block:
+ *  "does not spend" and "the charge was not recorded" are different claims. */
+export interface AuditStage {
+  seq: number | null;
+  stage: string | null;
+  at: string | null;
+  endedAt: string | null;
+  seconds: number | null;
+  outcome: string | null;
+  detail: string | null;
+  cost: AuditCost | null;
+  artifacts: AuditArtifact[];
+}
+
+export interface AuditRun {
+  id: string;
+  workflowId: string;
+  kind: string;
+  state: string;
+  stage: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  errorKind: string | null;
+  errorDetail: string | null;
+  title: string | null;
+  libraryId: string | null;
+  /** What the run knew about itself before it had a document: the URL for a
+   *  video, the picked file's basename for an import. `title` is the
+   *  *document's* title and a run that failed before registering one has none,
+   *  so the queue reads `title ?? label ?? workflowId`. */
+  label: string | null;
+  documentId: string | null;
+  versionId: string | null;
+}
+
+/** A profile warning raised against the version this run produced.
+ *
+ *  The row carries no kind, so a reader cannot tell a plain collision from the
+ *  heading disagreement that withholds activation — that distinction lives only
+ *  on the Temporal payload today, and the pane must not imply otherwise. */
+export interface AuditWarning {
+  profileId: string | null;
+  collidesWith: string | null;
+  similarity: number | null;
+  detail: string | null;
+}
+
+export interface RunAudit {
+  run: AuditRun;
+  stages: AuditStage[];
+  totals: Omit<AuditCost, "entries">;
+  warnings: AuditWarning[];
+}
+
+/** One line of the raw workflow history.
+ *
+ *  `attempt` appears from the second try onward, which is the whole reason this
+ *  panel exists: a retry is invisible in every other view. */
+export interface RunEvent {
+  id: number;
+  at: string;
+  kind: string;
+  activity: string | null;
+  attempt: number | null;
+  detail: string | null;
+}
+
+/** The raw history, or an honest statement that there is none to be had.
+ *
+ *  `available: false` means Temporal has forgotten this run, which is ordinary
+ *  past the retention period. Deliberately not the same as an empty `events`:
+ *  "the history aged out" and "this run did nothing" must not render alike. */
+export interface RunEventPage {
+  available: boolean;
+  truncated: boolean;
+  events: RunEvent[];
+}
+
+/** Which filters the queue accepts. Every one optional; all are strings on the
+ *  wire because the Rust side assembles the query, so the webview cannot invent
+ *  a parameter the control plane will silently ignore. */
+export interface RunsQuery extends Record<string, unknown> {
+  limit?: number;
+  before?: string;
+  kinds?: string;
+  states?: string;
+  libraryId?: string;
+  documentId?: string;
+  versionId?: string;
 }
 
 export interface ChunkKindCount {
@@ -308,12 +740,50 @@ export interface Approval {
 
 // -- questions ---------------------------------------------------------------
 
+export type { AskEffort } from "./askEffort";
+import type { AskEffort } from "./askEffort";
+
 export interface Question {
   library_id: string;
   text: string;
+  /** Absent means "the effort level decides", which is what this app sends. */
   top_k?: number;
   filters?: Record<string, string>;
   confidence_floor?: number;
+  /**
+   * How much evidence and reasoning the question may spend.
+   *
+   * A level name, never a set of numbers: what each one means lives in the
+   * worker, so a client cannot ask for two hundred chunks and neither control
+   * plane has to police a number. Absent means the server's default.
+   */
+  effort?: AskEffort;
+}
+
+/**
+ * One effort level's answer wording, as the settings screen needs it.
+ *
+ * `body` is what would actually be used; `custom` says whether that is the
+ * organisation's override or the built-in default. Both matter: the text fills
+ * the box, the flag decides whether "restore the default" would do anything,
+ * and `defaultBody` is what it would restore to — carried here so restoring
+ * needs no second request.
+ */
+export interface AnswerStyle {
+  effort: AskEffort;
+  body: string;
+  defaultBody: string;
+  custom: boolean;
+}
+
+export interface AnswerStyles {
+  levels: AnswerStyle[];
+  maxChars: number;
+}
+
+export interface AnswerStyleSaved {
+  effort: AskEffort;
+  custom: boolean;
 }
 
 export interface Citation {
@@ -373,6 +843,128 @@ export interface AskProgress {
   error: AskFailure | null;
 }
 
+// -- conversations ----------------------------------------------------------
+//
+// A conversation is multi-turn asking over the same retrieval path a one-shot
+// question uses. Two things about the shape are worth knowing before reading
+// the screen:
+//
+// The transcript comes from the **catalog**, not from Temporal — which is what
+// lets a conversation outlive the retention that bounds a session. So there is
+// no client-side history to reconcile and nothing that can drift; the server is
+// the only copy.
+//
+// And a turn's answer arrives twice: as `token` events while it is written, and
+// as the settled turn on `done`. The second is authoritative and **replaces**
+// the first — see `ChatEvent`.
+
+/** One conversation, as a list row renders it. */
+export interface Conversation {
+  id: string;
+  libraryId: string;
+  /** Never empty: the first question truncated until `chat-title` names it. */
+  title: string;
+  titleGenerated: boolean;
+  turns: number;
+  createdAt: string;
+  lastMessageAt: string;
+}
+
+export interface Conversations {
+  conversations: Conversation[];
+}
+
+/**
+ * A turn's state. Four of the five are an answer's own; `running` is the turn
+ * still being worked on and is the reason this is not `AnswerState`.
+ */
+export type TurnState = "running" | AnswerState | "failed";
+
+/** One question and its answer. */
+export interface ConversationTurn {
+  seq: number;
+  /** What the person typed. */
+  question: string;
+  /**
+   * The standalone question the rewrite produced, which is what was actually
+   * embedded and searched for.
+   *
+   * Shown, not kept for debugging. A follow-up is answered against a question
+   * the person did not type — that is the whole mechanism — and an answer that
+   * quietly addresses something adjacent to what was asked is
+   * indistinguishable from a bad answer unless the substitution is visible.
+   * Equal to `question` on a first turn, which makes no rewrite call.
+   */
+  searched: string | null;
+  answer: string;
+  state: TurnState;
+  effort: string;
+  /** The level the *style* used, which steps down when the corpus supplied too
+   *  little to justify the one asked for. */
+  styleEffort: string | null;
+  citations: Citation[];
+  /** Only the chunks a verified citation names — never the whole retrieval. */
+  citedEvidence: EvidenceItem[];
+  error: AskFailure | null;
+  askedAt: string;
+  answeredAt: string | null;
+}
+
+export interface ConversationDetail extends Conversation {
+  turnsDetail: ConversationTurn[];
+}
+
+export interface ConversationStarted {
+  conversationId: string;
+  libraryId: string;
+}
+
+export interface TurnStarted {
+  conversationId: string;
+  turnSeq: number;
+  state: string;
+}
+
+/**
+ * One server-sent event from a turn in flight.
+ *
+ * One shape for all three types rather than a discriminated union, mirroring
+ * the Rust struct: an event type this build has never heard of arrives as data
+ * with an unknown `type` rather than failing to decode, so a newer server
+ * cannot take the stream down.
+ *
+ * - `stage` — `stage`, and on `evidence` the counts `chunks` and `dense`. What
+ *   covers the wait: streamed prose was measured at about 8% of a turn, and the
+ *   rest used to be one unchanging line over the rewrite call, the planning
+ *   call, retrieval and the model's reasoning.
+ * - `token` — `seq` and `text`. Prose as the model writes it, and a **draft**.
+ * - `done` — `turn`, the settled turn. Authoritative, and it *replaces* the
+ *   draft rather than completing it: `citas` is the last field in the answering
+ *   schema, so verification cannot run until the envelope closes, and a turn can
+ *   stream fluently and still come back `insufficient_evidence` because no
+ *   citation survived.
+ * - `error` — `kind` and `message`. The stream could not continue; the turn
+ *   itself may still be landing in the catalog.
+ */
+export interface ChatEvent {
+  type: string;
+  seq?: number | null;
+  text?: string | null;
+  turn?: ConversationTurn | null;
+  kind?: string | null;
+  message?: string | null;
+  /** Which stage a `stage` event announces. */
+  stage?: string | null;
+  /** On `evidence`: how many chunks reached the prompt. */
+  chunks?: number | null;
+  /**
+   * On `evidence`: how many cleared the dense floor. `null` means "not
+   * measured", which is not zero — zero is a question the corpus does not
+   * support, and the two must not render the same.
+   */
+  dense?: number | null;
+}
+
 export interface Answer {
   state: AnswerState;
   text: string;
@@ -380,6 +972,15 @@ export interface Answer {
   evidence: EvidenceItem[];
   reason: string;
   spend: Spend[];
+  /**
+   * The level this answer was produced at, echoed by the server.
+   *
+   * Optional because an answer collected from a worker older than the level
+   * carries none, and because it must not become a required field that every
+   * test factory has to learn about. Read it rather than what the client
+   * remembers sending: an answer can be collected on another machine.
+   */
+  effort?: AskEffort;
 }
 
 // -- provider ----------------------------------------------------------------
@@ -392,6 +993,42 @@ export interface Answer {
  * no third option and no fallback — without ADC the project id alone buys
  * nothing.
  */
+/**
+ * Which control plane the app talks to.
+ *
+ * The two speak the same 26 paths with the same payloads — parity the server
+ * side tests — so nothing above this type knows which one answered. `local` is
+ * the free stack on this machine; `cloud` is the paid, multi-tenant service.
+ *
+ * `signedIn` rather than a token: the webview has no reason to hold a bearer,
+ * and it only needs to know whether the paid mode is usable.
+ */
+export type BackendMode = "local" | "cloud";
+
+export interface BackendInfo {
+  mode: BackendMode;
+  baseUrl: string;
+  /** Sent as `X-Tenant-Id`. Empty is correct for an account in one organisation. */
+  tenantId: string;
+  /**
+   * A stored session exists. Still true while the ID token has expired: the
+   * refresh token is good for thirty days and the next request renews it, so
+   * reporting "signed out" for that would send a user to sign in once an hour.
+   */
+  signedIn: boolean;
+  /** Whose session, for the screen. Never used to authorize anything. */
+  email: string;
+  /**
+   * Where the refresh token is kept: `"keychain"` or `"file"`.
+   *
+   * A token rather than prose, so the wording lives in the i18n bundles the way
+   * an error `kind` does. Rust has reported it since the keychain landed and
+   * nothing read it, which made its docstring's claim that "the UI can tell the
+   * user" false.
+   */
+  secretStore: "keychain" | "file";
+}
+
 export interface ProviderSettings {
   projectId: string;
   configured: boolean;
@@ -598,6 +1235,14 @@ export interface RunSummary {
    *  document it was spent on, deliberately. */
   title: string | null;
   libraryId: string | null;
+  /** Billed so far. Null, never zero: a run in its free stages and one whose
+   *  model has no known price are both "no figure", and zero would claim free.
+   *
+   *  **It lags through the stage that costs most.** Semantic extraction records
+   *  its spend when the activity ends, not per chunk, so a run 260 calls in
+   *  still reports only what embedding cost — which is why progress is shown
+   *  beside it rather than instead of it. */
+  usdSoFar: number | null;
 }
 
 // -- the library graph -------------------------------------------------------
@@ -696,6 +1341,10 @@ export interface VersionRow {
   /** Other documents holding these same bytes; non-empty means removing this
    *  document leaves the version standing. */
   alsoHeldBy: string[];
+  /** What this version's index can be asked, from the newest run that measured
+   *  it. null means nobody measured — which is every version indexed before the
+   *  stage existed, and is not the same claim as a recall of zero. */
+  scores: RunScores | null;
 }
 
 export interface DocumentDetail {
@@ -715,6 +1364,192 @@ export interface DocumentDetail {
 }
 
 /**
+ * One version's statistics, in five legs that fail independently.
+ *
+ * **Every figure is optional because `available: false` carries none of them.**
+ * That is the contract, not defensive typing: a stopped Memgraph must render as
+ * "could not ask" and never as a version with no concepts, and a run nobody
+ * measured must never render as a recall of zero. A required field here would
+ * force a default at the one layer that could invent one.
+ */
+export interface StatLeg {
+  available: boolean;
+  /** Why it could not answer — and for a store, the URL that was tried. */
+  detail: string;
+}
+
+export interface VersionProfileWarning {
+  profileId: string | null;
+  collidesWith: string | null;
+  similarity: number | null;
+  detail: string | null;
+  /** `_topical_overlap` returns 0 by construction for a plain-text document,
+   *  and 0 is the *most dangerous* case — same structure, unrelated subject
+   *  matter. false means the figure beside it is not a measurement. */
+  comparable: boolean;
+}
+
+export interface VersionCatalogLeg extends StatLeg {
+  contentSha256?: string | null;
+  byteSize?: number | null;
+  /** A column nothing writes: `register_version` runs before extraction. null
+   *  is the measurement, and it starts working the day something fills it. */
+  pageCount?: number | null;
+  state?: string | null;
+  active?: boolean | null;
+  createdAt?: string | null;
+  activatedAt?: string | null;
+  failedReason?: string | null;
+  runs?: number | null;
+  rebuildRunId?: string | null;
+  profileWarnings?: VersionProfileWarning[];
+}
+
+export interface VersionGraphLeg extends StatLeg {
+  chunks?: number | null;
+  sections?: number | null;
+  citations?: number | null;
+  claims?: number | null;
+  /** Keyed by the chunk kind as stored — `cuerpo`, `preguntas`, `nota`. They
+   *  stay Spanish on the wire because they are Qdrant payload values used in
+   *  filters; the UI maps them to localised labels. */
+  kinds?: Record<string, number>;
+  sectionLevels?: Record<string, number>;
+}
+
+export interface VersionQdrantLeg extends StatLeg {
+  points?: number | null;
+}
+
+export interface VersionStreamScore {
+  bytes: number;
+  spansVerified: number;
+  spansMismatched: number;
+}
+
+export interface VersionSpans {
+  chunks: number;
+  spansVerified: number;
+  spansMismatched: number;
+  bytes: number;
+}
+
+export interface VersionSequence {
+  indices: number;
+  contiguous: boolean;
+  missingIndices: number[];
+  duplicateIndices: number[];
+  bytesCovered: number;
+  bytesTotal: number;
+  coverage: number;
+}
+
+export interface VersionArtifactsLeg extends StatLeg {
+  /** Which stream the `char_span`s index. Nothing records it, so it is chosen
+   *  by scoring every stream present — on one real version `raw.txt` verified
+   *  8 of 600 spans where `extracted.txt` verified 600. */
+  stream?: string | null;
+  streamVerifiesCompletely?: boolean | null;
+  streamsConsidered?: Record<string, VersionStreamScore>;
+  spans?: VersionSpans | null;
+  sequence?: VersionSequence | null;
+}
+
+export interface VersionStructureLeg extends StatLeg {
+  sourceRun?: string | null;
+  graph: VersionGraphLeg;
+  qdrant: VersionQdrantLeg;
+  artifacts: VersionArtifactsLeg;
+  /** null is "could not compare"; only false is the claim that they disagree. */
+  countsAgree?: boolean | null;
+}
+
+export interface VersionSemanticsInStore {
+  claims: number;
+  /** Claims carrying a quote the code located in their own chunk. One nobody
+   *  can check must not look like one that can. */
+  withAQuote: number;
+  /** `afirma` / `niega` / `atribuido` / `sin_estado`, and the last is never
+   *  folded into the first: a text expounding the doctrine it is about to rebut
+   *  enunciates it in the same words as one who holds it. */
+  byStatus: Record<string, number>;
+  concepts: number;
+}
+
+export interface VersionStaleDiff {
+  produced: number;
+  inStore: number;
+  converged: number;
+  /** What the graph holds and this run did not make. Not inert: a stale claim
+   *  stays attached to a chunk whose text has moved. */
+  leftBehind: number;
+  /** Its mirror — a projection that did not finish. */
+  missing: number;
+  staleShare: number | null;
+  /** Concepts only: the names extracted before `canonical_concept` folds them,
+   *  so the fold does not read as a loss. */
+  namesExtracted?: number | null;
+}
+
+export interface VersionSemanticsDiff extends StatLeg {
+  claims?: VersionStaleDiff | null;
+  concepts?: VersionStaleDiff | null;
+  mentions?: VersionStaleDiff | null;
+  staleClaimQuotes?: { withAQuote: number; quoteNoLongerLocates: number } | null;
+}
+
+export interface VersionSemanticsLeg extends StatLeg {
+  sourceRun?: string | null;
+  extractorModel?: string | null;
+  inStore?: VersionSemanticsInStore | null;
+  diff?: VersionSemanticsDiff | null;
+}
+
+export interface VersionFloor {
+  minScore: number;
+  noiseFloor: number;
+  headroom: number;
+  /** false means the floor admits exactly what it was measured to exclude. */
+  honest: boolean;
+}
+
+export interface VersionRetrievalLeg extends StatLeg {
+  sourceRun?: string | null;
+  scores?: RunScores | null;
+  floor?: VersionFloor | null;
+}
+
+export interface VersionStageCost {
+  usd: number;
+  /** Every run that charged this stage. More than one is the finding. */
+  runs: string[];
+  /** A missing price under-reports the bill rather than describing a free call,
+   *  so it is counted and never totalled as zero. */
+  unpricedEntries: number;
+}
+
+export interface VersionLedgerLeg extends StatLeg {
+  byStage?: Record<string, VersionStageCost>;
+  totalUsd?: number;
+  chargedInMoreThanOneRun?: string[];
+  /** Split by the terminal state of the run that incurred it. A split rather
+   *  than one figure called "wasted": a cancelled run bought nothing durable,
+   *  but a failed one can still have left a complete index behind. */
+  usdByRunState?: Record<string, number>;
+}
+
+export interface VersionStatistics {
+  libraryId: string;
+  documentId: string;
+  versionId: string;
+  catalog: VersionCatalogLeg;
+  structure: VersionStructureLeg;
+  semantics: VersionSemanticsLeg;
+  retrieval: VersionRetrievalLeg;
+  ledger: VersionLedgerLeg;
+}
+
+/**
  * What a removal destroyed, and what it deliberately kept.
  *
  * The map keys inside `graph`, `catalog` and `kept` come straight from Python
@@ -729,6 +1564,17 @@ export interface Removal {
   graph: Record<string, number>;
   catalog: Record<string, number>;
   kept: Record<string, string>;
+}
+
+/** What promoting a version touched.
+ *
+ *  Every document holding these bytes, not just the one asked about: a version
+ *  can be shared, and promoting it for one copy while leaving another on an
+ *  older version would make the same content answer differently depending on
+ *  which copy was asked about. */
+export interface Activation {
+  versionId: string;
+  documents: string[];
 }
 
 export interface RebuildReport {
@@ -752,19 +1598,76 @@ export const api = {
   controlHealth: () => invoke<Health>("control_health"),
   controlPing: () => invoke<PingResult>("control_ping"),
 
+  /** Put a file where the worker can read it, whichever plane that is.
+   *
+   *  Local mode returns the same path back and copies nothing — the app and the
+   *  worker share a filesystem. Cloud mode uploads it and returns the container
+   *  path the worker will open. The screen calls this in both cases and uses
+   *  what it gets, so nothing in the UI has to know which plane is in use.
+   */
+  /** Open the OS file chooser. `null` means the person dismissed it, which is
+   *  the ordinary way to leave a dialog and must not read as a failure. */
+  pickSource: () => invoke<string | null>("pick_source"),
+
+  stageSource: (path: string) => invoke<StagedSource>("stage_source", { path }),
   ingestStart: (request: IngestRequest, options: StageOptions = DEFAULT_STAGES) =>
     invoke<StartedRun>("ingest_start", { request, options }),
   /** null while the free stages are still running — a normal first answer. */
   ingestGate: (workflowId: string) =>
     invoke<GateReport | null>("ingest_gate", { workflowId }),
+  /**
+   * Start indexing a video. No staging call precedes this: there is no file.
+   *
+   * **In cloud mode Rust asks YouTube from this machine first**, because the
+   * server is refused — measured 2026-09-05, "Sign in to confirm you're not a
+   * bot" from the EC2 egress address against 2.6 s from a residential one. So
+   * this call is no longer instant: resolving is a few seconds and, for a
+   * video with no captions at all, downloading its audio is minutes.
+   * `onFetch` is how a window says so instead of sitting still; it is optional
+   * and the channel is created either way, because Tauri cannot build an
+   * `Option<Channel<_>>` argument.
+   */
+  videoStart: (
+    request: VideoRequest,
+    options: StageOptions = DEFAULT_STAGES,
+    onFetch?: (event: VideoFetchEvent) => void,
+  ) => {
+    const channel = new Channel<VideoFetchEvent>();
+    if (onFetch) channel.onmessage = onFetch;
+    return invoke<StartedRun>("video_start", { request, options, onEvent: channel });
+  },
+  /** A video run's gate. Its own route, because the report is a different
+   *  shape — `preview` is null when there are no captions to preview. null here
+   *  means the probe is still running, which is the ordinary first answer. */
+  videoGate: (workflowId: string) =>
+    invoke<VideoGateReport | null>("video_gate", { workflowId }),
+  /** Where a run *is*, which `ingestGate` alone cannot say. See `RunState`. */
+  runStatus: (workflowId: string) => invoke<RunState>("run_status", { workflowId }),
   ingestApprove: (workflowId: string, approval: Approval) =>
     invoke<void>("ingest_approve", { workflowId, approval }),
+  /** Stop a run that is already spending. The counterpart of `ingestApprove`:
+   *  a spend gate that can only be opened is half a gate. */
+  cancelRun: (workflowId: string) => invoke<void>("cancel_run", { workflowId }),
+  /** The persistent queue. Catalog only, so it answers with Temporal down —
+   *  which is what lets the Import screen show a queue rather than an error
+   *  panel while the worker restarts. */
+  runsList: (query: RunsQuery = {}) => invoke<RunListPage>("runs_list", query),
+  /** What a run did, stage by stage. Answers for a run Temporal has forgotten,
+   *  which is every run past the retention period — and which is exactly when
+   *  somebody goes looking. */
+  runAudit: (workflowId: string) => invoke<RunAudit>("run_audit", { workflowId }),
+  /** The raw workflow history. Fetched only when somebody expands the panel:
+   *  it is the one call here that can genuinely be slow. */
+  runEvents: (workflowId: string) => invoke<RunEventPage>("run_events", { workflowId }),
   /** Which libraries exist. Free, and what every screen needs before it can
    *  ask anything: a library id is not something a person can be expected to
    *  type from memory. */
   libraries: () => invoke<Libraries>("libraries"),
   libraryDocuments: (libraryId: string, includeAbsent = false) =>
     invoke<Library>("library_documents", { libraryId, includeAbsent }),
+  answerStyles: () => invoke<AnswerStyles>("answer_styles"),
+  setAnswerStyle: (effort: AskEffort, body: string) =>
+    invoke<AnswerStyleSaved>("set_answer_style", { effort, update: { body } }),
   ask: (question: Question) => invoke<AskStarted>("ask", { question }),
 
   /** Collect a question started earlier. Safe to call repeatedly; the API keeps
@@ -772,14 +1675,81 @@ export const api = {
   askResult: (questionId: string) =>
     invoke<AskProgress>("ask_result", { questionId }),
 
+  // -- conversations --------------------------------------------------------
+  /** Open a conversation. Must precede any turn: the turn and relay tables
+   *  derive their tenant from this row, so a turn naming a conversation that
+   *  does not exist writes nothing at all. */
+  chatCreate: (libraryId: string) =>
+    invoke<ConversationStarted>("chat_create", { request: { libraryId } }),
+  chatList: () => invoke<Conversations>("chat_list"),
+  /** The whole transcript. Read from the catalog rather than from Temporal,
+   *  which is what makes a conversation outlive a session's retention. */
+  chatRead: (conversationId: string) =>
+    invoke<ConversationDetail>("chat_read", { conversationId }),
+  /** Irreversible, and free. The screen confirms before calling this. */
+  chatDelete: (conversationId: string) =>
+    invoke<void>("chat_delete", { conversationId }),
+  /** Ask the next question. Returns as soon as the turn has a number, not when
+   *  it has an answer — `chatStream` follows that. */
+  chatTurn: (conversationId: string, text: string, effort?: AskEffort) =>
+    invoke<TurnStarted>("chat_turn", {
+      conversationId,
+      // `effort` omitted rather than sent as null when absent: omitting is how
+      // the payload says "whatever the server's default is", and a null would
+      // be a value the server has to interpret.
+      request: effort ? { text, effort } : { text },
+    }),
+  /**
+   * Follow a turn's answer as it is written.
+   *
+   * `since` is the resume point — pass the highest `seq` already seen and only
+   * what follows is sent, so reopening a conversation mid-answer costs nothing
+   * and never shows the same text twice.
+   *
+   * Resolves when the stream ends. The `done` event has already been delivered
+   * to `onEvent` by then, so a caller does not need the return value for
+   * anything but knowing it is over.
+   */
+  chatStream: (
+    conversationId: string,
+    turnSeq: number,
+    since: number,
+    onEvent: (e: ChatEvent) => void,
+  ) => {
+    const channel = new Channel<ChatEvent>();
+    channel.onmessage = onEvent;
+    return invoke<void>("chat_stream", {
+      conversationId,
+      turnSeq,
+      since,
+      onEvent: channel,
+    });
+  },
+
   // -- the Library's three verbs --------------------------------------------
   documentDetail: (libraryId: string, documentId: string) =>
     invoke<DocumentDetail>("document_detail", { libraryId, documentId }),
+  /** What one version holds, cost, and still agrees with. Reads three stores
+   *  and two artifacts, so it is fetched when a person asks rather than with
+   *  the detail. Free: nothing behind it writes and nothing behind it spends. */
+  versionStatistics: (libraryId: string, versionId: string) =>
+    invoke<VersionStatistics>("version_statistics", { libraryId, versionId }),
   /** Irreversible, and free. The screen confirms before calling this. */
   documentRemove: (libraryId: string, documentId: string) =>
     invoke<Removal>("document_remove", { libraryId, documentId }),
   versionRemove: (libraryId: string, versionId: string) =>
     invoke<Removal>("version_remove", { libraryId, versionId }),
+  /** Make an already-indexed version the one questions see. Free.
+   *
+   *  Two things reach this. An ingest that found a structural collision indexed
+   *  everything and withheld only the promotion, because the fingerprint that
+   *  picks a family profile is structural and structure is not subject matter —
+   *  and the retrieval metrics cannot see the difference, since the eval
+   *  questions come from the very chunks the wrong rules produced. And a bad
+   *  re-index can be rolled back by flipping the flag rather than paying for the
+   *  pipeline again. */
+  versionActivate: (libraryId: string, versionId: string) =>
+    invoke<Activation>("version_activate", { libraryId, versionId }),
   /** Re-runs the whole pipeline; arrives at the normal gate, which re-quotes. */
   documentReindex: (libraryId: string, documentId: string,
                     options: StageOptions = DEFAULT_STAGES) =>
@@ -791,6 +1761,16 @@ export const api = {
   rebuildGate: (workflowId: string) =>
     invoke<RebuildReport | null>("rebuild_gate", { workflowId }),
 
+  backendSettings: () => invoke<BackendInfo>("backend_settings"),
+  /**
+   * Opens the hosted sign-in in the system browser and waits for it. The whole
+   * exchange happens in Rust: the PKCE verifier must not reach the webview,
+   * which is the point of the flow.
+   */
+  signIn: () => invoke<BackendInfo>("sign_in"),
+  signOut: () => invoke<BackendInfo>("sign_out"),
+  setBackendMode: (mode: BackendMode, baseUrl: string, tenantId: string) =>
+    invoke<BackendInfo>("set_backend_mode", { mode, baseUrl, tenantId }),
   providerSettings: () => invoke<ProviderSettings>("provider_settings"),
   /** Compose interpolates `.env` at `up` time, so this reaches the containers on
    *  the next `stackUp` and not before. The screen has to say so. */
@@ -818,8 +1798,9 @@ export const api = {
    *
    *  `minDocuments` is what controls the volume — see `LibraryGraph`. 1 returns
    *  every concept the library mentions; 2 returns the subgraph that has edges
-   *  between books at all. */
-  libraryGraph: (libraryId: string, confidenceFloor = 0.6, minDocuments = 2) =>
+   *  between books at all, which measured 2,034 concepts and was still an
+   *  unreadable canvas; 3 is the default and measured 858. */
+  libraryGraph: (libraryId: string, confidenceFloor = 0.6, minDocuments = 3) =>
     invoke<LibraryGraph>("library_graph", {
       libraryId,
       confidenceFloor,

@@ -19,16 +19,43 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` so `ytdlp::tracks_of` walks the caption dictionaries in the
+# order YouTube sent them, which is the order the Python it forks walks them in.
+# Sorted keys would silently choose a different caption language from the server
+# for the same video. It pulls in no new crate: `indexmap` is already locked.
+serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 tokio = { version = "1", features = ["process", "sync", "time", "macros", "rt-multi-thread"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 rand = "0.8"
+# SHA-256, for the PKCE code challenge. The one dependency in this flow that is
+# not hand-written: base64url is twenty lines with no way to be subtly wrong,
+# and a hash is the opposite — "ported it myself" is the wrong answer for the
+# primitive an authorization code is bound to.
+sha2 = "0.10"
+keyring = { version = "3.6.3", default-features = false, features = ["linux-native", "apple-native", "windows-native"] }
+tauri-plugin-dialog = "2"
 
 [profile.release]
 codegen-units = 1
 lto = true
 strip = true
+
+[profile.dev]
+# The dev loop pays for `[profile.release]`'s `codegen-units = 1` + fat LTO on
+# every rebuild, and both of those are serial: one core at 100%, the other
+# fifteen idle. Building unoptimized instead keeps this crate's rebuilds cheap,
+# and optimizing the dependencies — compiled once, then cached — keeps the app
+# feeling like the release build while running `tauri dev`.
+opt-level = 0
+# Full debuginfo is what filled this disk, not the optimization level: the debug
+# `staticlib` alone was 845 MB and `target/debug` 5.8 G. Line tables keep
+# backtraces pointing at file and line, which is all this crate's panics are
+# ever read for, and drop the DWARF that costs the gigabytes.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
 
 [dev-dependencies]
 # Already in the lock file transitively via tauri; declared so the stack tests

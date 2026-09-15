@@ -1,6 +1,18 @@
 {
   "version": 1,
   "skills": {
+    "angular-component": {
+      "source": "analogjs/angular-skills",
+      "sourceType": "github",
+      "skillPath": "skills/angular-component/SKILL.md",
+      "computedHash": "fa1049900beb037dd5afddd0dc6059aed588bfa1e11cc3a96f76bd90a0a6b0d8"
+    },
+    "langgraph-fundamentals": {
+      "source": "langchain-ai/langchain-skills",
+      "sourceType": "github",
+      "skillPath": "config/skills/langgraph-fundamentals/SKILL.md",
+      "computedHash": "790dd42d79190a6db6a7a82ac9b03fa371402a47d91ff88c1e2731b1ceff1d29"
+    },
     "rust-async-patterns": {
       "source": "wshobson/agents",
       "sourceType": "github",

@@ -1,0 +1,336 @@
+{
+  "fingerprint": "43ea27a4a28e6208",
+  "slug": "03-elfrutoeterno-int-s-43ea27a4",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [
+      "^12/22/12\\s+11:57\\s+AM$",
+      "^El\\s+fruto\\s+eterno$"
+    ],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "question_min_marks": 2,
+    "heading_l1_max": 60,
+    "heading_l2_max": 50,
+    "heading_l1_pattern": "^[A-ZÁÉÍÓÚÑ\\s]{4,35}$",
+    "heading_l2_pattern": null
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.5,
+    "recall_at_5": 0.85,
+    "mrr_at_10": 0.6538,
+    "recall_at_5_dense_only": 0.875,
+    "noise_floor": 0.6035,
+    "chunks": 410,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Qué pautas de conducta obligatorias se indican en relación con el pago de sueldos a los empleados y el respeto hacia personas con limitaciones auditivas o visuales?",
+      "chunk_index": 55,
+      "char_mid": 49990,
+      "cell_ref": "",
+      "breadcrumb": "EL AMOR ES FRUTO ESPIRITUAL"
+    },
+    {
+      "question": "¿De qué forma debe ajustarse la cortesía hacia los demás según su condición o etapa de vida, de acuerdo con las indicaciones dadas al joven líder de Éfeso?",
+      "chunk_index": 232,
+      "char_mid": 221685,
+      "cell_ref": "",
+      "breadcrumb": "LO QUE SÍ ES LA AMABILIDAD"
+    },
+    {
+      "question": "¿De qué manera difiere la postura de Jesús sobre el retiro de la sociedad para evitar la contaminación moral en comparación con las corrientes espirituales de Oriente?",
+      "chunk_index": 375,
+      "char_mid": 353860,
+      "cell_ref": "",
+      "breadcrumb": "IDEAS CORRECTAS"
+    },
+    {
+      "question": "¿Durante qué sucesos de su juzgamiento y tormento previo a la crucifixión se destaca la conducta de absoluto silencio de Cristo ante las diversas autoridades y agresores?",
+      "chunk_index": 196,
+      "char_mid": 188610,
+      "cell_ref": "",
+      "breadcrumb": "LA TRINIDAD PACIENTE"
+    },
+    {
+      "question": "¿De qué modo describe el autor la verdadera naturaleza del cristianismo frente a las prácticas religiosas convencionales?",
+      "chunk_index": 343,
+      "char_mid": 325215,
+      "cell_ref": "",
+      "breadcrumb": "LA FALSA HUMILDAD"
+    },
+    {
+      "question": "¿En qué ámbito educativo de nivel superior tuvieron su origen los colectivos que dieron inicio a la congregación del autor?",
+      "chunk_index": 121,
+      "char_mid": 117459,
+      "cell_ref": "",
+      "breadcrumb": "MOTIVOS DE ALEGRÍA"
+    },
+    {
+      "question": "¿De qué manera explicó Sigmund Freud la continua conservación de la identidad colectiva del pueblo hebreo frente a milenios de persecución?",
+      "chunk_index": 338,
+      "char_mid": 320689,
+      "cell_ref": "",
+      "breadcrumb": "LA AUTOIMAGEN"
+    },
+    {
+      "question": "¿De qué manera se concibe la verdadera distinción en el vestir en relación con los recursos económicos y qué virtud interna es apreciada por la divinidad?",
+      "chunk_index": 380,
+      "char_mid": 358177,
+      "cell_ref": "",
+      "breadcrumb": "IDEAS CORRECTAS"
+    },
+    {
+      "question": "¿Qué respuestas emocionales incorrectas pueden surgir en algunos creyentes al ser dotados de facultades sobrehumanas por parte del Espíritu Divino?",
+      "chunk_index": 100,
+      "char_mid": 98250,
+      "cell_ref": "",
+      "breadcrumb": "LA ALEGRÍA DEL CREYENTE"
+    },
+    {
+      "question": "¿Qué nación del siglo XIX motivó que la comunidad cristiana mundial adoptara la abstención de bebidas embriagantes debido a sus elevados índices de consumo?",
+      "chunk_index": 365,
+      "char_mid": 346155,
+      "cell_ref": "",
+      "breadcrumb": "IDEAS ERRÓNEAS"
+    },
+    {
+      "question": "¿Qué personaje del Antiguo Testamento se cita para ejemplificar la conexión entre el restablecimiento de la salud corporal y el sosiego?",
+      "chunk_index": 146,
+      "char_mid": 140711,
+      "cell_ref": "",
+      "breadcrumb": "LA PAZ DEL HOMBRE"
+    },
+    {
+      "question": "!Qu! criterio estableci! Jes!s para reconocer a los falsos gu!as espirituales, precisando que la verdadera identidad no se demuestra mediante prodigios o carismas milagrosos?",
+      "chunk_index": 35,
+      "char_mid": 30146,
+      "cell_ref": "",
+      "breadcrumb": "3. Palabra humanada en Jesucristo."
+    },
+    {
+      "question": "¿Qué relación matemática simbólica se plantea entre el afecto, la benevolencia y la compasión divina?",
+      "chunk_index": 255,
+      "char_mid": 245429,
+      "cell_ref": "",
+      "breadcrumb": "LA BONDAD DIVINA"
+    },
+    {
+      "question": "%Que texto biblico menciona el canto de arrepentimiento de los ministros al regresar del exilio sobre la constante advertencia divina a traves de mensajeros inspirados?",
+      "chunk_index": 193,
+      "char_mid": 186332,
+      "cell_ref": "",
+      "breadcrumb": "LA TRINIDAD PACIENTE"
+    },
+    {
+      "question": "¿Cómo se aplica el razonamiento clásico para definir la naturaleza divina mediante los roles de quien expresa afecto, quien lo recibe y la emoción en sí misma?",
+      "chunk_index": 49,
+      "char_mid": 44243,
+      "cell_ref": "",
+      "breadcrumb": "LA MULTIPLICACIÓN"
+    },
+    {
+      "question": "¿Qué tareas específicas dentro del liderazgo del culto y la creación de literatura religiosa afirma el autor que carece de legitimidad para llevar a cabo?",
+      "chunk_index": 271,
+      "char_mid": 259161,
+      "cell_ref": "",
+      "breadcrumb": "EL FRUTO DE LA BONDAD"
+    },
+    {
+      "question": "¿Qué enseñanza se expone acerca de que el disfrute íntimo entre cónyuges es una obligación prescrita por Dios y no un simple deseo divino?",
+      "chunk_index": 72,
+      "char_mid": 69052,
+      "cell_ref": "",
+      "breadcrumb": "LOS NIVELES DEL AMOR"
+    },
+    {
+      "question": "¿De qué manera justificó un famoso sabio de la antigüedad su decisión de cumplir una pena capital injusta en lugar de escapar con la ayuda de un seguidor?",
+      "chunk_index": 218,
+      "char_mid": 207414,
+      "cell_ref": "",
+      "breadcrumb": "PACIENCIA EN TODA SITUACIÓN"
+    },
+    {
+      "question": "¿Por qué razón se considera que las Sagradas Escrituras están destinadas exclusivamente para el mundo terrenal y no para el reino celestial?",
+      "chunk_index": 305,
+      "char_mid": 289457,
+      "cell_ref": "",
+      "breadcrumb": "LA FIDELIDAD DEL CREYENTE"
+    },
+    {
+      "question": "¿De qué manera difieren los relatos instructivos de origen occidental respecto a los del Medio Oriente en cuanto a la forma en que se transmite la enseñanza final?",
+      "chunk_index": 30,
+      "char_mid": 24685,
+      "cell_ref": "",
+      "breadcrumb": "EL GRANO DE TRIGO"
+    },
+    {
+      "question": "¿De qué modo denominó de forma sarcástica el predicador de Tarso a los dirigentes previos al justificar la validez de su labor realizada en Corinto frente a los cuestionamientos hechos durante su ausencia?",
+      "chunk_index": 334,
+      "char_mid": 317930,
+      "cell_ref": "",
+      "breadcrumb": "ORGULLO Y AUTOESTIMA"
+    },
+    {
+      "question": "¿Qué texto evangélico permite entender la manera en que el Salvador logra propagar su propio germen espiritual?",
+      "chunk_index": 28,
+      "char_mid": 23404,
+      "cell_ref": "",
+      "breadcrumb": "EL GRANO DE TRIGO"
+    },
+    {
+      "question": "¿De qué manera caracteriza el autor la esencia de la fe cristiana frente a las visiones encontradas sobre la apreciación de uno mismo?",
+      "chunk_index": 58,
+      "char_mid": 52481,
+      "cell_ref": "",
+      "breadcrumb": "EL AMOR ES FRUTO ESPIRITUAL"
+    },
+    {
+      "question": "%C3%81Qu%C3%A9 grupos se citan para ilustrar que brindar un trato cordial %C3%BAicamente a las personas conocidas es una conducta ordinaria y sin m%C3%A9rito moral?",
+      "chunk_index": 76,
+      "char_mid": 71945,
+      "cell_ref": "",
+      "breadcrumb": "LAS DEMOSTRACIONES DEL AMOR"
+    },
+    {
+      "question": "¿Qué interrogante se propone analizar respecto al tipo de descendencia que generaron las dos especies vegetales del origen bíblico y si continúan produciéndola actualmente?",
+      "chunk_index": 19,
+      "char_mid": 15764,
+      "cell_ref": "",
+      "breadcrumb": "DOS ÁRBOLES OPUESTOS"
+    },
+    {
+      "question": "¿Qué distorsiones sensoriales y pérdida de la percepción del dolor físico sufre una persona bajo los efectos del exceso de alcohol?",
+      "chunk_index": 378,
+      "char_mid": 356360,
+      "cell_ref": "",
+      "breadcrumb": "IDEAS CORRECTAS"
+    },
+    {
+      "question": "¿Qué criterio respecto a la relevancia de las acusaciones falsas aprendió el autor a partir de la experiencia de un ex mandatario?",
+      "chunk_index": 358,
+      "char_mid": 338233,
+      "cell_ref": "",
+      "breadcrumb": "LA VERDADERA HUMILDAD"
+    },
+    {
+      "question": "¿Por qué razón se extendió la equivocada percepción de que la vivencia cristiana es de naturaleza sombría y pesarosa?",
+      "chunk_index": 96,
+      "char_mid": 94171,
+      "cell_ref": "",
+      "breadcrumb": "LA ALEGRÍA DIVINA"
+    },
+    {
+      "question": "¿Qué reflexión interna motivó a la divinidad a adoptar la condición humana para mantener su lealtad hacia las personas?",
+      "chunk_index": 295,
+      "char_mid": 279947,
+      "cell_ref": "",
+      "breadcrumb": "LA FIDELIDAD DE DIOS"
+    },
+    {
+      "question": "¿Qué primer requisito de integridad personal exige que la conducta propia se mantenga intachable y sin mancha?",
+      "chunk_index": 270,
+      "char_mid": 259079,
+      "cell_ref": "",
+      "breadcrumb": "EL FRUTO DE LA BONDAD"
+    },
+    {
+      "question": "¿Qué fatalidades específicas, incluyendo la pérdida de su ganado, la muerte de sus descendientes a causa de un vendaval y el abandono de su cónyuge, padeció el cuarto personaje bíblico presentado?",
+      "chunk_index": 204,
+      "char_mid": 196492,
+      "cell_ref": "",
+      "breadcrumb": "EJEMPLOS DE PACIENCIA"
+    },
+    {
+      "question": "¿Qué réplica basada en los escritos de San Pablo ofreció el autor cuando un clérigo le cuestionó por el aroma que llevaba?",
+      "chunk_index": 370,
+      "char_mid": 350194,
+      "cell_ref": "",
+      "breadcrumb": "IDEAS ERRÓNEAS"
+    },
+    {
+      "question": "¿Qué solución universal se sugiere para corregir la soberbia individual y lograr que el Creador nos enaltezca?",
+      "chunk_index": 328,
+      "char_mid": 312099,
+      "cell_ref": "",
+      "breadcrumb": "ORGULLO Y AUTOESTIMA"
+    },
+    {
+      "question": "¿Qué expresiones en lenguas antiguas se citan como el primer saludo de Jesús a sus allegados tras levantarse del sepulcro?",
+      "chunk_index": 141,
+      "char_mid": 136121,
+      "cell_ref": "",
+      "breadcrumb": "EL PRÍNCIPE DE PAZ"
+    },
+    {
+      "question": "¿Con qué fenómeno de la naturaleza se compara el flujo continuo y visible del favor divino hacia sus protegidos?",
+      "chunk_index": 264,
+      "char_mid": 253679,
+      "cell_ref": "",
+      "breadcrumb": "EL FRUTO DE LA BONDAD"
+    },
+    {
+      "question": "¿Qué tres interrogantes se plantean para evaluar la pertinencia y el momento de tomar una determinación?",
+      "chunk_index": 395,
+      "char_mid": 371247,
+      "cell_ref": "",
+      "breadcrumb": "LA LIBERTAD DE CONCIENCIA"
+    },
+    {
+      "question": "¿Qué influencia o actitud se rechaza por privar a los creyentes del optimismo, el trato afable y el entusiasmo por el esparcimiento?",
+      "chunk_index": 116,
+      "char_mid": 112220,
+      "cell_ref": "",
+      "breadcrumb": "MOTIVOS DE ALEGRÍA"
+    },
+    {
+      "question": "¿Qué interrogantes y controversias se plantean en el ámbito cristiano sobre la definición de una sensibilidad ética limitada y su posible consideración como falta espiritual?",
+      "chunk_index": 397,
+      "char_mid": 372160,
+      "cell_ref": "",
+      "breadcrumb": "LA LIBERTAD DE CONCIENCIA"
+    },
+    {
+      "question": "¿De acuerdo con lo expresado antes de su padecimiento, a través de qué elemento preciso se afirma que podemos hallar la serenidad que únicamente reside en Cristo?",
+      "chunk_index": 138,
+      "char_mid": 134166,
+      "cell_ref": "",
+      "breadcrumb": "EL PRÍNCIPE DE PAZ"
+    },
+    {
+      "question": "¿Qué interrogantes surgen acerca de si las creyentes piadosas del pasado sumisas a sus esposos utilizaban adorno personal o prendas de calidad?",
+      "chunk_index": 381,
+      "char_mid": 358790,
+      "cell_ref": "",
+      "breadcrumb": "IDEAS CORRECTAS"
+    }
+  ],
+  "learned_from": "libros/03-ElFrutoEterno_INT-S.pdf",
+  "learned_at": 1788066112.2071803,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^12/22/12\\\\s+11:57\\\\s+AM$' matches '12/22/12   11:57 AM' on 256 pages, no body hits",
+    "OK  header_patterns: '^El\\\\s+fruto\\\\s+eterno$' matches 'El fruto eterno' on 124 pages, no body hits",
+    "OK  heading_patterns: nivel 1: '^[A-ZÁÉÍÓÚÑ\\\\s]{4,35}$' -> 39 encabezados sin numerar (3.2% de los párrafos)",
+    "OK  heading_guards: the learned pattern explains 39 level-1 headings against 6 numbered lines, so the numbered path is footnote noise here and its sequence is not the signal",
+    "OK  question_pattern: none proposed; defaults apply",
+    "OK  footnote_pattern: none proposed; defaults apply"
+  ],
+  "tuning_history": []
+}

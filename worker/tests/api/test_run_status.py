@@ -138,3 +138,49 @@ def test_the_missing_artifact_error_says_which_workspace_it_looked_in(
     with pytest.raises(ArtifactError) as caught:
         store.resolve(ref)
     assert str(tmp_path) in str(caught.value)
+
+
+# -- whether a run is still going, or what it ended as ----------------------
+#
+# `stage` cannot answer this, and that is the whole defect: a query against a
+# failed workflow hands back the last stage it recorded. Observed 2026-08-28 —
+# an ingest whose activity retries were exhausted reported `"stage": "learning"`
+# indefinitely while `describe().status` already read FAILED.
+
+
+class _Status:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _Described:
+    def __init__(self, status: _Status | None) -> None:
+        self.status = status
+
+
+class _StatusHandle:
+    """A handle whose `describe()` behaves however the test needs it to."""
+
+    def __init__(self, status: _Status | None = None, raises: bool = False) -> None:
+        self._status = status
+        self._raises = raises
+
+    async def describe(self):
+        if self._raises:
+            raise RuntimeError("workflow not found")
+        return _Described(self._status)
+
+
+async def test_a_failed_run_says_so_rather_than_naming_its_last_stage():
+    assert await main._run_state(_StatusHandle(_Status("FAILED"))) == "failed"
+
+
+async def test_a_running_one_is_not_mistaken_for_a_finished_one():
+    assert await main._run_state(_StatusHandle(_Status("RUNNING"))) == "running"
+
+
+async def test_a_run_temporal_has_forgotten_reports_nothing_rather_than_failing():
+    """Retention expiring is ordinary, not an error. The catalog still holds
+    what the run produced, and a status page has to render for it."""
+    assert await main._run_state(_StatusHandle(raises=True)) is None
+    assert await main._run_state(_StatusHandle(status=None)) is None

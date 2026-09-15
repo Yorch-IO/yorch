@@ -172,12 +172,43 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_UI_PUBLIC_PATH: ""
 
+  # Schema ownership, in one place and one step.
+  #
+  # This used to be the API's job: FastAPI applied numbered SQL files in its
+  # lifespan, which is what kept the schema and the code reading it from ever
+  # disagreeing — and it is why `worker` used to wait on `api` being *healthy*,
+  # an odd edge in which a worker waited on an HTTP server to establish a
+  # database fact.
+  #
+  # Two control planes now share this catalog, so exactly one thing may own its
+  # schema: `prisma migrate deploy`, from the backend image, run to completion
+  # before anything that reads the catalog starts. Both planes then only *check*
+  # the version and report it on /health.
+  #
+  # `restart: "no"` because a migration that failed must stay failed and visible.
+  # A restarting migrator retries against a database it may have half-changed.
+  migrate:
+    logging: *logs
+    image: ${BRAIN_BACKEND_IMAGE:-company-brain-backend:dev}
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Prisma reads DATABASE_URL; every other service here reads
+      # BRAIN_DATABASE_URL. Same value, and the only place the two names meet.
+      DATABASE_URL: postgresql://${BRAIN_PG_USER:-brain}:${BRAIN_PG_PASSWORD:-brain}@postgres:5432/brain
+    command: ["npx", "prisma", "migrate", "deploy"]
+
   api:
     logging: *logs
     image: ${BRAIN_WORKER_IMAGE:-company-brain-worker:dev}
     restart: unless-stopped
     command: ["api"]
-    depends_on: *stores
+    depends_on:
+      <<: *stores
+      migrate:
+        condition: service_completed_successfully
     ports:
       # Host port on the left, in-container port on the right. These are named
       # differently on purpose: BRAIN_API_PORT is what uvicorn binds *inside*
@@ -199,6 +230,23 @@ services:
       BRAIN_MEMGRAPH_URL: bolt://memgraph:7687
       BRAIN_DATABASE_URL: postgresql://${BRAIN_PG_USER:-brain}:${BRAIN_PG_PASSWORD:-brain}@postgres:5432/brain
       BRAIN_TASK_QUEUE: brain-ingest
+      # Which queue serves the two activities that talk to YouTube. Empty means
+      # "the same one as everything else", which is what every workstation
+      # wants — a residential address is not the one YouTube refuses.
+      #
+      # **Declared here because `.env` is not container environment.** A value
+      # in `.env` is available to *compose* for `${...}` interpolation and
+      # reaches no container by itself; that is exactly how the first
+      # production deploy shipped a worker that could not name its own
+      # Transcribe bucket while the value sat correctly in `.env`, with nothing
+      # failing. See doc/VIDEO.md.
+      #
+      # It is deliberately **not** in `Stack::write_env`: that writer rewrites
+      # the whole file from a fixed list on every launch, so anything it does
+      # not know is erased — and a workstation has no reason to set this. It
+      # belongs to a hosted deployment, whose `.env` is rendered by
+      # `apply.sh` in the yorch-aws-platform checkout.
+      BRAIN_FETCH_TASK_QUEUE: ${BRAIN_FETCH_TASK_QUEUE:-}
       BRAIN_LOG_LEVEL: ${BRAIN_LOG_LEVEL:-INFO}
       # The Vertex AI billing project. **Not a credential**: a workflow carries
       # only a project id and a model name, and both are safe in a payload that
@@ -224,6 +272,24 @@ services:
       # and it exists to be measured. Compose interpolates at `up` time, so
       # changing it needs the service recreated.
       BRAIN_MAX_GLEANING: ${BRAIN_MAX_GLEANING:-}
+      # Amazon Transcribe, for the video path. **Not credentials**: on the EC2
+      # host boto3 picks up the instance role through IMDS, which the instance's
+      # `http_put_response_hop_limit = 2` already lets a container reach.
+      #
+      # These have to be listed here and not only written into `.env`. A
+      # variable in `.env` is available to *compose* for `${...}` interpolation
+      # and reaches no container by itself — which is exactly how the first real
+      # deploy shipped a worker that could not name its own bucket while the
+      # value sat correctly in `.env` two directories away.
+      #
+      # Empty is meaningful, like `BRAIN_GEMINI_PROJECT_ID` above:
+      # `Aws.configured` is `bool(region and bucket)`, so an unset pair makes
+      # the gate refuse to quote a transcription rather than failing forty
+      # minutes into a run somebody approved.
+      BRAIN_AWS_REGION: ${BRAIN_AWS_REGION:-}
+      BRAIN_TRANSCRIBE_BUCKET: ${BRAIN_TRANSCRIBE_BUCKET:-}
+      BRAIN_TRANSCRIBE_PREFIX: ${BRAIN_TRANSCRIBE_PREFIX:-}
+      BRAIN_TRANSCRIBE_USD_PER_MINUTE: ${BRAIN_TRANSCRIBE_USD_PER_MINUTE:-}
     volumes:
       - ${BRAIN_WORKSPACE:-./workspace}:/workspace
       # Provider API keys. Written 0600 by the app from the OS keychain and
@@ -244,18 +310,17 @@ services:
     command: ["worker"]
     depends_on:
       <<: *stores
-      # The one dependency that was missing. `api` applies the catalog
-      # migrations in its lifespan, before it serves — that is what keeps the
-      # schema and the code that reads it from ever disagreeing. The worker
-      # writes artifacts and costs to that same catalog and migrates nothing, so
-      # starting the two in parallel let a worker reach an unmigrated schema.
+      # The worker writes artifacts and costs to the catalog and migrates
+      # nothing, so it must not start against an unmigrated schema. It used to
+      # wait on `api` being healthy, because the API was what applied the
+      # migrations; now it waits on the thing that actually applies them.
       #
       # The coupling is startup-only, which is the right amount: `depends_on`
       # says nothing about a later outage, and bookkeeping writes are
-      # best-effort by design, so an API that dies afterwards must not and does
-      # not stop the worker.
-      api:
-        condition: service_healthy
+      # best-effort by design, so a control plane that dies afterwards must not
+      # and does not stop the worker.
+      migrate:
+        condition: service_completed_successfully
     environment: *worker-env
     # Correction and embedding activities run for minutes. Docker's default
     # SIGKILL at 10s turns a stack restart into an abandoned activity that
@@ -264,6 +329,92 @@ services:
     volumes:
       - ${BRAIN_WORKSPACE:-./workspace}:/workspace
       - ${BRAIN_SECRETS_FILE:-./secrets.env}:/run/secrets/providers.env:ro
+
+  # The paid, multi-tenant control plane. Behind a profile, because a free
+  # self-managed stack has no tenants, no Cognito pool and no reason to run it:
+  #     docker compose --profile paid up -d backend
+  #
+  # It deliberately has no fallback for the Cognito settings. An unset pool id
+  # must stop the process at boot with a message naming the variable, not
+  # surface later as a 401 that reads like a signing problem.
+  backend:
+    profiles: ["paid"]
+    logging: *logs
+    image: ${BRAIN_BACKEND_IMAGE:-company-brain-backend:dev}
+    restart: unless-stopped
+    depends_on:
+      <<: *stores
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${BRAIN_BACKEND_HOST_PORT:-8788}:8000"
+    environment:
+      BRAIN_API_HOST: 0.0.0.0
+      BRAIN_BACKEND_PORT: 8000
+      BRAIN_WORKSPACE_DIR: /workspace
+      BRAIN_TEMPORAL_TARGET: temporal:7233
+      BRAIN_TEMPORAL_NAMESPACE: default
+      BRAIN_TASK_QUEUE: brain-ingest
+      # See the note on this variable in the worker's block above.
+      BRAIN_FETCH_TASK_QUEUE: ${BRAIN_FETCH_TASK_QUEUE:-}
+      BRAIN_QDRANT_URL: http://qdrant:6333
+      BRAIN_MEMGRAPH_URL: bolt://memgraph:7687
+      BRAIN_DATABASE_URL: postgresql://${BRAIN_PG_USER:-brain}:${BRAIN_PG_PASSWORD:-brain}@postgres:5432/brain
+      BRAIN_GEMINI_PROJECT_ID: ${BRAIN_GEMINI_PROJECT_ID:-}
+      BRAIN_LOG_LEVEL: ${BRAIN_LOG_LEVEL:-INFO}
+      # The OpenAPI page, off unless the operator asks for it by name.
+      #
+      # It used to be forced on by `docker-compose.dev.yaml`, which is the
+      # overlay a developer and the pre-production stack both apply — so `/docs`
+      # answered 200 unauthenticated on 8788 to whoever found the port, listing
+      # every path, every field and every error kind of a multi-tenant API.
+      # Passed through here instead, so `BRAIN_DOCS=on` in the environment still
+      # turns it on for one stack, deliberately, rather than for every stack by
+      # default. Empty is unset: `env.ts` treats it that way and falls back off.
+      BRAIN_DOCS: ${BRAIN_DOCS:-}
+    # The Cognito pool, in a file of its own rather than in `.env`.
+    #
+    # `.env` is not a place to put anything: the desktop app rewrites it whole
+    # on every launch (`app/src-tauri/src/stack.rs:170` builds the body from
+    # scratch), which is what its first line warns about. A pool id added there
+    # survives until the next time somebody opens the app.
+    #
+    # These are pool identifiers, not credentials — they identify a pool, they
+    # do not authorize anything — so the file is unencrypted and read with
+    # `terraform -chdir=envs/prod output -raw brain_cognito_user_pool_id` in
+    # yorch-aws-platform. See cognito.env.example.
+    #
+    # `required: false` so a free-mode stack, which never starts this service,
+    # does not need the file to exist. When it is missing and the service *is*
+    # started, the process refuses to boot and names the variables it wanted —
+    # which is a better failure than a 401 that reads like a signing problem.
+    env_file:
+      - path: ${BRAIN_COGNITO_ENV_FILE:-./cognito.env}
+        required: false
+    volumes:
+      # Read-only over the volume as a whole: this plane reads artifacts (a
+      # run's `semantics.json`, whether a rebuild's inputs are still on disk)
+      # and writes nothing there. Every write to `runs/`, `cache/` and
+      # `profiles/` happens in an activity.
+      - ${BRAIN_WORKSPACE:-./workspace}:/workspace:ro
+      # …and writable over `tenants/` alone, which is the one thing it does
+      # write: an uploaded file has to land somewhere before `/ingest` can name
+      # it, and it cannot travel through Temporal — a payload caps around 2 MB
+      # and history persists for the whole retention period, so a PDF in one is
+      # both impossible and permanent.
+      #
+      # A second, narrower mount rather than opening the first, so the boundary
+      # is enforced by the kernel and not only by `Paths.contains`. The legacy
+      # tenant's tree is the volume root, which this mount does not cover — so
+      # the plane that serves paying organisations cannot write into the corpus
+      # that predates them even if the code tried.
+      - ${BRAIN_WORKSPACE:-./workspace}/tenants:/workspace/tenants:rw
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8000/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
 volumes:
   qdrant-storage:

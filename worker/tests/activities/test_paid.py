@@ -17,7 +17,15 @@ import pytest
 
 from brainworker.activities import paid
 from brainworker.graph.schema import chunk_id as make_chunk_id
-from brainworker.pipeline import Chunked, Extraction, Registered, Staged
+from brainworker.artifacts import ArtifactRef, ArtifactStore
+from brainworker.pipeline import (
+    Chunked,
+    Extraction,
+    ProfileDecision,
+    Registered,
+    Scores,
+    Staged,
+)
 from brainworker.providers.gemini import Embedding, Generation, Usage
 
 DIMS = 3072
@@ -224,6 +232,88 @@ def qdrant(monkeypatch: pytest.MonkeyPatch):
             q.drop()
 
 
+async def test_a_shrinking_reindex_leaves_no_orphan_points(
+    workspace: pathlib.Path, provider: FakeProvider, qdrant: str
+):
+    """The defect nothing in this repository closed before.
+
+    `upsert` overwrites only the ids the new run produced. Point ids are
+    deterministic in the chunk index, so a re-index that yields *fewer* chunks
+    than the last one leaves the previous chunking's tail alive — carrying
+    `char_span`s into a byte stream nothing holds any more, and competing in
+    ranking with the chunks that replaced it.
+
+    Observed for the CLI on `07-LlavesDelPoder-INT.pdf` after a rejected
+    625-chunk tuning candidate left ids 502..624 behind. Nothing here needs a
+    tuning candidate to reach it: a corrected profile that chunks more coarsely
+    is enough, and `removal.py` — the only other delete in this package — removes
+    a whole version, never a tail.
+    """
+    from docagent.qdrant import Qdrant
+
+    registered, staged = _ids()
+    collection = os.environ["BRAIN_QDRANT_COLLECTION"]
+
+    await paid.embed_and_index(
+        "run_long", "lib_t", registered, staged, _chunked(workspace, "run_long", 10)
+    )
+    with Qdrant(qdrant, collection) as q:
+        assert q.count({"version_id": registered.version_id}) == 10
+
+    # Same document, same version, fewer chunks.
+    result = await paid.embed_and_index(
+        "run_short", "lib_t", registered, staged, _chunked(workspace, "run_short", 6)
+    )
+
+    assert result.points == 6
+    with Qdrant(qdrant, collection) as q:
+        assert q.count({"version_id": registered.version_id}) == 6, (
+            "the tail of the longer chunking survived"
+        )
+
+
+async def test_pruning_only_touches_this_version(
+    workspace: pathlib.Path, provider: FakeProvider, qdrant: str
+):
+    """The tail delete is scoped, or a short re-index of one book would delete
+    the back of every other book in the collection."""
+    from docagent.qdrant import Qdrant
+
+    mine, staged = _ids()
+    theirs, other_staged = _ids()
+    collection = os.environ["BRAIN_QDRANT_COLLECTION"]
+
+    await paid.embed_and_index("r1", "lib_t", mine, staged, _chunked(workspace, "r1", 8))
+    await paid.embed_and_index(
+        "r2", "lib_t", theirs, other_staged, _chunked(workspace, "r2", 8)
+    )
+    await paid.embed_and_index("r3", "lib_t", mine, staged, _chunked(workspace, "r3", 2))
+
+    with Qdrant(qdrant, collection) as q:
+        assert q.count({"version_id": mine.version_id}) == 2
+        assert q.count({"version_id": theirs.version_id}) == 8
+
+
+async def test_a_retry_does_not_re_embed_what_it_already_paid_for(
+    workspace: pathlib.Path, provider: FakeProvider, qdrant: str
+):
+    """Paid activities get two Temporal attempts, and each attempt runs the whole
+    stage. Without a cache the second one re-pays for every vector of the first —
+    and the scarce resource is the per-minute embedding quota, not the money, so
+    re-spending it arrives back at the same wall for ever.
+    """
+    registered, staged = _ids()
+    chunked = _chunked(workspace, "run_cache", 5)
+
+    await paid.embed_and_index("run_cache", "lib_t", registered, staged, chunked)
+    assert sum(len(c) for c in provider.embed_calls) == 5
+
+    provider.embed_calls.clear()
+    await paid.embed_and_index("run_cache", "lib_t", registered, staged, chunked)
+
+    assert provider.embed_calls == [], "it re-embedded text it already had"
+
+
 async def test_indexing_writes_points_whose_ids_come_from_the_content(
     workspace: pathlib.Path, provider: FakeProvider, qdrant: str
 ):
@@ -325,10 +415,17 @@ async def test_every_semantic_edge_is_attributed_to_the_chunk_that_produced_it(
         def __enter__(self): return self
         def __exit__(self, *a): return None
         def ensure_schema(self): pass
+        # Graph-shaped rather than stubbed away: `prune_semantics` runs for
+        # real against this and takes its early return, so an arity or a name
+        # it got wrong still fails here. Stubbing the function out instead is
+        # how `_condense_descriptions` kept four green tests over a call that
+        # would have raised the first time it ran.
+        def write(self, *a, **k): return []
+        def write_many(self, *a, **k): return None
 
     monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
-    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c: captured.setdefault("concepts", c) and 0 or len(c))
-    monkeypatch.setattr(paid.proj, "project_claims", lambda g, c: captured.setdefault("claims", c) and 0 or len(c))
+    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c, **k: captured.setdefault("concepts", c) and 0 or len(c))
+    monkeypatch.setattr(paid.proj, "project_claims", lambda g, c, **k: captured.setdefault("claims", c) and 0 or len(c))
     monkeypatch.setattr(paid.proj, "project_semantic_edges",
                         lambda g, e: captured.setdefault("edges", e) and 0 or len(e))
 
@@ -348,6 +445,94 @@ async def test_every_semantic_edge_is_attributed_to_the_chunk_that_produced_it(
     }
 
 
+async def test_extraction_leaves_the_event_loop_free_to_heartbeat(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The heartbeat this stage sends is only *recorded* by `activity.heartbeat`;
+    the activity's own event loop is what flushes it to the server, and Temporal
+    fails an attempt that goes quiet for `PAID_HEARTBEAT_TIMEOUT`.
+
+    So a synchronous generation call left inline is not merely slow. It holds the
+    worker's only event loop for the whole document — no heartbeat sent, no
+    workflow task processed, no query answered — and the timeout then fires on an
+    activity that is working perfectly. Measured 2026-08-31 on
+    `ver_0b71d21eeb3228f54437d9cf`, 600 chunks: the loop was held 50 minutes, and
+    both attempts ran every call, projected, and billed ~$4.72 each into a slot
+    Temporal had already failed. $9.45, and the run ended `failed`.
+
+    Nothing else in this suite can see that, because every other test calls these
+    as plain functions where blocking is invisible. This one measures the loop:
+    a ticker that has to get a turn while extraction is in flight. Inline, it
+    gets none and stops at zero.
+    """
+    import asyncio
+    import json
+    import time
+
+    #: Long enough that a blocked loop cannot hide behind scheduling noise,
+    #: short enough that four of them stay a fast test.
+    CALL = 0.02
+    TICK = 0.002
+
+    class SlowProvider(FakeProvider):
+        """Synchronous and slow, like the real one. `_extract_passes` is not a
+        coroutine, and that is the property under test."""
+
+        def generate(self, prompt, **kw):
+            time.sleep(CALL)
+            return super().generate(prompt, **kw)
+
+    fake = SlowProvider(semantics=json.dumps({
+        "conceptos": [{"nombre": "Providencia", "tipo": "doctrina", "confianza": 0.9}],
+        "afirmaciones": [],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    class FakeGraph:
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+        def ensure_schema(self): pass
+        # Graph-shaped rather than stubbed away: `prune_semantics` runs for
+        # real against this and takes its early return, so an arity or a name
+        # it got wrong still fails here. Stubbing the function out instead is
+        # how `_condense_descriptions` kept four green tests over a call that
+        # would have raised the first time it ran.
+        def write(self, *a, **k): return []
+        def write_many(self, *a, **k): return None
+
+    monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
+    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c, **k: len(c))
+    monkeypatch.setattr(paid.proj, "project_claims", lambda g, c, **k: len(c))
+    monkeypatch.setattr(paid.proj, "project_semantic_edges", lambda g, e: len(e))
+
+    ticks = 0
+
+    async def heartbeat_loop() -> None:
+        """Stands in for everything the loop owes while a chunk is in flight."""
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(TICK)
+            ticks += 1
+
+    registered, _ = _ids()
+    chunked = _chunked(workspace, "run_beat", 4)
+
+    beating = asyncio.create_task(heartbeat_loop())
+    try:
+        await paid.extract_semantics("run_beat", registered, chunked)
+    finally:
+        # Cancelled with no await in between, so a tick counted below is one that
+        # happened *during* extraction rather than after it returned.
+        beating.cancel()
+
+    assert len(fake.generate_calls) == 4, "one call per chunk, as always"
+    assert ticks >= 4, (
+        f"the event loop got {ticks} turn(s) across 4 blocking calls: the "
+        "extraction is holding it, so no heartbeat can be flushed and Temporal "
+        "will fail this attempt while it is still working"
+    )
+
+
 async def test_one_unparseable_chunk_does_not_lose_the_whole_document(
     workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -360,10 +545,17 @@ async def test_one_unparseable_chunk_does_not_lose_the_whole_document(
         def __enter__(self): return self
         def __exit__(self, *a): return None
         def ensure_schema(self): pass
+        # Graph-shaped rather than stubbed away: `prune_semantics` runs for
+        # real against this and takes its early return, so an arity or a name
+        # it got wrong still fails here. Stubbing the function out instead is
+        # how `_condense_descriptions` kept four green tests over a call that
+        # would have raised the first time it ran.
+        def write(self, *a, **k): return []
+        def write_many(self, *a, **k): return None
 
     monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
-    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c: len(c))
-    monkeypatch.setattr(paid.proj, "project_claims", lambda g, c: len(c))
+    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c, **k: len(c))
+    monkeypatch.setattr(paid.proj, "project_claims", lambda g, c, **k: len(c))
     monkeypatch.setattr(paid.proj, "project_semantic_edges", lambda g, e: len(e))
 
     registered, _ = _ids()
@@ -381,12 +573,19 @@ def _fake_graph(monkeypatch: pytest.MonkeyPatch) -> dict:
         def __enter__(self): return self
         def __exit__(self, *a): return None
         def ensure_schema(self): pass
+        # Graph-shaped rather than stubbed away: `prune_semantics` runs for
+        # real against this and takes its early return, so an arity or a name
+        # it got wrong still fails here. Stubbing the function out instead is
+        # how `_condense_descriptions` kept four green tests over a call that
+        # would have raised the first time it ran.
+        def write(self, *a, **k): return []
+        def write_many(self, *a, **k): return None
 
     monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
     monkeypatch.setattr(paid.proj, "project_concepts",
-                        lambda g, c: captured.setdefault("concepts", c) and 0 or len(c))
+                        lambda g, c, **k: captured.setdefault("concepts", c) and 0 or len(c))
     monkeypatch.setattr(paid.proj, "project_claims",
-                        lambda g, c: captured.setdefault("claims", c) and 0 or len(c))
+                        lambda g, c, **k: captured.setdefault("claims", c) and 0 or len(c))
     monkeypatch.setattr(paid.proj, "project_semantic_edges",
                         lambda g, e: captured.setdefault("edges", e) and 0 or len(e))
     return captured
@@ -426,9 +625,92 @@ async def test_a_quote_is_located_in_the_document_spelling_not_the_models(
     claim = captured["claims"][0]
     assert claim["quote"] == "sobre el conocimiento", "the document's spelling wins"
     text = "Párrafo número 0 sobre el conocimiento de Dios."
-    assert claim["quote_char_start"] == text.index("sobre el conocimiento")
-    assert claim["quote_char_end"] == claim["quote_char_start"] + len(claim["quote"])
+    # **Bytes, not characters.** This assertion used to read
+    # `text.index("sobre el conocimiento")`, which is 17 — and the two accents
+    # in "Párrafo número" make the byte offset 19. It agreed with the code and
+    # both were wrong: measured over the nine runs in this workspace that carry
+    # quote spans, 295 of 13,966 stored spans (2.1%) resolved to their own
+    # quote, while the chunks' own `char_span`s verified 100% against the same
+    # stream. The span is what would take a reader to the sentence, so a
+    # character index here points into the middle of a different word.
+    start = len(text[: text.index("sobre el conocimiento")].encode("utf-8"))
+    assert start == 19, "two accents before the quote, so bytes and characters differ"
+    assert claim["quote_char_start"] == start
+    assert claim["quote_char_end"] == start + len(claim["quote"].encode("utf-8"))
     assert result.claims == 1 and result.claims_verified == 1
+
+
+async def test_two_claims_quoting_one_sentence_both_survive(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The pair the `status` field exists for.
+
+    A text expounding the doctrine it is about to rebut enunciates it in the
+    same words as one who holds it, so `afirma` and `niega` can honestly cite
+    the same sentence. The span dedup is there to stop a *gleaning* pass
+    restating ground an earlier pass covered; applied inside a single pass it
+    silently kept whichever claim came first — and with `max_gleaning` at 0
+    there is only ever one pass, so that was its only effect.
+    """
+    import json as _json
+
+    both = _json.dumps({
+        "conceptos": [{"nombre": "Providencia", "tipo": "doctrina", "confianza": 0.9}],
+        "afirmaciones": [
+            {"texto": "El documento sostiene que Dios se puede conocer.",
+             "concepto": "Providencia", "confianza": 0.8, "estado": "afirma",
+             "cita": "sobre el conocimiento de Dios"},
+            {"texto": "Otros niegan que Dios se pueda conocer.",
+             "concepto": "Providencia", "confianza": 0.8, "estado": "niega",
+             "cita": "sobre el conocimiento de Dios"},
+        ],
+    }, ensure_ascii=False)
+    monkeypatch.setattr(paid, "_provider", lambda: FakeProvider(semantics=both))
+    captured = _fake_graph(monkeypatch)
+
+    registered, _ = _ids()
+    result = await paid.extract_semantics(
+        "run_q3", registered, _chunked(workspace, "run_q3", 1)
+    )
+
+    assert result.claims == 2, [c["text"] for c in captured["claims"]]
+    assert {c["status"] for c in captured["claims"]} == {"afirma", "niega"}
+    starts = {c["quote_char_start"] for c in captured["claims"]}
+    assert len(starts) == 1, "they really do cite the same span"
+
+
+async def test_two_spellings_of_one_concept_are_one_row(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`project_concepts` derives the node id from `canonical_concept`, so
+    accumulating under the raw spelling sent two `UNWIND` rows for one node and
+    `SET k.type = row.type` let the last one win — including when the last one
+    is a claim's subject, which carries no type at all. Measured over the 40
+    semantics artifacts in this workspace: 1,169 groups of rows share a
+    canonical key, 1,199 rows more than there are nodes.
+    """
+    import json as _json
+
+    doubled = _json.dumps({
+        "conceptos": [
+            {"nombre": "Cuerpo", "tipo": "Estructura", "confianza": 0.9},
+            {"nombre": "cuerpo", "confianza": 0.8},
+        ],
+        "afirmaciones": [
+            {"texto": "El texto trata del cuerpo.", "concepto": "cuerpo",
+             "confianza": 0.7, "cita": "sobre el conocimiento"},
+        ],
+    }, ensure_ascii=False)
+    monkeypatch.setattr(paid, "_provider", lambda: FakeProvider(semantics=doubled))
+    captured = _fake_graph(monkeypatch)
+
+    registered, _ = _ids()
+    result = await paid.extract_semantics(
+        "run_q4", registered, _chunked(workspace, "run_q4", 1)
+    )
+
+    assert result.concepts == 1, [c["name"] for c in captured["concepts"]]
+    assert captured["concepts"][0]["type"] == "Estructura", "a known type is not wiped"
 
 
 async def test_a_quote_the_chunk_does_not_contain_costs_the_span_not_the_claim(
@@ -824,3 +1106,517 @@ async def test_a_claim_relating_a_concept_to_itself_projects_no_second_edge(
         "run_r2", registered, _chunked(workspace, "run_r2", 1)
     )
     assert [e.type for e in captured["edges"]] == ["ABOUT"]
+
+
+# -- measuring the index ----------------------------------------------------
+
+
+class EvalProvider:
+    """Generates one question per call and embeds deterministically."""
+
+    def __init__(self) -> None:
+        self.generate_calls: list[str] = []
+        self.embed_calls: list[list[str]] = []
+
+    def generate(self, prompt, *, system=None, temperature=0.0,
+                 max_output_tokens=None, response_schema=None, stage=None):
+        import json
+
+        self.generate_calls.append(prompt)
+        payload = json.loads(prompt)
+        # The question names the chunk it came from, which is what makes
+        # retrieval deterministic below without a real embedding model.
+        return Generation(
+            text=json.dumps(
+                {
+                    "question": f"¿Qué dice el fragmento {payload['fragmento_principal'][:40]!r}?",
+                    "answerable_only_by_main": True,
+                }
+            ),
+            usage=Usage(input_tokens=800, output_tokens=60, calls=1),
+        )
+
+    def embed(self, texts, *, task, workers=6):
+        self.embed_calls.append(list(texts))
+        return [
+            Embedding(values=[0.01] * DIMS, usage=Usage(input_tokens=10)) for _ in texts
+        ]
+
+
+def _profile(workspace: pathlib.Path, *, learned_from: str, questions: int = 2):
+    """A profile on disk for the legacy tenant, with an eval set already in it."""
+    from docagent.profiles import EvalItem, Profile
+
+    root = workspace / "profiles"
+    p = Profile(
+        fingerprint="fp_shared",
+        slug="una-familia-fp_share",
+        extractor="plain",
+        learned_from=learned_from,
+        learned_at=1.0,
+        evalset=[
+            EvalItem(question=f"heredada {i}", chunk_index=i, char_mid=-1)
+            for i in range(questions)
+        ],
+    )
+    p.save(root)
+    return p
+
+
+def _extraction(source_key: str) -> Extraction:
+    ref = ArtifactRef(kind="raw_text", path="runs/x/raw.txt", sha256="a" * 64, bytes=1)
+    ev_ref = ArtifactRef(kind="evidence", path="runs/x/evidence.json",
+                         sha256="b" * 64, bytes=1)
+    return Extraction(
+        text=ref, evidence=ev_ref, extractor="plain", source_key=source_key
+    )
+
+
+async def test_a_reused_profile_does_not_score_against_another_book(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The failure `doc/CLAUDE.md` records, carried across the boundary.
+
+    The fingerprint groups by *structure*, and structure is not subject matter: a
+    hermeneutics chapter and a church-history book landed on one fingerprint on
+    the real corpus. Scoring book B against book A's questions produced a recall
+    of 0 that said nothing about either index. The engine drops an inherited eval
+    set when `learned_from` names a different file; if this side did not, the fix
+    would simply not travel.
+    """
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    _profile(workspace, learned_from="libros/otro-libro.pdf")
+
+    result = await paid.build_evalset(
+        "run_drop",
+        _extraction("libros/este-libro.pdf"),
+        _chunked(workspace, "run_drop", 3),
+        ProfileDecision(fingerprint="fp_shared", source="reused"),
+    )
+
+    assert result.reused is False, "it scored this book with another book's questions"
+    assert fake.generate_calls, "it neither reused nor generated"
+    assert result.questions == 3
+
+
+async def test_this_documents_own_questions_are_reused_and_cost_nothing(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Regenerating them would measure the questions instead of the change, which
+    is the whole reason the engine keeps them in the profile."""
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    _profile(workspace, learned_from="libros/este-libro.pdf", questions=2)
+
+    result = await paid.build_evalset(
+        "run_reuse",
+        _extraction("libros/este-libro.pdf"),
+        _chunked(workspace, "run_reuse", 3),
+        ProfileDecision(fingerprint="fp_shared", source="reused"),
+    )
+
+    assert result.reused is True
+    assert result.questions == 2
+    assert fake.generate_calls == [], "it re-paid for questions it already had"
+
+
+async def test_the_measurement_is_scoped_to_the_version_it_just_wrote(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch, qdrant: str
+):
+    """Two documents, one collection. A measurement with no scope searches the
+    whole shelf and reports a figure about the corpus as if it were about this
+    document."""
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    mine, staged = _ids()
+    theirs, other_staged = _ids()
+    await paid.embed_and_index("m", "lib_t", mine, staged, _chunked(workspace, "m", 4))
+    await paid.embed_and_index(
+        "t", "lib_t", theirs, other_staged, _chunked(workspace, "t", 4)
+    )
+
+    chunked = _chunked(workspace, "ev", 4)
+    evalset = await paid.build_evalset(
+        "ev", _extraction("libros/mio.pdf"), chunked, ProfileDecision(fingerprint="fp_x")
+    )
+    scores = await paid.evaluate_index(
+        "ev", mine, chunked, evalset, ProfileDecision(fingerprint="fp_x")
+    )
+
+    report = ArtifactStore(workspace, "ev").read_json(scores.report)
+    assert report["scope"] == {
+        "tenant_id": mine.tenant_id,
+        "version_id": mine.version_id,
+    }
+    assert scores.eval_questions == evalset.questions
+    # Both legs ran, or the leakage the questions introduce stays invisible.
+    assert scores.leakage
+
+
+async def test_the_scores_are_written_back_into_the_family_profile(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The artifact is the authority; the profile's copy is what lets a family
+    accumulate measurement across documents."""
+    from docagent import profiles as engine_profiles
+
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    before = _profile(workspace, learned_from="libros/este-libro.pdf")
+
+    extraction = _extraction("libros/este-libro.pdf")
+    decision = ProfileDecision(fingerprint="fp_shared", slug=before.slug, source="reused")
+    evalset = await paid.build_evalset(
+        "run_p", extraction, _chunked(workspace, "run_p", 3), decision
+    )
+    scores = Scores(
+        recall_at_1=0.5, recall_at_5=0.9, mrr_at_10=0.7,
+        recall_at_5_dense_only=0.85, noise_floor=0.58, chunks=3, eval_questions=2,
+    )
+
+    assert await paid.persist_profile_scores("run_p", extraction, decision, evalset, scores)
+
+    after = engine_profiles.load("fp_shared", workspace / "profiles")
+    assert after.scores.recall_at_5 == 0.9
+    assert after.revisions == before.revisions + 1
+    assert after.learned_from == "libros/este-libro.pdf"
+
+
+async def test_a_document_with_no_profile_keeps_its_scores_in_the_artifact(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A document indexed with the measured defaults has no file of its own.
+    That is an ordinary outcome, and reporting it as a successful write would be
+    a lie about where the numbers went."""
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    extraction = _extraction("libros/sin-perfil.pdf")
+    decision = ProfileDecision(fingerprint="fp_nadie", source="default")
+    evalset = await paid.build_evalset(
+        "run_np", extraction, _chunked(workspace, "run_np", 2), decision
+    )
+
+    wrote = await paid.persist_profile_scores(
+        "run_np", extraction, decision, evalset, Scores(chunks=2)
+    )
+    assert wrote is False
+
+
+async def test_a_measurement_keeps_the_ranks_its_own_margin_is_resampled_from(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch, qdrant: str
+):
+    """The bootstrap margin a tuning candidate must beat is resampled from the
+    reciprocal rank of every question, and that vector cannot be rebuilt from
+    `Scores`.
+
+    Deriving it from the mean was tried: on a realistic 40-question run it gave
+    ±0.040 where the true margin is ±0.062, because a flat vector has none of the
+    spread that ranks of 1, ½, ⅓, ¼ carry. **35% too small, in the direction that
+    accepts noise as a real gain** — which is the one thing the margin exists to
+    prevent.
+    """
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    registered, staged = _ids()
+    chunked = _chunked(workspace, "ranks", 4)
+    await paid.embed_and_index("ranks", "lib_t", registered, staged, chunked)
+    evalset = await paid.build_evalset(
+        "ranks", _extraction("libros/x.pdf"), chunked, ProfileDecision(fingerprint="fp")
+    )
+    scores = await paid.evaluate_index(
+        "ranks", registered, chunked, evalset, ProfileDecision(fingerprint="fp")
+    )
+
+    report = ArtifactStore(workspace, "ranks").read_json(scores.report)
+    assert len(report["reciprocal_ranks"]) == scores.eval_questions
+
+    run = paid._baseline_from(ArtifactStore(workspace, "ranks"), scores)
+    assert run is not None
+    assert run.rr_vector() == report["reciprocal_ranks"]
+
+
+async def test_tuning_declines_rather_than_inventing_a_margin(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A report written before the ranks were kept has no margin in it. A round
+    that cannot compute its own threshold would adopt a candidate for having been
+    tried, so it declines instead."""
+    from brainworker.pipeline import Scores as PipelineScores
+
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    store = ArtifactStore(workspace, "old")
+    ref = store.write_json("scores", {"scores": {"eval_questions": 40}, "misses": []})
+
+    outcome = await paid.propose_tuning(
+        "old",
+        _ids()[0],
+        _chunked(workspace, "old", 3),
+        await paid.build_evalset(
+            "old", _extraction("libros/x.pdf"), _chunked(workspace, "old", 3),
+            ProfileDecision(fingerprint="fp"),
+        ),
+        ProfileDecision(fingerprint="fp"),
+        PipelineScores(eval_questions=40, mrr_at_10=0.7, report=ref),
+    )
+
+    assert outcome.kind == "none"
+
+
+async def test_a_candidates_measurement_is_kept_apart_from_the_baselines(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch, qdrant: str
+):
+    """One run measures twice, and the two must not land on one artifact.
+
+    Found by running a real tuning round: both evaluations wrote `scores.json`,
+    so a candidate that was measured and then reverted left the run describing an
+    index that had already been thrown away — 676 chunks in the artifact against
+    600 in the collection and in `chunks.jsonl`. `/runs/{id}` reads that
+    artifact, so the product would have reported a recall for an index nobody
+    could query.
+    """
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    registered, staged = _ids()
+    decision = ProfileDecision(fingerprint="fp")
+
+    baseline_chunks = _chunked(workspace, "two", 4)
+    await paid.embed_and_index("two", "lib_t", registered, staged, baseline_chunks)
+    evalset = await paid.build_evalset(
+        "two", _extraction("libros/x.pdf"), baseline_chunks, decision
+    )
+
+    baseline = await paid.evaluate_index(
+        "two", registered, baseline_chunks, evalset, decision
+    )
+    candidate_chunks = _chunked(workspace, "two", 6)
+    candidate = await paid.evaluate_index(
+        "two", registered, candidate_chunks, evalset, decision, "scores_candidate"
+    )
+
+    assert baseline.report.kind == "scores"
+    assert candidate.report.kind == "scores_candidate"
+    assert baseline.report.path != candidate.report.path
+
+    store = ArtifactStore(workspace, "two")
+    assert store.read_json(baseline.report)["scores"]["chunks"] == 4, (
+        "the candidate overwrote the baseline's measurement"
+    )
+    assert store.read_json(candidate.report)["scores"]["chunks"] == 6
+
+
+async def test_a_kept_candidate_is_promoted_over_the_baseline(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch, qdrant: str
+):
+    """When it wins, its measurement is the one describing the index that
+    stands, so `scores` has to become it."""
+    fake = EvalProvider()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+    registered, staged = _ids()
+    decision = ProfileDecision(fingerprint="fp")
+
+    chunks = _chunked(workspace, "promo", 4)
+    await paid.embed_and_index("promo", "lib_t", registered, staged, chunks)
+    evalset = await paid.build_evalset(
+        "promo", _extraction("libros/x.pdf"), chunks, decision
+    )
+    await paid.evaluate_index("promo", registered, chunks, evalset, decision)
+    candidate = await paid.evaluate_index(
+        "promo", registered, _chunked(workspace, "promo", 7), evalset, decision,
+        "scores_candidate",
+    )
+
+    promoted = await paid.promote_candidate_scores("promo", candidate)
+
+    assert promoted.report.kind == "scores"
+    store = ArtifactStore(workspace, "promo")
+    assert store.read_json(promoted.report)["scores"]["chunks"] == 7
+
+
+# -- every paid stage must leave the event loop free ------------------------
+#
+# `test_extraction_leaves_the_event_loop_free_to_heartbeat` above states the
+# mechanism and what it cost: $9.45 billed twice into an attempt Temporal had
+# already closed. That fix reached exactly one activity, and on 2026-09-03 the
+# same shape surfaced live in two more. An import's `embed_and_index` held the
+# loop; a question asked 48 seconds later logged a `WORKFLOW_TASK_TIMED_OUT`,
+# could not be queried at all, and the app rendered "the control API did not
+# answer" over an API replying in under a millisecond. The paid plane collects
+# an answer with a Temporal *query*, which the blocked worker could not serve.
+#
+# So the property is asserted per stage rather than once: each of these fails if
+# its own `await asyncio.to_thread` is removed.
+
+#: Long enough that a blocked loop cannot hide behind scheduling noise, short
+#: enough to keep these fast. Same figures as the extraction test above.
+_CALL = 0.02
+_TICK = 0.002
+
+
+async def _ticks_during(coro) -> tuple[object, int]:
+    """Run `coro`, counting the turns the event loop got while it ran.
+
+    A blocked loop gives the ticker none. The ticker is cancelled with no await
+    in between, so every tick counted happened *during* the call.
+    """
+    import asyncio
+
+    ticks = 0
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(_TICK)
+            ticks += 1
+
+    beating = asyncio.create_task(ticker())
+    try:
+        result = await coro
+    finally:
+        beating.cancel()
+    return result, ticks
+
+
+class _SlowGenerating(FakeProvider):
+    """Synchronous and slow, like the real provider. The engine's `propose`,
+    `correct_paragraphs` and `build_evalset` are all plain functions, and that
+    is the property under test."""
+
+    def generate(self, prompt, **kw):
+        import time
+
+        time.sleep(_CALL)
+        return super().generate(prompt, **kw)
+
+
+async def test_correction_leaves_the_event_loop_free(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The longest stage in the pipeline: 19 sequential batches on a real book,
+    tens of minutes, every one of them a minute the worker owed everything else."""
+    fake = _SlowGenerating()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    extraction = _raw(workspace, "run_beat_c", TEXTO)
+    result, ticks = await _ticks_during(paid.correct_text("run_beat_c", extraction))
+
+    assert result.paragraphs == 2
+    assert fake.generate_calls, "the stage really did call the model"
+    assert ticks >= 2, (
+        f"the event loop got {ticks} turn(s) while correcting: the call is "
+        "holding it, so no other workflow on this worker can make progress"
+    )
+
+
+async def test_embedding_leaves_the_event_loop_free(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch, qdrant: str
+):
+    """The stage that was holding the loop when a real question went
+    unanswerable. `index_chunks` is a plain function and embeds every chunk."""
+    import time
+
+    class SlowEmbedding(FakeProvider):
+        def embed(self, texts, *, task, workers=6):
+            time.sleep(_CALL)
+            return super().embed(texts, task=task, workers=workers)
+
+    fake = SlowEmbedding()
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    registered, staged = _ids()
+    result, ticks = await _ticks_during(
+        paid.embed_and_index(
+            "run_beat_e", "lib_t", registered, staged,
+            _chunked(workspace, "run_beat_e", 4),
+        )
+    )
+
+    assert result.points == 4
+    assert ticks >= 2, (
+        f"the event loop got {ticks} turn(s) while embedding: this is the shape "
+        "that made a question asked 48 seconds later unanswerable"
+    )
+
+
+async def test_building_the_eval_set_leaves_the_event_loop_free(
+    workspace: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """One generation call per sampled chunk, and the stage that was still
+    holding the loop after the embedding finished."""
+    import json
+
+    fake = _SlowGenerating(semantics=json.dumps(
+        {"question": "¿Qué dice el fragmento?", "answerable_only_by_main": True},
+        ensure_ascii=False,
+    ))
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    chunked = _chunked(workspace, "run_beat_v", 4)
+    result, ticks = await _ticks_during(
+        paid.build_evalset(
+            "run_beat_v", _extraction("libros/mio.pdf"), chunked,
+            ProfileDecision(fingerprint="fp_beat"), sample=4,
+        )
+    )
+
+    assert result.questions == 4, "one question per sampled chunk"
+    assert ticks >= 2, (
+        f"the event loop got {ticks} turn(s) while generating questions"
+    )
+
+
+async def test_extraction_prunes_what_a_previous_run_of_this_version_left(
+    workspace, monkeypatch: pytest.MonkeyPatch
+):
+    """The wiring, which is a separate fact from the pruning working.
+
+    `project_*` are all `MERGE`s, so a re-index adds rather than replaces —
+    measured once at 4,988 stale claims out of 8,043 on a version re-chunked
+    from 600 to 631. What this pins is that the stage calls the prune at all,
+    for *its own* version, and with exactly what it just projected: a keep-set
+    assembled from anything else could delete what the run had produced.
+    """
+    import json
+
+    fake = FakeProvider(semantics=json.dumps({
+        "conceptos": [{"nombre": "Providencia", "tipo": "doctrina", "confianza": 0.9}],
+        "afirmaciones": [
+            {"texto": "Dios sostiene el mundo.", "concepto": "Providencia",
+             "confianza": 0.8}
+        ],
+    }, ensure_ascii=False))
+    monkeypatch.setattr(paid, "_provider", lambda: fake)
+
+    class FakeGraph:
+        def __enter__(self): return self
+        def __exit__(self, *a): return None
+        def ensure_schema(self): pass
+        def write(self, *a, **k): return []
+        def write_many(self, *a, **k): return None
+
+    monkeypatch.setattr(paid, "Graph", lambda url: FakeGraph())
+    projected: dict = {}
+    monkeypatch.setattr(paid.proj, "project_concepts", lambda g, c, **k: len(c))
+    monkeypatch.setattr(paid.proj, "project_claims",
+                        lambda g, c, **k: projected.setdefault("claims", c) and 0 or len(c))
+    monkeypatch.setattr(paid.proj, "project_semantic_edges",
+                        lambda g, e: projected.setdefault("edges", e) and 0 or len(e))
+
+    pruned: dict = {}
+
+    def _prune(g, version, *, claims, edges):
+        pruned.update(version=version, claims=claims, edges=edges)
+        return paid.proj.Pruned()
+
+    monkeypatch.setattr(paid.proj, "prune_semantics", _prune)
+
+    registered, _ = _ids()
+    await paid.extract_semantics("run_prune", registered, _chunked(workspace, "run_prune", 2))
+
+    assert pruned["version"] == registered.version_id, "another version's semantics"
+    assert pruned["claims"] is projected["claims"]
+    assert pruned["edges"] is projected["edges"]

@@ -63,7 +63,35 @@ KINDS: dict[str, str] = {
     "profile": "profile.json",
     "evalset": "evalset.json",
     "scores": "scores.json",
+    #: A *tuning candidate's* measurement, kept apart from the baseline's.
+    #:
+    #: Both are produced by the same activity in the same run, and writing both
+    #: to `scores` meant the second overwrote the first — so a candidate that was
+    #: measured and then reverted left the run describing an index that no longer
+    #: existed. Found by running a real tuning round: `scores.json` said 676
+    #: chunks and recall@5 0.8375 while the collection and `chunks.jsonl` both
+    #: held the reverted 600. Promoted over `scores` only when the candidate is
+    #: kept, which is the one case where it describes the index that stands.
+    "scores_candidate": "scores.candidate.json",
+    #: What a tuning round tried and what it concluded. Written even when the
+    #: conclusion is "nothing beat the noise margin", because that *is* the
+    #: result: a round that refused every candidate has measured something, and
+    #: without the record the next run would spend the same money to learn it
+    #: again.
+    "tuning": "tuning.json",
     "ledger": "ledger.json",
+    # The video path. `captions` and `transcription_result` are the *source*
+    # documents, kept for the reason `semantics.json` is kept: the grouping
+    # constants will be tuned, and re-grouping from the raw file is free where
+    # re-transcribing is not. `transcript` is the cue table plus provenance;
+    # `transcript_text` is the paragraph stream `split_paragraphs` reads, and it
+    # is a kind of its own rather than `raw_text` because `ARTIFACT_STAGES`
+    # already attributes that one to `extracting`.
+    "video_probe": "video-probe.json",
+    "captions": "captions.vtt",
+    "transcription_result": "transcription-result.json",
+    "transcript": "transcript.json",
+    "transcript_text": "transcript.txt",
     "events": "events.jsonl",
 }
 
@@ -195,6 +223,23 @@ class ArtifactStore:
 
     def read_json(self, ref: ArtifactRef, *, verify: bool = True) -> Any:
         return json.loads(self.read_text(ref, verify=verify))
+
+    def read_jsonl(self, ref: ArtifactRef, *, verify: bool = True) -> list[Any]:
+        """Every row of a JSONL artifact, digest checked.
+
+        The sibling of :meth:`read_json` rather than of :meth:`iter_jsonl`, and
+        the difference is the verification: `iter_jsonl` opens the file to
+        stream a window of it for a UI and cannot hash what it does not read,
+        while a caller comparing a run's own output against what is in the
+        stores has to know it is holding the bytes the reference recorded. An
+        artifact rewritten since would make the comparison a statement about a
+        different run, and the set difference would read as debris.
+        """
+        return [
+            json.loads(line)
+            for line in self.read_text(ref, verify=verify).splitlines()
+            if line.strip()
+        ]
 
     def iter_jsonl(self, ref: ArtifactRef, *, offset: int = 0, limit: int | None = None) -> Iterator[Any]:
         """Stream rows without loading the file.

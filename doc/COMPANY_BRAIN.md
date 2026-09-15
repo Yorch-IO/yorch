@@ -38,6 +38,7 @@ infra/     Docker Compose stack definition
 | Gemini provider on ADC (no API keys) | **done** — 22 tests, mocked client |
 | Catalog repository (documents, versions, runs, cost) | **done** — 21 tests |
 | Ingest workflow + free approval gate | **done** — 18 workflow, 22 activity tests, **run end to end** |
+| Indexación de vídeo (`VideoIngestWorkflow`) | **done** — 12 workflow, 13 activity tests, **ejecutado de punta a punta** en local y contra AWS; desplegado a producción |
 | Paid stages: correction, embedding+Qdrant, semantics | **done and run for real** — one page through all four stages against Gemini Enterprise |
 | Gemini Enterprise migration (engine + app) | **done** — endpoint, models and auth verified against the live API |
 | Question answering: planner, retrieval, cited answer | **done and run for real** — 34 tests, real Qdrant + Memgraph |
@@ -358,7 +359,43 @@ bind-probed at first run.
 | Postgres | 5532 |
 | Temporal | 7333 |
 | Temporal UI | 8380 |
-| Control API | 8787 |
+| Control API (free plane, FastAPI) | 8787 |
+| Control API (paid plane, NestJS) | 8788 |
+
+The paid plane sits behind a compose **profile**, so a free, self-managed stack
+never starts it:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.dev.yaml \
+  -f docker-compose.adc.yaml --profile paid up -d --build backend
+```
+
+All three `-f` matter. Without `docker-compose.dev.yaml` the `--build` is a
+silent no-op; without `docker-compose.adc.yaml` anything reaching Vertex fails
+with `provider_unavailable` / `DefaultCredentialsError` while `/health` still
+shows the provider row green — that row is free and only reports whether a
+project id is set, and `POST /provider/probe` is what actually spends and
+therefore knows.
+
+It reads its Cognito pool from `infra/cognito.env`, **not** `infra/.env`: the
+desktop app rewrites `.env` whole on every launch (`app/src-tauri/src/stack.rs`
+builds the body from scratch), so a pool id added there survives until somebody
+next opens the app. The file is declared `required: false`, so a free-mode stack
+does not need it; a paid start without it refuses to boot naming the variables.
+
+## The `migrate` service
+
+Schema ownership left the API. It used to apply numbered SQL files in FastAPI's
+lifespan — which is why `worker` waited on `api` being *healthy*, a worker
+waiting on an HTTP server to establish a database fact. Two control planes now
+share this catalog, so exactly one thing may own its schema: a one-shot
+`migrate` service running `prisma migrate deploy` from the backend image, which
+`api` and `worker` both wait for with `service_completed_successfully`. Both
+planes then only *check* the version and report it on `/health`.
+
+`restart: "no"`, because a migration that failed must stay failed and visible.
+Free-mode stacks run the same step; it costs one extra image pull and removes
+the possibility of the two planes disagreeing about the schema.
 
 ## The graph substrate
 
@@ -2111,3 +2148,654 @@ that kept keyboard focus and lost their accessible names. Nothing here is
 tooltip-only: a fixed line under the canvas carries the hovered *or focused*
 node's full name and metrics, because a name available only on hover is not
 available to anyone who cannot hover.
+
+## El identificador de una ejecución deja de ser una autorización — 2026-08-29
+
+Encontrado leyendo el plano de pago para planificar la integración con la
+aplicación, no por una prueba y no por un fallo.
+
+`RunsService.gate`, `.approve` y `.status`, y `AskService.collect`, recibían cada
+uno un `TenantContext` y **no lo usaban**. Direccionaban Temporal sólo por
+identificador, y `status` consultaba `run_artifact` y `cost_entry` con
+`WHERE run_id = …` y ninguna condición de organización, aunque las dos tablas
+llevan un `tenant_id` indexado. Un miembro de A con un identificador de B podía
+leer su informe de compuerta —que contiene la vista previa del documento, el
+recuento de fragmentos y el presupuesto—, sus artefactos y su factura, y **enviar
+la señal `approve`**, que es la llamada que gasta dinero.
+
+`graph/queries.py::validate_template` ya se niega a cargar una plantilla que no
+filtre por `$tenant_id`, y su mensaje de rechazo dice exactamente por qué: *un
+identificador salado no es una autorización, porque el identificador de una
+organización es un valor que tienen sus propios miembros*. La regla estaba
+impuesta en la superficie de lectura del grafo y en ningún sitio cerca de ésta.
+
+**La comprobación vive en un solo lugar y lee un memo.** `TemporalService.startOptions`
+es ahora el único sitio donde este plano acuña un workflow, y estampa
+`memo={"tenant_id": …}` — así un sitio de arranque nuevo no puede olvidarlo, por
+la misma razón que `Control::send` en Rust es el único sitio donde una petición
+recibe sus cabeceras. El catálogo es el respaldo para las ejecuciones anteriores
+al memo. Cuando ninguno de los dos sabe, **rechaza**: toda ruta que recibe un
+identificador lee una ingesta, un reindexado o una reconstrucción —que escriben
+fila en `run`— o una pregunta, que no escribe ninguna (`run_kind_check` no admite
+`ask`) y ahora siempre lleva memo. `ping`, `probe` y `removal` se esperan en la
+propia petición y nunca se direccionan por identificador.
+
+Un cruce responde **404 y no 403**, la misma regla que ya sostenían las rutas de
+documento: un 403 confirma que el identificador existe.
+
+**Comprobado revirtiendo, no razonando.** Con la comprobación anulada fallan 4 de
+las pruebas nuevas de extremo a extremo; con ella, pasan las 30.
+
+### Y la ejecución que giraba para siempre, reproducida al primer intento
+
+El mismo `describe()` responde la otra pregunta que este plano no podía
+contestar, así que las dos van juntas.
+
+Una ingesta de un fichero ya indexado, contra la pila real:
+
+```
+POST /ingest        -> ingest-1788058556391-de1d6652
+GET  /runs/{id}     -> {"stage": "registering", "state": "completed"}
+GET  /runs/{id}/gate-> 409 {"kind": "gate_not_ready",
+                            "message": "las etapas gratuitas aún no han terminado",
+                            "stage": "registering", "run_state": "completed"}
+run: index / succeeded / 91,128 ms / 0 entradas de coste
+```
+
+La ejecución tomó el cortocircuito `already_indexed` y **terminó**, mientras
+`stage` seguía diciendo `registering` y la compuerta seguía respondiendo «las
+etapas gratuitas aún no han terminado» — que es falso, y que no iba a cambiar
+nunca. `ImportScreen` sondea esa compuerta cada 1500 ms y lee un 409 como «sigue
+esperando», así que la pantalla habría girado indefinidamente.
+
+Son los mismos 90 milisegundos que este documento ya registraba del lote del
+2026-08-22, donde *«el script esperó veinte minutos una compuerta que nunca iba a
+existir y anotó un fallo»*. Entonces se anotó como una lección para quien escriba
+un controlador de lotes. Era un defecto del producto, y ahora `state` lo dice.
+
+`state` es `null` cuando nadie puede saberlo —un plano sin actualizar, o una
+ejecución cuyo historial ha caducado— y eso se lee como *sigue esperando*, nunca
+como *falló*. Medido en la misma sesión: una ejecución antigua responde
+`{"stage": null, "state": null}` con sus 5 artefactos intactos, porque el
+catálogo sobrevive a la retención de Temporal.
+
+### La página de OpenAPI estaba abierta, y el primer arreglo la abrió más
+
+`BRAIN_DOCS` existía y `env.ts` lo tenía apagado por defecto. El `"on"` estaba
+puesto en `docker-compose.dev.yaml` — que es el overlay que aplican **por igual**
+quien desarrolla y la pila de preproducción, porque sin él el `--build` es un
+no-op silencioso. Así que `http://127.0.0.1:8788/docs` respondía 200 sin
+autenticar a quien encontrase el puerto, enumerando cada ruta, cada campo y cada
+`kind` de error de una API multi-organización.
+
+Ahora se pasa desde el fichero base como `${BRAIN_DOCS:-}`. Verificado contra la
+imagen reconstruida: `BRAIN_DOCS=` vacío en el contenedor, `/docs` responde 404,
+`/auth/config` sigue siendo público (200) y `/health` sin token sigue devolviendo
+`{"detail":{"kind":"unauthenticated"}}`.
+
+**La lección no es «apágalo», es dónde se apaga.** Un interruptor puesto en el
+overlay que todo el mundo aplica no es un interruptor.
+
+### El nombre de una biblioteca, en los dos sentidos
+
+`ensure_library` recibía el identificador en las dos posiciones. Las dos filas de
+esta instalación lo demuestran: `lib_teologia` se llama `lib_teologia` y
+`lib_acme_teologia` se llama `lib_acme_teologia`. Arreglar sólo la escritura no
+se habría visto — el selector renderizaba `l.id` y no el nombre — así que se
+arreglan las dos mitades o ninguna.
+
+`IngestRequest.library_name` viaja ahora, y **vacío significa «déjalo como
+está»**. Esa parte tiene su propia trampa: el `INSERT` pliega un nombre vacío en
+el identificador, así que para cuando el `ON CONFLICT DO UPDATE` mira
+`EXCLUDED.name` los dos casos son indistinguibles y una segunda importación
+volvía a rebautizar la biblioteca con su propio id. Se comprueba contra el
+parámetro.
+
+### Lo que el arreglo del truncamiento reveló del contrato de errores
+
+`api.ts` sacaba `detail.kind` del mensaje del error, y ese mensaje llega al
+webview **cortado a 500 caracteres** con una expresión regular que necesita un
+`{…}` equilibrado. Un cuerpo largo perdía la etiqueta en silencio, y con ella la
+única línea accionable. `tenant_required` es el caso que lo provoca: lleva los
+identificadores de organización de quien llama como campo hermano, así que su
+longitud crece con la cuenta.
+
+Rust la extrae ahora del cuerpo entero antes de cortarlo y la envía como
+`controlKind`. El camino viejo se conserva como respaldo, para un webview
+corriendo contra un binario anterior.
+
+`app/src/lib/api.test.ts` cubre por fin ese contrato, que no tenía ninguna
+prueba: los seis `kind` de autenticación y organización mapeados a su clave, un
+cuerpo cortado a media llave, y el `{"detail": "Not Found"}` escueto que devuelve
+una ruta no reconocida — un `kind` que el mapa de guía nunca ha oído sería peor
+que ninguno.
+
+## La comprobación de preproducción, conducida de punta a punta — 2026-08-30
+
+Primera vez que el plano de pago se usa como lo usaría un cliente: organización
+nueva, usuario nuevo, fichero subido por HTTP, compuerta aprobada, pregunta
+respondida. `tnt_f489b4a62220158ef6790c07` (`preprod`), creada con
+`seed-tenant.sh` y `seed-user.sh` siguiendo `doc/RUNBOOK_PREPRODUCCION.md`.
+
+**El identificador de Cognito lo reclama la primera petición autenticada, no el
+inicio de sesión del navegador.** `you@example.com` tenía `cognito_sub` a NULL y
+`last_login_at` vacío; un solo `GET /health` con token dejó los dos puestos. Vale
+la pena saberlo porque el runbook decía «verifica que el primer inicio de sesión
+enlaza el sujeto» y eso es cierto sólo por accidente: enlaza la primera petición,
+venga de donde venga.
+
+### El identificador de una ejecución, comprobado contra la pila real
+
+Con un token real de `preprod`, pidiendo una ejecución de `legacy`:
+
+```
+GET  /runs/{id}          -> 404 {"kind":"run_not_found"}
+GET  /runs/{id}/gate     -> 404 {"kind":"run_not_found"}
+POST /runs/{id}/approve  -> 404 {"kind":"run_not_found"}     <- la que gasta
+GET  /runs/ingest-0000000000000-deadbeef -> 404, cuerpo idéntico
+```
+
+Los cuatro cuerpos son iguales byte a byte, que es la propiedad: un identificador
+ajeno y uno inventado tienen que ser indistinguibles. Un 403 confirmaría que
+existe.
+
+### El aislamiento, medido en los tres almacenes
+
+| | legacy | acme | preprod |
+|---|---|---|---|
+| documentos · versiones (Postgres) | 72 · 71 | 1 · 1 | 1 · 1 |
+| puntos (Qdrant) | **4.721** | **13** | 3 |
+| `Chunk` · `Claim` · `Concept` (Memgraph) | 4.722 · 24.151 · 13.326 | 13 · 67 · 50 | 3 · 7 · 5 |
+
+**Cero filas, cero nodos y cero puntos sin organización** en los tres almacenes.
+Las cifras de `legacy` y `acme` son idénticas a las del 2026-08-28, así que
+«nada más cambió» está medido y no supuesto.
+
+Los almacenes coinciden entre sí: los 3 puntos de Qdrant son los 3 nodos `Chunk`,
+y los 7 claims del artefacto son los 7 nodos `Claim`.
+
+**Y «Dios» son dos nodos.** `con_b33c32cd6d7bbf2078a945a1` en la organización
+heredada, `con_38861f74b783df21ee660577` en `preprod` — mismo nombre canónico,
+identificadores distintos, porque `concept_id` va salado con la organización y
+`_salt()` sólo devuelve vacío para la heredada. Es la comprobación más afilada
+que hay: `project_concepts` fusiona por nombre canónico, así que sin el salado la
+extracción de `preprod` habría entrado en el nodo de `legacy` y habría añadido su
+texto a `description_raw`. Ahora está demostrado sobre datos reales y no sólo en
+`test_the_same_idea_is_two_nodes`.
+
+El plano gratuito, entretanto, sigue sin autenticación y **sólo ve `legacy`**: 72
+documentos, 69 versiones indexadas. Las bibliotecas de las otras dos
+organizaciones no existen para él.
+
+### Lo que costó, contra lo que se dijo que costaría
+
+585 caracteres, 3 fragmentos (2 `cuerpo`, 1 `preguntas`), perfil aprendido en un
+intento.
+
+| etapa | estimado | facturado |
+|---|---|---|
+| profile | $0.02025 | **$0.003273** |
+| correction | $0.0029655 | $0.002538 |
+| embedding | $0.0000324 | $0.000031 |
+| semantics | $0.017703 – $0.030678 | $0.011171 |
+| **total** | **$0.0409 – $0.0539** | **$0.017013** |
+
+Sobre-informa, que es la única dirección en la que puede fallar — pero por 2,4x
+en el extremo bajo, y `test_the_estimate_stays_within_reach_of_the_measurement`
+existe precisamente porque sobre-informar salvajemente empuja a rechazar trabajo
+asequible.
+
+**Casi todo el exceso es una sola etapa, y en parte es política deliberada.**
+`profile` se presupuesta como `PROFILE_CALL_INPUT × PROFILE_MAX_ATTEMPTS` =
+2000 × 3, porque «una propuesta que valida a la primera es el caso bueno y una
+compuerta no puede cotizar el caso bueno». Aquí validó a la primera. El ×3 no es
+el defecto.
+
+Lo que sí es medible es la llamada: **1282 de entrada y 180 de salida contra los
+2000 y 500 supuestos**, y el comentario de esas constantes lleva pidiéndolo desde
+que se escribieron — *«no medido contra una llamada real: enunciado como
+proyección, y deliberadamente generoso. Sustitúyanse ambos por cifras medidas en
+la primera corrida de aprendizaje real.»* Ésta fue esa corrida.
+
+**No se han cambiado, y la razón importa.** La entrada de esa llamada es una
+muestra de evidencia del documento — encabezados, párrafos numerados, líneas
+cortas — así que 1282 es el *suelo* de un documento de 585 caracteres, no una
+cifra representativa. Un libro de 300 páginas manda mucha más. Una medición sobre
+el documento más pequeño posible no puede fijar un techo. Queda anotado, con la
+consulta lista para la próxima corrida de aprendizaje sobre un documento grande.
+
+### Calidad de las citas, cuarta medición independiente
+
+**7 de 7 claims (100%) llevaban una cita que el código localizó en su propio
+fragmento.** Las tres anteriores fueron 98,7%, 99,2% y 99,4%. Es una muestra
+pequeña y en el mismo sentido que las otras tres.
+
+La respuesta llegó con dos citas verificadas y localizadores byte-exactos, con la
+ruta de sección real dentro:
+
+```
+estado: answered
+  Prueba de preproducción · 1.1 De la distinción entre creación y providencia · [309:492]
+  Prueba de preproducción · 1. La providencia de Dios · [27:254]
+```
+
+### Y una biblioteca que conservó su nombre
+
+`lib_preprod` se creó como «Biblioteca de preproducción». La ingesta **no envió
+`library_name`**, y después de indexar sigue llamándose «Biblioteca de
+preproducción». Antes de este arreglo ahora se llamaría `lib_preprod`. Es la
+mitad de la corrección que ninguna prueba unitaria puede demostrar sobre datos
+reales.
+
+### Lo que esta corrida encontró y no estaba buscando
+
+**Una pregunta gasta dinero y nada lo registra.** No es un fallo de esta corrida:
+
+```sql
+SELECT count(*) FROM cost_entry WHERE run_id LIKE 'ask-%';   -- 0
+SELECT stage, count(*), sum(usd) FROM cost_entry GROUP BY stage;
+--  semantics 80 $31.61 | profile 26 $0.29 | embedding 85 $0.23 | correction 7 $0.04
+```
+
+Cuatro etapas, todas de indexación, $32,18 en total. `planning` y `answering` no
+aparecen, y ni `activities/asking.py` ni `workflows/ask.py` contienen una sola
+llamada de registro de coste. Este documento mide una pregunta en ~$0.023 con
+razonamiento activado — que es el ajuste que ship— y ninguna de las que se han
+hecho para verificar el producto está en el libro mayor.
+
+En un producto gratuito eso es una laguna. En uno **de pago** es la factura de
+una organización, porque la factura es `SUM(cost_entry)` filtrado por
+`tenant_id`. Anotado aquí y en la lista de defectos; arreglarlo es una actividad
+nueva y su propia decisión.
+
+## El grafo de la biblioteca, leído desde memoria — 2026-09-01
+
+La pestaña Grafo abría en la vista de toda la biblioteca, y cada movimiento de un
+filtro costaba una ida y vuelta **más** una simulación de fuerzas completa
+ejecutada de forma síncrona dentro de un `useMemo` durante el render. Reescrita.
+Todo lo de abajo está medido contra la pila en marcha, tenant `preprod`, 73
+libros, `lib_teologia`.
+
+### El punto de partida
+
+| grado ≥ | conceptos | aristas | `settle()` en el hilo del render |
+|---|---|---|---|
+| 3 (por defecto) | 858 | 4.963 | **209 ms** |
+| 2 | 2.034 | 7.315 | **497 ms** |
+| 1 (todo) | 12.775 | 18.056 | **3.859 ms** |
+
+Y el mismo trabajo con los datos ya en memoria:
+
+| operación | medida |
+|---|---|
+| `library_mentions` completa (grado ≥ 1, suelo 0,5) en Memgraph | **17.814 filas / 2,25 MB CSV en 183 ms**, proceso `mgconsole` incluido |
+| el sobre como JSON de la ruta | **3,48 MB** (12.626 conceptos, 17.814 aristas) |
+| `JSON.parse` | **10,5 ms** |
+| índices de adyacencia (CSR sobre todo el espacio de nodos) | **5,4 ms**, una vez |
+| **derivar la vista completa de un umbral** | **0,88 ms** |
+| histograma para etiquetar los cinco topes | **0,07 ms** |
+| heap neto retenido por (plano, biblioteca, suelo) | **≈ 3,7 MB** |
+
+El servidor nunca fue el cuello de botella: ~50 ms de Memgraph contra 209-3.859
+ms de maquetación en el hilo del render.
+
+### Por qué el filtro de grado puede vivir en el cliente
+
+`library_mentions` calcula `documents = count(v)` en su segundo `WITH` y aplica
+`WHERE documents >= $min_documents` **después**, así que el grado de un concepto
+no depende del umbral con el que se pidió. Para un
+`(biblioteca, tenant, suelo)` fijo, la respuesta del servidor a *k* es
+exactamente las filas del sobre a `min_documents = 1` con `documents >= k`. No es
+una aproximación: `graphModel.test.ts` reimplementa el plegado de la ruta FastAPI
+y lo compara contra una segunda implementación.
+
+Sobrevive incluso al recorte, lo que no es obvio: el `ORDER BY` empieza por
+`documents DESC`, **la misma clave del filtro**, así que las filas de un umbral
+son un *prefijo* del orden y el `LIMIT` corta la misma cola en los dos. Reordenar
+esa cláusula a `mentions DESC, documents DESC` lo rompería en silencio.
+
+El **suelo de confianza sí sigue en el servidor**, y no por comodidad: el grado
+se cuenta *después* del predicado del suelo, así que ningún cliente puede
+re-derivarlo desde un sobre pedido con otro suelo.
+
+### `mention_limit`: 20.000 → 60.000
+
+Medido: **17.814 filas a `min_documents = 1` con el suelo en 0,5 — el 89% del
+tope de 20.000**, que se fijó contra 15.367 filas medidas el 2026-08-24. Eso era
+una consulta ocasional y ahora es el sobre estándar en cada carga, y el síntoma
+de pasarse no sería un rechazo sino un **grafo silenciosamente más pequeño en
+todos los umbrales**. 60.000 son ~240 libros al ritmo actual de 247 filas por
+libro, y está por encima del techo duro de filas a cualquier suelo: una fila es
+un par (versión, concepto) distinto y el grafo entero tiene 27.991 `MENTIONS`.
+
+Cambia en dos ficheros, `worker/brainworker/graph/queries.py` y su fork
+`../yorch-tauri-backend/src/graph/queries.ts`, y `queries.parity.spec.ts` los
+compara campo por campo contra el registro de Python volcado en vivo —
+**verificado rompiéndolo**: con un lado en 55.000 falla con el diff exacto.
+
+```bash
+cd worker && uv run pytest tests/graph/test_queries.py tests/api/test_overview_routes.py -q
+cd ../yorch-tauri-backend && npx jest src/graph/     # 45 tests, la paridad no salta
+```
+
+Y como cambia `queries.py`, la imagen se reconstruye con **los tres overlays** o
+el cambio no llega al contenedor.
+
+### La escalera de atlas, y la medición que la forzó
+
+`settle`'s `k = SPACING * sqrt(W*H/n)` escala con el número de nodos, así que dos
+corridas sobre subconjuntos distintos de una misma biblioteca son imágenes
+globalmente distintas. Medido sobre la distribución de grados real, las dos
+ajustadas al mismo lienzo de 1200×820 (diagonal 1.452 px):
+
+| estrategia | movimiento medio al cambiar de umbral | separación entre nodos a grado 3 | worker total |
+|---|---|---|---|
+| cinco atlas independientes | **162 px (11,1%)** | — | 7,5 s |
+| lo mismo, con un ajuste común | 214 px (14,7%) — **peor** | — | 6,0 s |
+| escalera caliente de cinco `settle` | 93 px (6,4%) | — | 6,3 s |
+| solo filtrar un atlas base | **0 px** | **6 px** — un coágulo | 6,4 s |
+| **base + relajación de 60 ticks** | **40-48 px (2,8-3,3%)** | **16 px** | **5,9 s** |
+
+Alinear dos atlas independientes con la mejor rotación y escala solo bajaba de
+162 a 110 px: difieren estructuralmente, no por una transformación global.
+
+La escalera que se implementó:
+
+| | | medido |
+|---|---|---|
+| 1 | el umbral por defecto, en frío | 226 ms — la primera imagen |
+| 2 | el base al umbral más ancho, sembrado con el anterior | 5.531 ms |
+| 3 | los otros cuatro, relajados desde el base, 60 ticks | 141 ms los cuatro |
+
+La relajación es legibilidad, no adorno: filtrar el base sin relajar deja una
+distancia media al vecino más cercano de **6 px contra 16 px**, porque los
+conceptos de grado alto se apiñan en el centro.
+
+`settle` creció un `start`/`heat` opcional y aditivo para esto; las 15
+aserciones de `force.test.ts` siguen valiendo sin tocarlas.
+
+### El worker, y el CSP resuelto midiendo
+
+`vite build` emite `graphAtlas.worker-*.js` como fichero propio de 4,5 kB
+referenciado por URL, y `grep blob:` sobre el bundle da **cero**. Con
+`default-src 'self'` y sin `worker-src` declarado, un worker del mismo origen
+está permitido por herencia. La forma literal
+`new Worker(new URL("./x.worker.ts", import.meta.url), { type: "module" })` es la
+que el empaquetador reconoce; asignar la URL a una variable antes no emite chunk
+y da 404 en producción mientras funciona en desarrollo.
+
+jsdom no define `Worker`, así que **toda la suite recorre la ruta en línea** —
+por eso `graphAtlas.worker.ts` es una bomba de mensajes sin lógica.
+
+### Las aristas al canvas
+
+17.814 `<line>` fuera del DOM al umbral más ancho. Dos cosas que costó:
+
+- **`lineWidth` es estado del contexto**, así que un ancho por arista fuerza un
+  `stroke()` por arista. Cuantizado en seis cubetas son ≤6 llamadas, y ≤12 con
+  selección.
+- **`scale(value, max, min, span)` de `radial.ts` toma un *span*.** La llamada
+  que había, `scale(e.mentions, maxEdge, 0.6, 2.4)`, dibuja anchos de 0,6 a
+  **3,0**, no a 2,4.
+
+### La puerta
+
+```bash
+cd app && npm run typecheck && npx vitest run && npm run build   # 348 passed, 32 files
+npx vitest run -t "define no key"                                 # el escáner i18n
+cd ../worker && uv run pytest -q                                  # 516 passed, 78 skipped
+```
+
+### Lo que sigue sin verificarse, y por qué
+
+Tres preguntas, y las tres necesitan la ventana:
+
+1. **Si 12.626 nodos SVG panean a 60 fps en WebKitGTK.** La contingencia está
+   diseñada y no construida: bajar al canvas también los conceptos por debajo de
+   la banda actual, con hit-test sobre una rejilla del atlas.
+2. **El color y la opacidad de las aristas en los dos temas.** Un volcado
+   estático no tiene píxeles de canvas. Un token que falta pinta *nada* a
+   propósito, así que el fallo es ruidoso cuando alguien mire.
+3. **Si la rueda arreglada funciona con una rueda de verdad**, y si la
+   interpolación de 300 ms se lee como un movimiento a los 40-48 px reales.
+
+Y la salvedad que lo complica: el plano libre sirve el tenant *legacy*, que desde
+el 2026-08-31 solo tiene `lib_pruebas` — 2 documentos, 1 versión indexada. Los 73
+libros están en `preprod`, alcanzable solo por el plano de pago. Las preguntas de
+volumen exigen entrar con el plano cloud; cualquier otra cosa es un payload
+sintético y hay que decirlo.
+
+## Auditar un índice ya construido — 2026-09-02
+
+`auditlog.py` responde «qué hizo esta ejecución». Faltaba la pregunta de debajo:
+**si el índice que dejó sigue siendo coherente consigo mismo**. Una ejecución
+puede terminar bien, facturar honestamente, dejar un rastro completo y aun así
+dejar una versión cuyos puntos de Qdrant, nodos del grafo y `chunks.jsonl` no
+describen el mismo documento — y ninguno de esos tres desacuerdos falla nada.
+
+`worker/scripts/audit_version.py` recorre cinco patas contra cualquier `ver_…`,
+cada una con su propia bandera `available`, y **no escribe nada**. Las
+comparaciones viven en `worker/brainworker/auditversion.py`, puras y con 34
+pruebas: el valor de una auditoría está en lo que *compara*, y una prueba que
+necesitara un Postgres, un Memgraph y un Qdrant en pie para verificar una
+diferencia de conjuntos se correría lo bastante poco como para no valer nada.
+
+Nada se reimplementa. Un identificador de punto, un ámbito de payload y un
+`claim_id` son justamente lo que se está comprobando, así que una auditoría que
+los derivase con su propia aritmética solo podría confirmar su propia aritmética:
+salen de `brainworker.indexing`, `brainworker.graph.schema` y `docagent.qdrant`.
+El Cypher son literales de este repositorio — nunca plantillas que un planificador
+pueda nombrar — y `assert_read_only` rechaza cualquiera que adquiera una cláusula
+de escritura, así que la herramienta no puede volverse escritora porque alguien
+edite una cadena.
+
+Se añadió una cosa al motor: `Qdrant.scroll(filters)`, que devuelve el **id** del
+punto además del payload. `scroll_all` lo tiraba, y el id es lo único que puede
+decir si la colección conserva una cola que una fragmentación más larga dejó
+atrás — el payload de un punto rancio está perfectamente bien formado.
+
+### El primer caso: `02-PuertasEternas_INT.pdf.corrected`
+
+`ver_0cde0e3196d06e4259a32a52`, tenant `preprod`, `lib_teologia`, activa.
+El libro más caro que ha producido esta instalación y el de peor calidad medida.
+
+**La estructura está limpia, y eso también es un resultado.** 234 fragmentos,
+**234 de 234 vanos byte-exactos** contra `raw.txt` (231.059 bytes), índices
+contiguos `0..233`, 99,52% del fichero cubierto. 234 puntos en Qdrant, todos con
+el id que `point_id(version, índice)` deriva, **ninguno con la cola rancia** que
+`prune_tail` existe para quitar, y ningún campo de payload equivocado. En el
+grafo: 234 fragmentos, 27 secciones, 234 citas, 1.300 afirmaciones, **un solo
+prefijo de título en los localizadores** y **cero nodos con otro tenant**.
+
+**Y las semánticas no dejaron nada atrás.** 1.300 afirmaciones producidas,
+1.300 en el grafo, 0 rancias. 1.010 nombres de concepto plegados en 974 ids por
+`canonical_concept`, los 974 presentes. 1.256 `MENTIONS` exactas. Cero
+afirmaciones huérfanas. Las dos ejecuciones canceladas nunca llegaron a
+extracción, así que el defecto del MERGE no llegó a dispararse aquí.
+
+### Lo que sí encontró: un tercio de la factura no compró nada
+
+| ejecución | estado | etapas | USD |
+|---|---|---|---|
+| `ingest-…176f024f` | cancelada | perfil 0,007896 · embedding 0,011915 · **evalset 0,575250** | **0,595061** |
+| `ingest-…b5cbf4d9` | cancelada | **corrección 0,601452** | **0,601452** |
+| `ingest-…a2ca526d` | correcta | embedding 0,005680 · **evalset 0,571013** · evaluación 0,000485 · semántica 1,983474 · tuning 0 | 2,560652 |
+| | | | **3,757165** |
+
+**El conjunto de evaluación se generó dos veces**: 0,575250 + 0,571013 =
+**1,146263**, de los cuales 0,575250 se fue con una ejecución cancelada. Y los
+0,601452 de corrección compraron un `corrected.txt` que el índice vivo no usa —
+la ejecución que triunfó no tiene etapa `correcting`, así que sus vanos indexan
+`raw.txt`. En total **1,196513 de 3,757165 — el 31,8% — se gastó en ejecuciones
+que se cancelaron**, y el índice que existe costó 2,560652.
+
+Nada de esto está mal en el código: cancelar cuesta lo que cuesta. Lo que no
+existía era una forma de verlo. La pata del rastro agrupa el gasto por etapa
+*a través de* las ejecuciones de una versión y nombra las que se cobraron en más
+de una.
+
+**La primera ejecución no tiene ni una fila de `run_event`** — es anterior al
+rastro — y eso se informa como *no disponible*, nunca como una ejecución que no
+hizo nada. Sus 0,595061 caen enteros en el grupo `stage: null` de
+`auditlog.build`, que es exactamente el caso que esa función documenta.
+
+**Y el aviso de perfil #47 es el defecto de `_topical_overlap`, vivo**:
+`similarity 0.0` con `collides_with` nombrando **el propio fichero del
+documento**. La auditoría lo marca `comparable: false` en vez de repetir la
+cifra, porque para un `.txt` ese 0,0 significa «no hay base para juzgar» y se lee
+como el caso más peligroso.
+
+### La medición se reprodujo, y salió gratis
+
+Con `--measure`, contra el índice tal como está hoy y con el mismo conjunto de 80
+preguntas del artefacto:
+
+| | registrado | vuelto a medir | Δ | ¿fuera del margen ±0,0401? |
+|---|---|---|---|---|
+| recall@1 | 0,5375 | 0,5125 | −0,0250 | no |
+| recall@5 | 0,8125 | **0,8125** | 0,0000 | no |
+| MRR@10 | 0,6587 | 0,6472 | −0,0115 | no |
+| dense-only@5 | 0,7250 | 0,7250 | 0,0000 | no |
+| suelo de ruido | 0,4967 | 0,4967 | 0,0000 | no |
+
+**Coste: 0 tokens.** Cada vector de consulta salió de `docagent.embedcache` — la
+etapa `evaluating` embebió esas mismas 80 preguntas bajo ese mismo modelo, y la
+caché se indexa por (modelo, ancho, tarea, texto). No es algo que dar por
+supuesto, así que se informa: un número distinto de cero ahí es gasto real.
+
+`min_score` 0,60 contra un suelo de 0,4967 — honesto, con 0,1033 de holgura.
+
+**La pregunta corrompida existe y no es la causa.** Una de las 80 está guardada
+percent-encoded (`%C3%82%C2%BFQu%C3%A9 caracter%C3%ADsticas…`, `chunk_index`
+225) y **no está entre los 15 fallos registrados**: encontró su fragmento dentro
+del top 5 pese a la codificación. Excluirla sube recall@1 a 0,557 y MRR a 0,6702
+y **baja** recall@5 a 0,8101. Así que el 0,8125 de este libro no se explica por
+ahí.
+
+### El defecto que la auditoría tuvo primero fue suyo
+
+Un `char_span` indexa **uno** de hasta tres flujos que una ejecución deja lado a
+lado, y nada registra cuál: `raw.txt` (extracción cruda), `extracted.txt`
+(extracción con las reglas del perfil aplicadas — un segundo pase que el
+pipeline hace siempre que adopta un perfil) y `corrected.txt` (la corrección
+reescribe el texto, que es por lo que tiene que correr antes de fragmentar).
+
+Elegir por precedencia parece correcto y es una conjetura, y falla en la
+dirección cara: un índice correcto informado como roto, por una herramienta cuyo
+único trabajo es que la crean. Medido sobre `ver_0ebf4f0b50a27202db3fcca6`:
+**`raw.txt` verifica 8 de 600 vanos y `extracted.txt` verifica 600 de 600.**
+
+Así que `choose_stream` los puntúa todos y elige por las cifras, e imprime las de
+los demás al lado. Cuando uno verifica entero no queda juicio que hacer; cuando
+ninguno lo hace, la comparación *es* el hallazgo, y dice si un flujo está
+ligeramente desplazado o si todos son ajenos — que son defectos distintos.
+
+### El 62% de semánticas rancias ya no se reproduce
+
+`CLAUDE.md` registra, medido el 2026-09-01 sobre
+`ver_0b71d21eeb3228f54437d9cf`, un grafo con 5.001 afirmaciones donde la
+ejecución extrajo 3.055, **8.043 en total y 4.988 (62%) dejadas atrás**.
+Medido de nuevo el 2026-09-02, por dos caminos independientes:
+
+```
+afirmaciones producidas por la reindexación   3.055
+alcanzables por DERIVED_FROM desde la versión 3.055
+con source_chunk_id de esta versión (sin arista) 3.055
+MENTIONS desde la versión                     3.497  (= las producidas)
+huérfanas                                         0
+```
+
+Las 4.988 se borraron. **Lo que las borró no está registrado en ninguna parte**,
+y el mecanismo sigue intacto: `project_claims` y `project_semantic_edges` siguen
+haciendo MERGE y el único `DELETE` de afirmaciones del módulo sigue siendo el de
+`_DELETE_VERSION`, que quita una versión entera. Así que la entrada del defecto
+se queda; lo que cambia es que su cifra es histórica y esta instalación ya no la
+puede enseñar.
+
+### Verificado
+
+Tres versiones distintas, con `--measure` en una; con Memgraph apuntado a un
+puerto muerto, donde las patas del grafo informan `available: false` nombrando la
+URL que intentaron y las otras tres siguen respondiendo; y con un `ver_…`
+inexistente. `550 passed, 78 skipped` en el worker y `194 passed, 15 skipped` en
+el motor. Después: 6.202 puntos en la colección, 234 en la versión y
+`cost_entry` sumando 3,757165 — las mismas cifras que antes de auditar.
+
+---
+
+## Indexar vídeo, y las dos cosas que solo aparecieron al ejecutarlo — 2026-09-05
+
+Las decisiones y sus mediciones están en **`doc/VIDEO.md`**, que es el documento
+del subsistema. Aquí queda lo que este documento existe para registrar: qué se
+ejecutó, con qué números, y qué sigue sin probarse.
+
+### La ruta de subtítulos, de punta a punta en el stack local
+
+`https://youtu.be/jNQXAC9IVRw` — 19 s, subtítulos manuales en inglés — a través
+del plano gratuito, al tenant heredado:
+
+```
+gate      1 párrafo · 217 caracteres · cubre 18.881s de 19s · 1 fragmento
+          recomendado: correct=False embed=True semantics=False profile=False
+          estimación:  embedding $0.000012      <- solo lo que puede ejecutarse
+facturado embedding · gemini-embedding-2 · 51 tokens · $0.000010
+          => la estimación sobre-reportó 1.2x, que es la dirección que exige la regla
+run       kind=video state=succeeded, 11 eventos de auditoría
+qdrant    1 punto, kind=transcripcion, char_span [0, 217]
+LOCATOR   0:01 · https://youtu.be/jNQXAC9IVRw?t=1
+```
+
+**Convergencia**, comprobada con una forma de URL deliberadamente distinta
+(`watch?v=…&list=PLxyz&t=5`): cortocircuitó en `registering`, **gastó $0**, y
+dejó una versión y un punto. Un enlace de lista de reproducción: `422
+not_a_video_url`.
+
+### La ruta de Amazon Transcribe, contra la cuenta real
+
+Forzando el camino sin subtítulos sobre el mismo audio, desde el host:
+
+```
+audio     yt-dlp -> .m4a, 302 KiB, SIN transcodificar  <- por eso no hace falta ffmpeg
+job       brain-ver_…  COMPLETED en ~10 s
+agrupado  2 párrafos · 225 caracteres · cubre 18.58s
+chunk     [1.4-18.6s] "All right, so here we are in front of the elephants. Um, …"
+```
+
+**La idempotencia, verificada en vivo y no con un doble**: repitiendo
+exactamente lo que haría un reintento de Temporal, `fetch_audio` devolvió
+`reused=True` (ni segunda descarga ni segunda subida), `start_transcription`
+encontró el trabajo existente, y **no se registró ningún cargo**. Amazon facturó
+una vez. `abandon_transcription` borró el trabajo después.
+
+Modelo de coste confirmado: 19 s → **$0.0076**; una charla de 90 minutos →
+**$2.16**, que es la cifra que justifica que exista una puerta de aprobación.
+
+### La velocidad del habla, medida
+
+`worker/scripts/measure_speech_rate.py` sobre **11.21 horas de predicación y
+teología reales en español** — 20 vídeos, 548.750 caracteres, el dominio que este
+corpus indexa: **pooled 13.59 c/s, mediana 12.40, máximo 15.24**.
+
+La suposición de 16 estaba mal **en las dos direcciones**: quedaba por encima del
+vídeo más rápido de la muestra, así que no era un extremo bajo y sobre-reportaba
+cada presupuesto. Y `SPEECH_RATE_SPREAD` **estaba declarada y no la usaba nada** —
+el mismo defecto que `ChunkNode.sheet`. Ahora 14.5 × 1.40, ambas medidas, y el
+rango se aplica de verdad: una charla de 90 minutos proyecta 78.300..109.619
+caracteres donde antes había un solo número.
+
+### Producción
+
+Desplegado 2026-09-05, imagen `7bc8cdb-c238668-dirty20260905T144734Z`.
+`POST /videos` responde **401 `unauthenticated`** donde una ruta inexistente
+responde 404 — el discriminador que prueba que está registrada. El worker informa
+13 etapas, las constantes medidas, y un rol de instancia que funciona.
+
+### Lo que sigue sin probarse
+
+Nadie ha aprobado una puerta de vídeo **desde la interfaz**: el panel y los tres
+estados de la puerta se capturaron en la ventana real y los clics navegan, pero
+las pulsaciones sintéticas no llegan al webview de WebKit en esta máquina.
+**Ningún vídeo se ha indexado en el plano de pago.** Y **nada más largo de 19
+segundos** se ha indexado en ninguno de los dos planos, así que las constantes de
+agrupación se encuentran con una charla real de una hora la primera vez que
+alguien lo intente.

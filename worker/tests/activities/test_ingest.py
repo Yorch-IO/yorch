@@ -7,12 +7,13 @@ faithful preview for free, and a mocked extractor would test nothing about that.
 from __future__ import annotations
 
 import pathlib
+from dataclasses import replace
 
 import pytest
 
 from brainworker import config
 from brainworker.activities import ingest as act
-from brainworker.pipeline import IngestRequest, Preview, StageOptions
+from brainworker.pipeline import IngestRequest, Preview, Registered, StageOptions
 
 TEXTO = """LIBRO PRIMERO
 
@@ -69,7 +70,7 @@ def request_for(path: pathlib.Path, **kw) -> IngestRequest:
 # -- staging ----------------------------------------------------------------
 
 
-async def test_staging_identifies_the_file_without_parsing_it(libro: pathlib.Path):
+async def test_staging_identifies_the_file_without_parsing_it(libro: pathlib.Path, workspace):
     staged = await act.stage_source(request_for(libro))
     assert staged.byte_size == libro.stat().st_size
     assert staged.fmt == "txt"
@@ -78,7 +79,7 @@ async def test_staging_identifies_the_file_without_parsing_it(libro: pathlib.Pat
     assert len(staged.content_sha256) == 64
 
 
-async def test_the_same_bytes_hash_the_same_from_two_paths(tmp_path: pathlib.Path):
+async def test_the_same_bytes_hash_the_same_from_two_paths(tmp_path: pathlib.Path, workspace):
     """Version identity is the content, so this equality is load-bearing."""
     a, b = tmp_path / "a.txt", tmp_path / "copias" / "b.txt"
     b.parent.mkdir()
@@ -90,7 +91,7 @@ async def test_the_same_bytes_hash_the_same_from_two_paths(tmp_path: pathlib.Pat
     assert first.content_sha256 == second.content_sha256
 
 
-async def test_an_unsupported_format_is_refused_by_name(tmp_path: pathlib.Path):
+async def test_an_unsupported_format_is_refused_by_name(tmp_path: pathlib.Path, workspace):
     """Better here than three activities deep, where the error names an extractor."""
     path = tmp_path / "libro.epub"
     path.write_bytes(b"not supported")
@@ -98,9 +99,43 @@ async def test_an_unsupported_format_is_refused_by_name(tmp_path: pathlib.Path):
         await act.stage_source(request_for(path))
 
 
-async def test_a_missing_file_says_so(tmp_path: pathlib.Path):
+async def test_a_missing_file_says_so(tmp_path: pathlib.Path, workspace):
     with pytest.raises(FileNotFoundError):
         await act.stage_source(request_for(tmp_path / "ausente.txt"))
+
+
+async def test_the_title_comes_from_the_key_not_from_where_the_file_landed(
+    tmp_path: pathlib.Path, workspace
+):
+    """The staged filename is chosen by the server, so it is never a name.
+
+    In cloud mode `/uploads` stores the file as `randomUUID() + suffix`,
+    deliberately: a name arriving over HTTP must not become a path segment. The
+    title used to come from that path's stem, which labelled every document
+    imported through the paid plane with a UUID — seen on screen on 2026-08-31 as
+    "1f9c2599-2ffe-43f3-a386-eddd928c82c5" where the book's name belonged.
+    """
+    stored = tmp_path / "1f9c2599-2ffe-43f3-a386-eddd928c82c5.txt"
+    stored.write_text(TEXTO, encoding="utf-8")
+
+    request = IngestRequest(
+        library_id="lib_1",
+        source_path=str(stored),
+        source_key="01_RetoDeDios_INT-S.pdf.corrected.txt",
+    )
+    staged = await act.stage_source(request)
+    assert staged.title == "01_RetoDeDios_INT-S.pdf.corrected"
+
+    # An explicit title still wins: this is a fallback, not an override.
+    titled = await act.stage_source(
+        IngestRequest(
+            library_id="lib_1",
+            source_path=str(stored),
+            source_key="01_RetoDeDios_INT-S.pdf.corrected.txt",
+            title="El reto de Dios",
+        )
+    )
+    assert titled.title == "El reto de Dios"
 
 
 # -- extraction and preview -------------------------------------------------
@@ -188,8 +223,20 @@ async def test_the_estimate_covers_exactly_the_stages_that_were_switched_on(
         StageOptions(correct=True, embed=True, extract_semantics=True, generate_evalset=True),
     )
     assert [s.stage for s in everything.stages] == [
-        "profile", "correction", "embedding", "semantics", "evalset",
+        "profile", "correction", "embedding", "semantics", "evalset", "evaluation",
     ]
+
+    # `evaluation` is the query embeddings the measurement itself pays for. It
+    # only appears when there is an index to measure: asking questions of a
+    # collection this run never wrote would score somebody else's document.
+    no_index = await act.estimate_cost(
+        preview,
+        StageOptions(
+            correct=False, embed=False, extract_semantics=False,
+            learn_profile=False, generate_evalset=True,
+        ),
+    )
+    assert [s.stage for s in no_index.stages] == ["evalset"]
 
     embedding_only = await act.estimate_cost(
         preview,
@@ -834,3 +881,268 @@ async def test_the_high_end_covers_the_worst_document_in_the_corpus(
     assert semantics.output_tokens_high >= chunks * worst_per_chunk
     # And the low end still describes the middle of the corpus, not the tail.
     assert semantics.output_tokens <= chunks * 894, "p95 is the reach limit"
+
+
+# -- the organisation's own tree ---------------------------------------------
+
+
+async def test_a_path_outside_the_organisation_is_refused_before_it_is_read(
+    tmp_path: pathlib.Path, workspace
+):
+    """The one guard on `source_path`, and there is nothing else.
+
+    This activity does not stage a file; it is handed a path and hashes whatever
+    is there. Without the check an organisation could name another's inbox — or
+    the mounted provider secrets — and have the pipeline index it into their own
+    corpus under their own tenant.
+    """
+    outsider = tmp_path.parent / "de-otro.txt"
+    outsider.write_text(TEXTO, encoding="utf-8")
+    with pytest.raises(PermissionError, match="outside"):
+        await act.stage_source(request_for(outsider))
+
+
+async def test_one_organisation_cannot_read_anothers_inbox(
+    tmp_path: pathlib.Path, workspace
+):
+    """The case a plain "is it under the workspace?" check waves through.
+
+    Both files are inside the volume. Only one is inside the asking
+    organisation's tree, and that is the distinction that matters.
+    """
+    other = "tnt_" + "b" * 24
+    theirs = tmp_path / "tenants" / other / "inbox"
+    theirs.mkdir(parents=True)
+    theirs_file = theirs / "suyo.txt"
+    theirs_file.write_text(TEXTO, encoding="utf-8")
+
+    # The owner reads it.
+    staged = await act.stage_source(request_for(theirs_file, tenant_id=other))
+    assert staged.content_sha256
+
+    # The legacy tenant, whose root is the volume itself, must not — even though
+    # the file is plainly under that root.
+    with pytest.raises(PermissionError, match="outside"):
+        await act.stage_source(request_for(theirs_file))
+
+
+# -- whose graph a run writes into -------------------------------------------
+#
+# `VersionNode.tenant_id` used to carry a default, and all three activities that
+# build one forgot to pass it. A paying organisation's document, sections,
+# chunks and citations were written into the legacy tenant's graph under an
+# *unsalted* version id — readable by the free plane, and absent from the
+# organisation that paid for it. Nothing failed: retrieval still found the right
+# text, with no locator and no claim, which reads exactly like a graph that has
+# not been projected yet.
+#
+# The field is required now. These pin the three call sites, because "required"
+# only stops a *new* one from being written without a tenant — it says nothing
+# about one that passes the wrong tenant, and passing `LEGACY_TENANT_ID`
+# explicitly would compile.
+
+ACME = "tnt_" + "9" * 24
+
+
+class _NoopCatalog:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def activate(self, *_a, **_k):
+        pass
+
+
+class _CapturingGraph:
+    """Stands in for `Graph`, and for the projection functions it is passed to.
+
+    The activities open a real Bolt session, so the double replaces the context
+    manager; the projection call is intercepted separately, since what is being
+    asserted is the *node handed over*, not anything Memgraph does with it.
+    """
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def ensure_schema(self):
+        pass
+
+
+@pytest.fixture
+def acme_libro(workspace: pathlib.Path) -> pathlib.Path:
+    """A source file inside ACME's own workspace subtree.
+
+    Not in `tmp_path` beside the other fixtures' documents: phase 2 made
+    `Paths.contains` refuse a source outside the organisation's own root, so a
+    file elsewhere is rejected before any of this is reached. That refusal is
+    the workspace half of the same boundary these tests are about.
+    """
+    path = workspace / "tenants" / ACME / "inbox" / "institucion.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(TEXTO, encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def captured_versions(monkeypatch):
+    seen: list = []
+    monkeypatch.setattr(act, "Graph", lambda *_a, **_k: _CapturingGraph())
+    monkeypatch.setattr(
+        act.proj, "project_structure", lambda _g, version: seen.append(version) or {}
+    )
+    monkeypatch.setattr(
+        act.proj, "activate", lambda _g, version: seen.append(version)
+    )
+    return seen
+
+
+async def test_project_structure_writes_into_the_organisation_that_asked(
+    acme_libro, workspace, captured_versions
+):
+    request = request_for(acme_libro, tenant_id=ACME)
+    staged = await act.stage_source(request)
+    # Built rather than registered: `register_document` writes to Postgres, and
+    # what is being asserted here is which organisation the *graph* node names.
+    registered = Registered(
+        document_id="doc_x", version_id="ver_x", created=True,
+        already_indexed=False, tenant_id=ACME,
+    )
+
+    # Chunking is not what is under test and needs the corrected artifact, so
+    # the structure is projected from a hand-written one-row chunk file.
+    store = act.ArtifactStore(workspace, "run_t")
+    ref = store.write_jsonl(
+        "chunks",
+        [{"index": 0, "kind": "cuerpo", "text": "Uno.", "char_from": 0, "char_to": 4}],
+    )
+    await act.project_structure(request, staged, registered, "run_t", ref)
+
+    assert [v.tenant_id for v in captured_versions] == [ACME]
+    # The id the rest of the system will look this version up by. Unsalted is
+    # what the defect produced, and it is a different string.
+    assert captured_versions[0].version == act.make_version_id(
+        staged.content_sha256, ACME
+    )
+
+
+async def test_activation_marks_the_asking_organisations_version(
+    acme_libro, workspace, captured_versions, monkeypatch
+):
+    request = request_for(acme_libro, tenant_id=ACME)
+    staged = await act.stage_source(request)
+    registered = Registered(
+        document_id="doc_x", version_id="ver_x", created=True,
+        already_indexed=False, tenant_id=ACME,
+    )
+    # The catalog leg of activation is not what is under test.
+    monkeypatch.setattr(act, "Catalog", lambda *_a, **_k: _NoopCatalog())
+    await act.activate_version(request, staged, registered)
+    assert [v.tenant_id for v in captured_versions] == [ACME]
+
+
+async def test_the_eval_set_is_priced_per_call_not_per_document(
+    workspace: pathlib.Path, libro: pathlib.Path
+):
+    """The miss this repository has now measured three times.
+
+    A generation call pays for its system instruction, schema and JSON envelope
+    *per call*, so an estimate that charges a document once is wrong by the
+    overhead of every call after the first. The eval set makes one call per
+    sampled chunk — `build_evalset` is stratified by `kind` — so the figure has
+    to scale with the sample, and it stops scaling once the sample is capped.
+    """
+    extraction = await act.extract_text(request_for(libro), "run_e")
+    preview = await act.preview_chunks("run_e", extraction, StageOptions())
+    opts = StageOptions(
+        correct=False, embed=False, extract_semantics=False,
+        learn_profile=False, generate_evalset=True,
+    )
+
+    # Characters scale with the chunk count, so the *average chunk* stays the
+    # same size across the three and only the call count moves. Holding
+    # `characters` fixed instead would shrink the per-call input as chunks grew,
+    # which is an artefact of the fixture rather than a property of the code.
+    CHARS_PER_CHUNK = 1_100
+
+    def at(chunks: int):
+        return replace(preview, chunk_count=chunks, characters=chunks * CHARS_PER_CHUNK)
+
+    small = await act.estimate_cost(at(3), opts)
+    large = await act.estimate_cost(at(600), opts)
+    capped = await act.estimate_cost(at(6000), opts)
+
+    def stage(est, name):
+        return next(s for s in est.stages if s.stage == name)
+
+    # Three chunks, three calls; 600 chunks, forty — because the sample is
+    # stratified and capped, not one question per chunk.
+    assert stage(large, "evalset").input_tokens == pytest.approx(
+        stage(small, "evalset").input_tokens * (act.EVAL_SAMPLE / 3), rel=0.01
+    )
+    assert stage(large, "evalset").input_tokens == stage(capped, "evalset").input_tokens
+    # Reasoning is on for this stage — `evalset` is absent from
+    # `Gemini.stage_thinking`, deliberately, so it inherits the budget rather
+    # than being switched off — and reasoning tokens are billed as output.
+    assert stage(large, "evalset").output_tokens == int(
+        act.EVAL_SAMPLE
+        * act.EVALSET_OUTPUT_PER_CALL
+        * act.THINKING_OUTPUT_MULTIPLIER["evalset"]
+    )
+
+
+def test_the_noise_query_count_has_not_drifted():
+    """`NOISE_QUERIES` is duplicated into the estimator to keep it free of engine
+    imports. A duplicated constant needs a test or it is just a stale one."""
+    from docagent.evaluate import NOISE_QUERIES
+
+    assert act.NOISE_QUERIES == len(NOISE_QUERIES)
+
+
+def test_the_estimator_and_the_stage_agree_on_the_sample():
+    """The estimate is a promise about a bill; the stage is what settles it. Two
+    constants would let the gate quote forty calls and the run make eighty."""
+    from brainworker.activities import paid
+
+    assert paid.EVAL_SAMPLE is act.EVAL_SAMPLE
+    assert paid.EVAL_SEED is act.EVAL_SEED
+
+
+async def test_the_eval_set_estimate_covers_what_the_first_real_run_billed(
+    workspace: pathlib.Path, libro: pathlib.Path
+):
+    """The measurement that corrected a 3.6x under-report.
+
+    Measured 2026-08-31 on `taller-de-tarsis.txt`: 8 chunks over 4,629
+    characters, `generate_evalset` on, correction and semantics off. The run
+    billed **4,408 input and 7,743 output tokens for the eval set, $0.064685**,
+    against an estimate of 11,456 / 2,160 and $0.033384 — input over-reported by
+    2.6x and output *under*-reported by 3.6x, which since output is priced at
+    five times input left the whole quote at half the bill.
+
+    Under-reporting is the one direction this must never fail in: a user who
+    approved $0.03 and was billed $0.07 has been misled, and the reverse has not.
+    """
+    extraction = await act.extract_text(request_for(libro), "run_m")
+    preview = await act.preview_chunks("run_m", extraction, StageOptions())
+    measured = replace(preview, chunk_count=8, characters=4_629)
+
+    estimate = await act.estimate_cost(
+        measured,
+        StageOptions(
+            correct=False, embed=True, extract_semantics=False,
+            learn_profile=False, generate_evalset=True,
+        ),
+    )
+    stage = next(s for s in estimate.stages if s.stage == "evalset")
+
+    assert stage.output_tokens >= 7_743, "it would quote less than the run cost"
+    assert stage.input_tokens >= 4_408
+    # And not wildly more, which is the other half of the rule the range exists
+    # to hold: covering the worst must not mean doubling the typical.
+    assert stage.output_tokens < 2 * 7_743
+    assert stage.input_tokens < 2 * 4_408

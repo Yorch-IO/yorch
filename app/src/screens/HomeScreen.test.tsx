@@ -63,6 +63,7 @@ function run(over: Partial<RunSummary> = {}): RunSummary {
     errorKind: null,
     title: "01 Liderazgo",
     libraryId: "lib_teologia",
+    usdSoFar: null,
     ...over,
   };
 }

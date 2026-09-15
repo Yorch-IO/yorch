@@ -22,8 +22,16 @@ because zero reads as free.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import threading
+import time
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
+
+#: Bumped when the file's *shape* changes, so a reader can tell a history from
+#: the single-run file this replaced.
+HISTORY_VERSION = 2
 
 EMBED_INPUT_PER_M = 0.15  # gemini-embedding-001; embeddings have no output charge
 FLASH_INPUT_PER_M = 0.15  # gemini-2.5-flash
@@ -148,7 +156,114 @@ class Ledger:
         lines.append(f"{'TOTAL':<22}{'':>7}{'':>10}{'':>9}{self.total_usd():>11.6f}")
         return "\n".join(lines)
 
-    def dump(self, path: str) -> None:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+    def dump(
+        self,
+        path: str,
+        *,
+        run_id: str | None = None,
+        documents: list[str] | None = None,
+    ) -> None:
+        """Append this run to the history at `path`, keeping every earlier one.
+
+        **This used to be `json.dump` over the whole file, so the ledger held
+        exactly one run: the last.** Every run before it was gone, which is why
+        `INFORME_INDEXACION.md` records that per-document accounting "does not
+        exist and is not reconstructible" for the 28 documents indexed before
+        this — the file was read on 2026-09-03 holding $1.335820, the total of
+        one book, while the corpus behind it had cost several times that. An
+        engine whose one job at the end of a run is to say what it spent must
+        not spend the next run erasing the answer.
+
+        `to_dict()` is unchanged and is exactly what the file used to contain,
+        which is what makes the migration honest rather than lossy: an
+        old-shaped file *is* a run record, so it is moved into `runs` rather
+        than dropped. What it cannot supply is `run_id`, `at` and `documents`,
+        and those stay `null` — "nobody recorded this" is a different claim
+        from "this run touched no documents", and only one of them is true.
+
+        Written through a temporary file and `os.replace`, which was not worth
+        it while the file held one run and is worth it now: a crash mid-write
+        would take the whole history with it, and there is nowhere to get it
+        back from.
+        """
+        history = _read_history(path)
+        history["runs"].append(
+            {
+                "run_id": run_id,
+                "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "documents": list(documents) if documents is not None else None,
+                **self.to_dict(),
+            }
+        )
+        history["total_usd"] = round(
+            sum(r.get("total_usd") or 0.0 for r in history["runs"]), 6
+        )
+        history["runs_recorded"] = len(history["runs"])
+        history["unpriced_stages"] = sorted(
+            {s for r in history["runs"] for s in (r.get("unpriced_stages") or [])}
+        )
+        _write_atomically(path, history)
+
+
+def _read_history(path: str) -> dict:
+    """The history already at `path`, in its current shape, whatever it was.
+
+    Three cases, and the third is the one worth stating: a file this cannot
+    parse is **moved aside**, never overwritten. It is somebody's record of
+    money already spent, and the run holding the lock on this process is not
+    entitled to decide it was worthless.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            existing = json.load(f)
+    except FileNotFoundError:
+        return _empty_history()
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        kept = f"{path}.roto-{time.strftime('%Y%m%dT%H%M%S')}"
+        try:
+            os.replace(path, kept)
+            print(f"  costo.json ilegible; se conserva en {kept}")
+        except OSError:  # pragma: no cover - nothing left to do but not lose the run
+            pass
+        return _empty_history()
+
+    if isinstance(existing, dict) and isinstance(existing.get("runs"), list):
+        return existing
+    if isinstance(existing, dict) and "stages" in existing:
+        # The pre-history shape. It is one run and it becomes one run.
+        return {**_empty_history(), "runs": [
+            {"run_id": None, "at": None, "documents": None, **existing}
+        ]}
+    return _empty_history()
+
+
+def _empty_history() -> dict:
+    return {
+        "version": HISTORY_VERSION,
+        "total_usd": 0.0,
+        "runs_recorded": 0,
+        "measured": True,
+        "unpriced_stages": [],
+        "price_source": (
+            "cada corrida guarda la tabla de precios con la que se calculó, "
+            "porque los multiplicadores han cambiado y una cifra vieja debe "
+            "seguir siendo comprobable con los precios de su propio día."
+        ),
+        "runs": [],
+    }
+
+
+def _write_atomically(path: str, payload: dict) -> None:
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".costo-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
             f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:  # pragma: no cover
+            pass
+        raise

@@ -19,8 +19,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
+from ..videosource import hhmmss, watch_url
 from .client import Graph
 from .schema import (
+    LEGACY_TENANT_ID,
     SEMANTIC_EDGE_PROPERTIES,
     SEMANTIC_EDGES,
     canonical_concept,
@@ -68,6 +70,10 @@ class ChunkNode:
     page: int | None = None
     sheet: str | None = None
     slide: int | None = None
+    #: When this chunk was spoken, for a source that has a clock rather than
+    #: pages. Seconds from the start of the media. `None` for every document.
+    start_s: float | None = None
+    end_s: float | None = None
     qdrant_point_id: str | None = None
 
 
@@ -77,6 +83,24 @@ class VersionNode:
     source_key: str
     content_sha256: str
     title: str
+    #: Whose it is — and **required**, for the reason the catalog's `tenant_id`
+    #: columns stopped carrying a `DEFAULT` at the end of phase 2.
+    #:
+    #: It was defaulted to `LEGACY_TENANT_ID` so a caller predating tenancy — a
+    #: replay of an old `semantics.json`, a rebuild of a run recorded before this
+    #: field — would land where its rows already are. That reasoning was sound
+    #: and the default was still wrong, because it also silently absorbed callers
+    #: that simply *forgot*: all three `project_structure` sites did, and a
+    #: paying organisation's document, chunks and citations were written into the
+    #: legacy tenant's graph under an unsalted version id — visible to the free
+    #: plane, and invisible to the organisation that paid for it. Nothing failed;
+    #: retrieval returned the right text with no locator and no claim, which
+    #: reads as a graph that is merely empty.
+    #:
+    #: A caller that really means the legacy tenant says so. One word at the two
+    #: sites where that is true, against a whole-organisation leak at every site
+    #: where it is not.
+    tenant_id: str
     author: str | None = None
     fmt: str = "unknown"
     indexed_at: str = field(default_factory=_now)
@@ -89,7 +113,7 @@ class VersionNode:
 
     @property
     def version(self) -> str:
-        return version_id(self.content_sha256)
+        return version_id(self.content_sha256, self.tenant_id)
 
 
 @dataclass(frozen=True)
@@ -130,11 +154,13 @@ _MERGE_DOCUMENT = """
 MERGE (d:Document {id: $document_id})
   ON CREATE SET d.created_at = $now
 SET d.library_id = $library_id, d.source_key = $source_key,
-    d.title = $title, d.author = $author, d.format = $format
+    d.title = $title, d.author = $author, d.format = $format,
+    d.tenant_id = $tenant_id
 MERGE (v:DocumentVersion {id: $version_id})
   ON CREATE SET v.created_at = $now
 SET v.content_sha256 = $content_sha256, v.title = $title,
-    v.indexed_at = $indexed_at, v.active = false
+    v.indexed_at = $indexed_at, v.active = false,
+    v.tenant_id = $tenant_id
 MERGE (d)-[:HAS_VERSION]->(v)
 """
 
@@ -144,7 +170,8 @@ MATCH (v:DocumentVersion {id: $version_id})
 MERGE (s:Section {id: row.id})
 SET s.title = row.title, s.path = row.path, s.level = row.level,
     s.ordinal = row.ordinal, s.version_id = $version_id,
-    s.char_start = row.char_start, s.char_end = row.char_end
+    s.char_start = row.char_start, s.char_end = row.char_end,
+    s.tenant_id = $tenant_id
 MERGE (v)-[:HAS_SECTION]->(s)
 """
 
@@ -165,7 +192,9 @@ MERGE (c:Chunk {id: row.id})
 SET c.ordinal = row.ordinal, c.kind = row.kind, c.text = row.text,
     c.char_start = row.char_start, c.char_end = row.char_end,
     c.page = row.page, c.sheet = row.sheet, c.slide = row.slide,
-    c.qdrant_point_id = row.qdrant_point_id, c.version_id = $version_id
+    c.start_s = row.start_s, c.end_s = row.end_s,
+    c.qdrant_point_id = row.qdrant_point_id, c.version_id = $version_id,
+    c.tenant_id = $tenant_id
 MERGE (v)-[:HAS_CHUNK]->(c)
 """
 
@@ -193,7 +222,8 @@ UNWIND $rows AS row
 MATCH (c:Chunk {id: row.chunk_id})
 MERGE (cit:Citation {id: row.id})
 SET cit.locator = row.locator, cit.page = row.page,
-    cit.section_title = row.section_title, cit.version_id = $version_id
+    cit.section_title = row.section_title, cit.version_id = $version_id,
+    cit.tenant_id = $tenant_id
 MERGE (c)-[:CITES]->(cit)
 """
 
@@ -245,6 +275,7 @@ def project_structure(graph: Graph, version: VersionNode) -> dict[str, int]:
             "author": version.author,
             "format": version.fmt,
             "indexed_at": version.indexed_at,
+            "tenant_id": version.tenant_id,
             "now": now,
         },
     )
@@ -265,7 +296,14 @@ def project_structure(graph: Graph, version: VersionNode) -> dict[str, int]:
         for ordinal, s in enumerate(version.sections)
     ]
     for batch in _batched(section_rows):
-        graph.write(_MERGE_SECTIONS, {"version_id": version.version, "rows": list(batch)})
+        graph.write(
+            _MERGE_SECTIONS,
+            {
+                "version_id": version.version,
+                "tenant_id": version.tenant_id,
+                "rows": list(batch),
+            },
+        )
 
     nesting = [
         {"parent_id": by_path[s.path[:-1]], "child_id": by_path[s.path]}
@@ -287,12 +325,21 @@ def project_structure(graph: Graph, version: VersionNode) -> dict[str, int]:
             "page": c.page,
             "sheet": c.sheet,
             "slide": c.slide,
+            "start_s": c.start_s,
+            "end_s": c.end_s,
             "qdrant_point_id": c.qdrant_point_id,
         }
         for cid, c in zip(chunk_ids, version.chunks)
     ]
     for batch in _batched(chunk_rows):
-        graph.write(_MERGE_CHUNKS, {"version_id": version.version, "rows": list(batch)})
+        graph.write(
+            _MERGE_CHUNKS,
+            {
+                "version_id": version.version,
+                "tenant_id": version.tenant_id,
+                "rows": list(batch),
+            },
+        )
 
     attach = [
         {"section_id": by_path[c.section_path], "chunk_id": cid}
@@ -320,7 +367,14 @@ def project_structure(graph: Graph, version: VersionNode) -> dict[str, int]:
         if (locator := _locator(version, c))
     ]
     for batch in _batched(citations):
-        graph.write(_MERGE_CITATIONS, {"version_id": version.version, "rows": list(batch)})
+        graph.write(
+            _MERGE_CITATIONS,
+            {
+                "version_id": version.version,
+                "tenant_id": version.tenant_id,
+                "rows": list(batch),
+            },
+        )
     # After the merge, not before: pruning first would leave a chunk with no
     # citation at all for the width of the transaction, and an answer built in
     # that window would have nothing to cite.
@@ -343,6 +397,10 @@ def _title_for(version: VersionNode, chunk: ChunkNode) -> str | None:
     return None
 
 
+#: Formats whose chunks are located by a clock rather than by a byte range.
+TIMED_FORMATS = frozenset({"youtube"})
+
+
 def _locator(version: VersionNode, chunk: ChunkNode) -> str:
     """A human-readable pointer the UI can open, and the answer can print.
 
@@ -350,7 +408,22 @@ def _locator(version: VersionNode, chunk: ChunkNode) -> str:
     differ by format: a PDF has pages, a spreadsheet has sheets, a deck has
     slides, and a plain text file has only the byte range that every format
     carries.
+
+    **A timed source returns early, and carries neither the title nor the byte
+    range.** Both would be wrong here for the same reason, which is that
+    ``citation_id`` is ``digest(chunk, locator)`` — the locator *is* the
+    citation's identity. A video's title is something its uploader can change
+    without telling anybody, so putting it here would re-mint every ``cit_`` on
+    the next projection; the byte range indexes a corrected transcript nobody
+    will ever open. What is left is two facts that cannot move: when it was
+    said, and where to hear it. The title is not lost — it is on the
+    ``DocumentVersion``, on the evidence, and in every Qdrant payload as
+    ``source_title``.
     """
+    if chunk.start_s is not None and version.fmt in TIMED_FORMATS:
+        vid = version.source_key.rsplit("/", 1)[-1]
+        return f"{hhmmss(chunk.start_s)} · {watch_url(vid, chunk.start_s)}"
+
     parts = [version.title]
     if chunk.page is not None:
         parts.append(f"p. {chunk.page}")
@@ -385,7 +458,7 @@ UNWIND $rows AS row
 MERGE (k:Concept {id: row.id})
   ON CREATE SET k.created_at = $now, k.name = row.name
 SET k.canonical = row.canonical, k.type = row.type,
-    k.synonyms = row.synonyms,
+    k.synonyms = row.synonyms, k.tenant_id = $tenant_id,
     k.description_raw = coalesce(k.description_raw, []) +
         [d IN row.descriptions WHERE NOT d IN coalesce(k.description_raw, [])]
 """
@@ -418,7 +491,7 @@ UNWIND $rows AS row
 MATCH (c:Chunk {id: row.source_chunk_id})
 MERGE (cl:Claim {id: row.id})
 SET cl.text = row.text, cl.confidence = row.confidence,
-    cl.source_chunk_id = row.source_chunk_id,
+    cl.source_chunk_id = row.source_chunk_id, cl.tenant_id = $tenant_id,
     cl.quote = coalesce(row.quote, cl.quote),
     cl.quote_char_start = coalesce(row.quote_char_start, cl.quote_char_start),
     cl.quote_char_end = coalesce(row.quote_char_end, cl.quote_char_end),
@@ -428,7 +501,11 @@ MERGE (cl)-[:DERIVED_FROM]->(c)
 
 
 def project_concepts(
-    graph: Graph, concepts: Sequence[dict[str, Any]], *, now: str | None = None
+    graph: Graph,
+    concepts: Sequence[dict[str, Any]],
+    *,
+    tenant: str = LEGACY_TENANT_ID,
+    now: str | None = None,
 ) -> int:
     """Upsert concepts. Names collide across documents on purpose — see schema.
 
@@ -440,7 +517,7 @@ def project_concepts(
     """
     rows = [
         {
-            "id": concept_id(c["name"]),
+            "id": concept_id(c["name"], tenant),
             "name": c["name"],
             "canonical": canonical_concept(c["name"]),
             "type": c.get("type"),
@@ -454,7 +531,10 @@ def project_concepts(
         for c in concepts
     ]
     for batch in _batched(rows):
-        graph.write(_MERGE_CONCEPTS, {"rows": list(batch), "now": now or _now()})
+        graph.write(
+            _MERGE_CONCEPTS,
+            {"rows": list(batch), "tenant_id": tenant, "now": now or _now()},
+        )
     return len(rows)
 
 
@@ -465,10 +545,20 @@ def read_concept_descriptions(
 
     Read here rather than in the activity so this module stays the only place
     that knows the shape of a `Concept`.
+
+    **Plain dicts, because the annotation said so and did not.** `graph.write`
+    returns `list[Row]`, which defines `data` and `__getitem__` and no `.get` —
+    so `_condense_descriptions`, reading the declared type, called `row.get`
+    and would have raised `AttributeError` the first time it ran, *after* every
+    per-chunk extraction in the document had been paid for. Nothing caught it:
+    there is no type checker on this side, and the activity's tests
+    monkeypatch this function to return the dicts it promised. Returning them
+    for real is what makes the promise true, and it is also the shape
+    `set_concept_descriptions` next door already takes.
     """
     if not concept_ids:
         return []
-    return graph.write(_READ_CONCEPT_DESCRIPTIONS, {"ids": list(concept_ids)})
+    return [row.data for row in graph.write(_READ_CONCEPT_DESCRIPTIONS, {"ids": list(concept_ids)})]
 
 
 def set_concept_descriptions(graph: Graph, rows: Sequence[dict[str, Any]]) -> int:
@@ -479,7 +569,9 @@ def set_concept_descriptions(graph: Graph, rows: Sequence[dict[str, Any]]) -> in
     return len(payload)
 
 
-def project_claims(graph: Graph, claims: Sequence[dict[str, Any]]) -> int:
+def project_claims(
+    graph: Graph, claims: Sequence[dict[str, Any]], *, tenant: str = LEGACY_TENANT_ID
+) -> int:
     """Upsert claims, quote included when the extractor could verify one.
 
     Every field beyond the original three is read with ``.get``, because this is
@@ -500,7 +592,7 @@ def project_claims(graph: Graph, claims: Sequence[dict[str, Any]]) -> int:
         for c in claims
     ]
     for batch in _batched(rows):
-        graph.write(_MERGE_CLAIMS, {"rows": list(batch)})
+        graph.write(_MERGE_CLAIMS, {"rows": list(batch), "tenant_id": tenant})
     return len(rows)
 
 
@@ -729,6 +821,194 @@ def remove_version(graph: Graph, version: str) -> Removed:
     )
 
 
+@dataclass(frozen=True)
+class Pruned:
+    """What re-projecting a version's semantics left behind, and swept."""
+
+    claims: int = 0
+    mentions: int = 0
+    concepts_collected: int = 0
+
+
+#: Claims of *these* chunks that this run did not produce. Keyed per chunk
+#: because a chunk is what a keep-set is naturally a set *of* — `claim_id` is
+#: `f(chunk_id, text)`, so the chunk is already the grouping — and because the
+#: match then goes through the `Chunk.id` index rather than over the label.
+#:
+#: Not for speed, which was the tempting reason and is not one: the whole
+#: version's list-membership form was measured against the biggest real version
+#: (`ver_0b71d21eeb3228f54437d9cf`, 3,055 claims and 3,497 `MENTIONS`) at
+#: **0.01 s**, so the nine-million-comparison scan it looks like is not what
+#: Memgraph actually does. The counting query below keeps that form for exactly
+#: this reason, and a claim that this shape is faster would be unmeasured.
+_STALE_CLAIMS_FOR_CHUNKS = """
+UNWIND $rows AS row
+MATCH (cl:Claim)-[:DERIVED_FROM]->(:Chunk {id: row.chunk_id})
+WHERE NOT cl.id IN row.keep
+DETACH DELETE cl
+"""
+
+#: And the chunks this run produced *no* claim for at all, which the statement
+#: above cannot see because they contribute no row. A re-chunking that merges
+#: two chunks into one leaves exactly this shape.
+_CLAIMS_OF_UNCLAIMED_CHUNKS = """
+MATCH (:DocumentVersion {id: $version_id})-[:HAS_CHUNK]->(c:Chunk)<-[:DERIVED_FROM]-(cl:Claim)
+WHERE NOT c.id IN $chunks
+DETACH DELETE cl
+"""
+
+#: The same pair of statements for `MENTIONS`, which needs its own because the
+#: edge survives independently: a chunk keeps its id across a re-chunking while
+#: its *text* changes, so an edge saying it mentions a concept the new text
+#: never names stays perfectly well-formed. `ABOUT` and `INVOLVES` need no
+#: equivalent — they hang off a `Claim`, and `DETACH DELETE` above takes them.
+_STALE_MENTIONS_FOR_CHUNKS = """
+UNWIND $rows AS row
+MATCH (:Chunk {id: row.chunk_id})-[r:MENTIONS]->(k:Concept)
+WHERE NOT k.id IN row.keep
+DELETE r
+"""
+
+_MENTIONS_OF_UNMENTIONING_CHUNKS = """
+MATCH (:DocumentVersion {id: $version_id})-[:HAS_CHUNK]->(c:Chunk)-[r:MENTIONS]->(:Concept)
+WHERE NOT c.id IN $chunks
+DELETE r
+"""
+
+#: Counted before the delete, the way `remove_version` counts its subgraph
+#: first: `DETACH DELETE` returns nothing, and a report assembled from what the
+#: caller *asked* to delete rather than from what was there would over-report
+#: every retry.
+#:
+#: One statement over the whole version, against the per-chunk shape of the
+#: deletes above, because it is one round trip and the membership test is not
+#: the cost it looks like — 0.01 s on the biggest version this installation
+#: holds, measured rather than assumed. It is also the early return for the
+#: ordinary case: a first index, or a re-index that converged, stops here having
+#: written nothing.
+_COUNT_STALE = """
+MATCH (v:DocumentVersion {id: $version_id})-[:HAS_CHUNK]->(c:Chunk)
+OPTIONAL MATCH (c)<-[:DERIVED_FROM]-(cl:Claim)
+WHERE NOT cl.id IN coalesce($claim_ids, [])
+OPTIONAL MATCH (c)-[m:MENTIONS]->(k:Concept)
+WHERE NOT (c.id + '|' + k.id) IN coalesce($mention_keys, [])
+RETURN count(DISTINCT cl) AS claims, count(m) AS mentions
+"""
+
+
+def prune_semantics(
+    graph: Graph,
+    version: str,
+    *,
+    claims: Sequence[dict[str, Any]],
+    edges: Sequence[SemanticEdge],
+) -> Pruned:
+    """Delete the semantics of *this version* that this run did not produce.
+
+    **Projection is a `MERGE`, so re-extracting a version adds rather than
+    replaces.** The vector side has pruned since `QdrantWriter.prune_tail` was
+    added; nothing pruned the graph. Measured 2026-09-01 on
+    `ver_0b71d21eeb3228f54437d9cf`, re-indexed with a corrected profile that
+    took it from 600 chunks to 631: the graph held **5,001 claims where the run
+    extracted 3,055 — 4,988 of them left behind**, and 4,057 of 7,554
+    `MENTIONS` (53.7%) likewise.
+
+    That is not inert debris. `claim_id` is `f(chunk_id, text)` and `chunk_id`
+    is `f(version_id, index)`, so re-chunking keeps every id *alive* while the
+    text underneath it changes — a stale claim stays attached to a chunk that no
+    longer contains the quote it carries, and is indistinguishable from a good
+    one at read time. It is exactly the state `Semantics.claims_verified` exists
+    to keep visible, arrived at from the one direction it does not cover: the
+    quote *was* verified, against a chunk that has since been re-cut.
+
+    **The set is computable with no guesswork**, which is why this is a set
+    difference and not a heuristic: the run's own output names exactly what it
+    produced, and the ids are derived here from the same `claim_id` and the same
+    `MENTIONS` edges the projection wrote — not passed in separately, so the
+    keep-set cannot drift from what was projected.
+
+    **Called after projecting, never before.** After, the keep-set is exactly
+    what is now in the graph and the version is never observable without its
+    semantics; before, there is a window holding neither the old nor the new. A
+    Temporal retry re-projects (a `MERGE`, idempotent) and re-prunes (a set
+    difference against the same set, idempotent), so the two converge — which is
+    also the fix for the recorded case where two attempts at one document
+    *unioned* instead, leaving 5,001 claims where `semantics.json` recorded
+    2,965. Paying twice no longer produces the document twice.
+
+    Concepts are collected exactly as `remove_version` collects them: candidates
+    taken *before* the delete, through all three routes in
+    `_CANDIDATE_CONCEPTS`, and swept only where the delete left them supporting
+    nothing.
+    """
+    claim_ids: dict[str, list[str]] = {}
+    for c in claims:
+        chunk = c["source_chunk_id"]
+        claim_ids.setdefault(chunk, []).append(claim_id(chunk, c["text"]))
+
+    mention_ids: dict[str, list[str]] = {}
+    for e in edges:
+        if e.type == "MENTIONS":
+            mention_ids.setdefault(e.source_id, []).append(e.target_id)
+
+    stale = graph.write(
+        _COUNT_STALE,
+        {
+            "version_id": version,
+            "claim_ids": [i for ids in claim_ids.values() for i in ids],
+            "mention_keys": [
+                f"{chunk}|{concept}"
+                for chunk, ids in mention_ids.items()
+                for concept in ids
+            ],
+        },
+    )
+    row = stale[0] if stale else None
+    stale_claims = int(row["claims"] or 0) if row else 0
+    stale_mentions = int(row["mentions"] or 0) if row else 0
+    if not stale_claims and not stale_mentions:
+        # The ordinary case — a first index, or a re-index that converged. Two
+        # reads and no writes, and in particular no orphan sweep: nothing was
+        # deleted, so nothing can have been orphaned by this call.
+        return Pruned()
+
+    candidates = graph.write(_CANDIDATE_CONCEPTS, {"version_id": version})
+    ids: list[str] = sorted(set(candidates[0]["ids"])) if candidates else []
+
+    statements: list[tuple[str, dict[str, Any]]] = []
+    claim_rows = [{"chunk_id": k, "keep": v} for k, v in claim_ids.items()]
+    for batch in _batched(claim_rows):
+        statements.append((_STALE_CLAIMS_FOR_CHUNKS, {"rows": list(batch)}))
+    statements.append(
+        (
+            _CLAIMS_OF_UNCLAIMED_CHUNKS,
+            {"version_id": version, "chunks": list(claim_ids)},
+        )
+    )
+    mention_rows = [{"chunk_id": k, "keep": v} for k, v in mention_ids.items()]
+    for batch in _batched(mention_rows):
+        statements.append((_STALE_MENTIONS_FOR_CHUNKS, {"rows": list(batch)}))
+    statements.append(
+        (
+            _MENTIONS_OF_UNMENTIONING_CHUNKS,
+            {"version_id": version, "chunks": list(mention_ids)},
+        )
+    )
+    statements.append((_COLLECT_ORPHAN_CONCEPTS, {"candidates": ids}))
+    graph.write_many(statements)
+
+    surviving = 0
+    if ids:
+        rows = graph.write(_SURVIVING_CONCEPTS, {"candidates": ids})
+        surviving = int(rows[0]["surviving"]) if rows else 0
+
+    return Pruned(
+        claims=stale_claims,
+        mentions=stale_mentions,
+        concepts_collected=len(ids) - surviving,
+    )
+
+
 #: `OPTIONAL MATCH` plus `count` rather than a pattern comprehension: the plain
 #: form is supported everywhere and reads the same, and `count(other)` is 0 for
 #: the unmatched row because `count` ignores nulls.
@@ -762,3 +1042,36 @@ def remove_document(graph: Graph, document: str) -> Removed:
 
     graph.write(_DELETE_DOCUMENT, {"document_id": document})
     return total.merge(Removed(documents=1))
+
+
+# ---------------------------------------------------------------------------
+# Backfill
+# ---------------------------------------------------------------------------
+
+
+#: Nodes projected before tenancy existed carry no `tenant_id`, and every
+#: template now filters on one — so without this a corpus that predates the
+#: change reads as empty, which is the worst possible answer.
+#:
+#: Idempotent and cheap to repeat: it touches only nodes that lack the property,
+#: so a second run matches nothing. A fresh installation has nothing to do.
+_BACKFILL_TENANT = """
+MATCH (n)
+WHERE n.tenant_id IS NULL
+SET n.tenant_id = $tenant_id
+RETURN count(n) AS filled
+"""
+
+
+def backfill_tenant(graph: Graph, tenant: str = LEGACY_TENANT_ID) -> int:
+    """Give every unlabelled node a tenant. Returns how many were changed.
+
+    Run once per installation, after deploying the code that writes the property
+    and **before** the templates that read it start refusing rows without it.
+    There is no Memgraph migration framework here, which is why this is a
+    function a person calls rather than a step that happens by itself: a full
+    scan on every projection would be a real cost paid forever for a one-time
+    correction.
+    """
+    rows = graph.write(_BACKFILL_TENANT, {"tenant_id": tenant})
+    return int(rows[0].data["filled"]) if rows else 0

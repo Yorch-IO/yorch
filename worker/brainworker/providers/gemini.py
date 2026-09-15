@@ -24,7 +24,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from google import genai
 from google.genai import errors, types
@@ -42,6 +42,25 @@ MAX_ATTEMPTS = 3
 #: activity in a batch fails at the same instant when a quota is exhausted, and
 #: un-jittered backoff makes them all retry at the same instant too.
 BACKOFF_BASE = 1.5
+
+#: A rate-limit 429 gets its own, longer patience, and this is a correction
+#: rather than a preference. The comment above says the three attempts match the
+#: engine — they did, and then the engine measured the quota and grew a second
+#: policy that was never brought across.
+#:
+#: The metric is `aiplatform.googleapis.com/online_prediction_requests_per_base_model`,
+#: whose unit `serviceusage` reports as `1/min/{project}/{base_model}` — a
+#: *per-minute* bucket, measured at ~6 embeddings a minute sustained. Three
+#: attempts at 1.5^n is about seven seconds of patience against a sixty-second
+#: window, so every attempt lands inside the same exhausted bucket and the
+#: activity fails having learnt nothing. A run stalled at `embedding 1/600` under
+#: 127 of these.
+#:
+#: The delays are 2, 8, 32, 60, 60: capped, because a sleep longer than the
+#: window buys nothing, and `Retry-After` wins over all of it when the service
+#: says how long it wants.
+RATE_LIMIT_ATTEMPTS = 6
+RATE_LIMIT_MAX_BACKOFF = 60.0
 
 RETRIEVAL_DOCUMENT = "RETRIEVAL_DOCUMENT"
 RETRIEVAL_QUERY = "RETRIEVAL_QUERY"
@@ -92,12 +111,76 @@ class Usage:
 class Generation:
     text: str
     usage: Usage
+    #: Why the model stopped: `STOP` normally, `MAX_TOKENS` for a truncation,
+    #: `SAFETY` and friends otherwise. `None` when the response carried none.
+    #:
+    #: Threaded out because a truncation and a considered refusal are different
+    #: facts with different remedies and were indistinguishable from here.
+    #: Measured on the real corpus 2026-09-06: one answering call spent its
+    #: whole 65,521-token output ceiling on reasoning, wrote nothing, billed
+    #: $0.497 — twenty times a normal turn — and the envelope it never closed
+    #: surfaced as a `JSONDecodeError`, which the product reported as "not
+    #: enough evidence". That is a claim about the corpus the run had no basis
+    #: for, and it sends the reader to look at their library instead of at the
+    #: bill. Defaulted so nothing that ignores it has to change.
+    finish_reason: str | None = None
 
 
 @dataclass
 class Embedding:
     values: list[float]
     usage: Usage = field(default_factory=Usage)
+
+    @property
+    def tokens(self) -> int:
+        """What this one embedding was billed for.
+
+        Named `tokens` because that is what `docagent.runner.Vector` reads, so an
+        `Embedding` satisfies the engine's protocol without a wrapper. It is a
+        view on `usage`, not a second number.
+        """
+        return self.usage.input_tokens
+
+
+def _attempts_for(err: ProviderError) -> int:
+    """How many tries this kind of failure deserves.
+
+    A quota is a bucket that refills on a clock; an outage is not. Waiting out
+    the first is the fix, and giving up on it after seven seconds is how a paid
+    stage fails without having tested the thing it was waiting for.
+    """
+    return RATE_LIMIT_ATTEMPTS if err.kind == "provider_quota" else MAX_ATTEMPTS
+
+
+def _backoff(err: ProviderError, attempt: int, retry_after: float) -> float:
+    """2, 8, 32, 60, 60 for a quota; 1.5^n for everything else.
+
+    `Retry-After` wins when the service sent one: it knows when its own bucket
+    refills and we are guessing.
+    """
+    if err.kind != "provider_quota":
+        return BACKOFF_BASE ** attempt + random.uniform(0, 0.5)
+    if retry_after > 0:
+        return min(retry_after, RATE_LIMIT_MAX_BACKOFF)
+    return min(2.0 ** (2 * attempt - 1), RATE_LIMIT_MAX_BACKOFF) + random.uniform(0, 0.5)
+
+
+def _retry_after(e: errors.APIError) -> float:
+    """Seconds the service asked us to wait, or 0 if it did not say.
+
+    The SDK does not surface response headers uniformly across transports, so
+    this reads whatever is there and treats anything unparseable as absent —
+    a missing hint costs a guessed delay, not a failure.
+    """
+    for holder in (getattr(e, "response", None), e):
+        headers = getattr(holder, "headers", None) or {}
+        try:
+            for name, value in headers.items():
+                if str(name).lower() == "retry-after":
+                    return float(str(value).strip())
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return 0.0
 
 
 def _classify(e: errors.APIError) -> ProviderError:
@@ -175,17 +258,20 @@ class Provider:
 
     def _call(self, what: str, fn):
         last: ProviderError | None = None
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+        # The ceiling is the larger of the two policies; which one applies is
+        # decided per failure, because a run can hit a 503 and then a 429.
+        for attempt in range(1, max(MAX_ATTEMPTS, RATE_LIMIT_ATTEMPTS) + 1):
             try:
                 return fn()
             except errors.APIError as e:
                 last = _classify(e)
-                if not last.retryable or attempt == MAX_ATTEMPTS:
+                budget = _attempts_for(last)
+                if not last.retryable or attempt >= budget:
                     raise last from e
-                delay = BACKOFF_BASE ** attempt + random.uniform(0, 0.5)
+                delay = _backoff(last, attempt, _retry_after(e))
                 log.warning(
                     "%s failed (%s), retrying in %.1fs [%d/%d]",
-                    what, last.kind, delay, attempt, MAX_ATTEMPTS,
+                    what, last.kind, delay, attempt, budget,
                 )
                 time.sleep(delay)
             except ProviderError:
@@ -198,14 +284,14 @@ class Provider:
                     kind="provider_unavailable",
                     retryable=True,
                 )
-                if attempt == MAX_ATTEMPTS:
+                if attempt >= MAX_ATTEMPTS:
                     raise last from e
                 time.sleep(BACKOFF_BASE ** attempt + random.uniform(0, 0.5))
         raise last or ProviderError(f"{what} failed", kind="provider_refused")
 
     # -- generation --------------------------------------------------------
 
-    def generate(
+    def _prepare(
         self,
         prompt: str,
         *,
@@ -216,8 +302,14 @@ class Provider:
         model: str | None = None,
         stage: str | None = None,
         history: Sequence[tuple[str, str]] | None = None,
-    ) -> Generation:
-        """One completion, with usage attached.
+        thinking_budget: int | None = None,
+    ) -> tuple[Any, types.GenerateContentConfig, str]:
+        """Everything a call needs, built once and shared by both callers.
+
+        Split out of `generate` when streaming arrived: the config, the history
+        and the thinking budget are identical whether the response comes back
+        whole or in pieces, and two copies of this would be two places for a
+        stage's reasoning budget to be resolved differently.
 
         `history` is a list of prior `(sent, received)` exchanges, prepended as
         alternating user/model turns. Only semantic extraction's gleaning pass
@@ -247,7 +339,16 @@ class Provider:
         # mechanical and separately verified, and answering is the one genuine
         # judgement call. `thinking_for` resolves the engine's own stage names
         # too, so `stage="correct"` does not quietly miss.
-        budget = self.settings.thinking_for(stage)
+        #
+        # An explicit argument wins, full stop. This function stays dumb about
+        # *why* one was passed: deciding whether a per-question effort level may
+        # override the configured stage budget is policy, and it lives at the one
+        # call site that has one (`answering/answer.py`), not here.
+        budget = (
+            thinking_budget
+            if thinking_budget is not None
+            else self.settings.thinking_for(stage)
+        )
         if budget is not None:
             config.thinking_config = types.ThinkingConfig(thinking_budget=budget)
         if response_schema is not None:
@@ -268,13 +369,102 @@ class Provider:
                 types.Content(role="user", parts=[types.Part(text=prompt)])
             )
 
+        return contents, config, model or self.settings.model
+
+    def generate(self, prompt: str, **kw: Any) -> Generation:
+        """One completion, whole. See `_prepare` for every argument."""
+        contents, config, model_id = self._prepare(prompt, **kw)
+
         def run():
             return self.client.models.generate_content(
-                model=model or self.settings.model, contents=contents, config=config
+                model=model_id, contents=contents, config=config
             )
 
         response = self._call("generate", run)
-        return Generation(text=response.text or "", usage=_usage_of(response))
+        return Generation(
+            text=response.text or "",
+            usage=_usage_of(response),
+            finish_reason=_finish_of(response),
+        )
+
+    def generate_stream(
+        self, prompt: str, *, on_delta: Callable[[str], None], **kw: Any
+    ) -> Generation:
+        """One completion, handed to `on_delta` as it is written.
+
+        Same arguments as `generate`, plus the callback. The return value is the
+        same `Generation` the whole-response path returns, so a caller that also
+        wants the finished text — every caller does, because the streamed text is
+        a draft and the parsed envelope is what is authoritative — does not have
+        to reassemble it.
+
+        **Retry stops at the first chunk.** `_call` retries a failed request up
+        to six times, which is right for a call whose result nobody has seen. Once
+        a delta has been handed to `on_delta` it is on somebody's screen, and a
+        retry would replay it from the beginning: the reader would watch the
+        answer restart. So the request *and its first chunk* are opened inside
+        `_call` — which is where a quota refusal or a 503 actually lands — and
+        everything after that is outside it.
+
+        **Usage arrives at the end, not at the beginning.** Each chunk may carry
+        `usage_metadata` and the last one carries the totals; reading the first
+        would report a few tokens for the most expensive call in a turn, and
+        `Spend` would under-report the bill with nothing saying so. The last
+        chunk that carries any is the one that counts.
+        """
+        contents, config, model_id = self._prepare(prompt, **kw)
+
+        def start():
+            stream = self.client.models.generate_content_stream(
+                model=model_id, contents=contents, config=config
+            )
+            # `next` is what actually issues the request for most transports, so
+            # pulling the first chunk here is what puts it under the retry.
+            it = iter(stream)
+            return it, next(it, None)
+
+        stream_iter, first = self._call("generate", start)
+
+        parts: list[str] = []
+        usage = Usage(calls=1)
+        finish: str | None = None
+
+        def take(chunk: Any) -> None:
+            nonlocal usage, finish
+            piece = _chunk_text(chunk)
+            if piece:
+                parts.append(piece)
+                on_delta(piece)
+            if getattr(chunk, "usage_metadata", None) is not None:
+                usage = _usage_of(chunk)
+            # Same rule as the usage: the *last* chunk carrying one is the one
+            # that counts. A truncated stream ends with a chunk that has a
+            # `finish_reason` and no text — which `_chunk_text` already
+            # tolerates — so this is read separately rather than beside the text.
+            reason = _finish_of(chunk)
+            if reason is not None:
+                finish = reason
+
+        try:
+            if first is not None:
+                take(first)
+            for chunk in stream_iter:
+                take(chunk)
+        except errors.APIError as e:
+            # Deliberately not retried — see the docstring. Classified anyway, so
+            # the UI still gets a kind it can act on.
+            raise _classify(e) from e
+        except ProviderError:
+            raise
+        except Exception as e:
+            raise ProviderError(
+                f"generate failed mid-stream: {type(e).__name__}: {e}",
+                kind="provider_unavailable",
+            ) from e
+
+        return Generation(
+            text="".join(parts), usage=usage, finish_reason=finish
+        )
 
     # -- embeddings --------------------------------------------------------
 
@@ -355,6 +545,46 @@ class Provider:
             f"{self.settings.model} / {self.settings.embedding_model} "
             f"@ {self.settings.location}"
         )
+
+
+def _chunk_text(chunk: Any) -> str:
+    """The visible text of one streamed chunk, or nothing.
+
+    `.text` is a convenience property that concatenates the candidate's parts,
+    and it is `None` — and on some SDK versions raises a warning — for a chunk
+    that carries only a `finish_reason`, only `usage_metadata`, or only a
+    thinking part. Every stream ends with at least one such chunk, so reading it
+    naively turns the normal end of every answer into an exception.
+    """
+    try:
+        return chunk.text or ""
+    except Exception:
+        return ""
+
+
+#: The finish reason that means "the model ran out of room", which for a call
+#: with reasoning on can be spent entirely on thinking.
+MAX_TOKENS = "MAX_TOKENS"
+
+
+def _finish_of(response: Any) -> str | None:
+    """Why the model stopped, as a plain string, or nothing.
+
+    **`.name`, never `str()`.** `types.FinishReason` is a str-valued
+    `enum.Enum`, so `str(reason)` is `"FinishReason.MAX_TOKENS"` and would match
+    nothing — the same shape as the `HistoryEvent.event_type` trap already
+    recorded here, where `getattr(t, "name", str(t))` read as careful and
+    silently yielded `"3"`. The fallback covers an SDK version that hands back
+    the bare string instead of the enum: a plain `str` has no `.name`, so it
+    falls through to itself.
+    """
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return None
+    reason = getattr(candidates[0], "finish_reason", None)
+    if reason is None:
+        return None
+    return getattr(reason, "name", None) or str(reason)
 
 
 def _usage_of(response: Any) -> Usage:

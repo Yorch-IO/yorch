@@ -18,12 +18,14 @@ import logging
 import pathlib
 from collections import Counter
 from dataclasses import asdict
+from datetime import datetime
+from typing import Any
 
 from temporalio import activity
 
 from .. import config
 from ..artifacts import ArtifactRef, ArtifactStore
-from ..catalog import Catalog
+from ..catalog import Catalog, RunEvent
 from ..graph import Graph
 from ..graph import projection as proj
 from ..graph.schema import document_id as make_document_id
@@ -38,6 +40,8 @@ from ..pipeline import (
     ProfileRules,
     ProfileWarning,
     Registered,
+    RunOpen,
+    run_kind_of,
     StageEstimate,
     StageOptions,
     Staged,
@@ -286,6 +290,67 @@ SEMANTICS_OUTPUT_PER_CHUNK = 634
 #: Only semantics has a spread. Every other stage's figure is already a ceiling —
 #: correction's 1.5 output ratio over a measured 1.29, and the unmeasured stages'
 #: borrowed 6.0 reasoning multiplier — so widening them would over-report twice.
+#: How many questions an eval set holds, and the seed that keeps two runs of one
+#: document comparable. Defined here rather than in `paid` because the estimator
+#: and the activity must not be able to disagree about the call count — the
+#: estimate is a promise about a bill.
+EVAL_SAMPLE = 40
+
+#: The sample a *tuning* run uses instead.
+#:
+#: Not a preference. The bootstrap margin a candidate has to beat is computed
+#: from the baseline's own per-question reciprocal ranks, and with σ ≈ 0.358 it
+#: takes roughly 80 questions to resolve the +0.040 MRR effect that restoring a
+#: chunk overlap is worth. At 40 the round measures honestly and refuses almost
+#: everything — which is the design working, and is also a full second embedding
+#: pass spent on a question the sample could never answer. So turning tuning on
+#: buys the questions that make its own comparison possible, and the gate prices
+#: both halves.
+EVAL_SAMPLE_TUNING = 80
+
+EVAL_SEED = 20260726
+
+#: Characters of *content* in one eval-set call: the chunk capped at 2,000 plus
+#: up to two 300-character neighbours the question must not also answer. A
+#: ceiling rather than a mean, because this stage has no `OUTPUT_SPREAD` and the
+#: point estimate therefore has to be the ceiling itself.
+EVALSET_INPUT_CHARS = 2_600
+
+#: How much of each neighbouring chunk `build_evalset` sends so the question it
+#: writes cannot also be answered by one of them.
+EVALSET_NEIGHBOUR_CHARS = 300
+
+#: Tokens one generated question costs, before the reasoning multiplier.
+#:
+#: **Measured 2026-08-31 on the first real run, and it corrected a 3.6x
+#: under-report.** The guess was 90 — the length of a question plus the
+#: `answerable_only_by_main` flag — which through the ×3 reasoning multiplier
+#: quoted 270 tokens per call. The run billed **7,743 output tokens over 8
+#: calls, i.e. 968 each**, and since output is priced at five times input the
+#: whole estimate came in at $0.0338 against a real $0.0650. Under-reporting is
+#: the one direction this must never fail in: a user who approved $0.03 and was
+#: billed $0.07 has been misled, and the reverse has not.
+#:
+#: 400 × 3.0 = 1,200 per call, which covers the measurement with about 24% of
+#: margin. **What is measured is the product, not the split**: the run had
+#: reasoning on throughout, so how much of the 968 is the question and how much
+#: is thinking was not separated, and `THINKING_OUTPUT_MULTIPLIER["evalset"]`
+#: stays at its guessed 3.0 rather than being tuned to fit one document.
+#:
+#: One document, eight calls. A second one may move it again.
+EVALSET_OUTPUT_PER_CALL = 400
+
+#: Off-topic queries the noise floor is measured with. Duplicated from
+#: `docagent.evaluate.NOISE_QUERIES` rather than imported, to keep this estimator
+#: free of engine imports — `test_the_noise_query_count_has_not_drifted` fails if
+#: the engine grows another one.
+NOISE_QUERIES = 4
+
+#: Tokens one query embedding costs. A synthetic question runs 100-200 characters
+#: and `CHARS_PER_TOKEN` is 3.6, so this is a ceiling for both the questions and
+#: the four noise queries.
+EVAL_QUERY_TOKENS = 60
+
 OUTPUT_SPREAD = {"semantics": 1.91}
 
 #: Characters per correction call, mirroring `docagent.correct.MAX_BATCH_CHARS`.
@@ -378,7 +443,25 @@ async def stage_source(request: IngestRequest) -> Staged:
     """
     from docagent.extract import extractor_name
 
+    settings = _settings()
     path = pathlib.Path(request.source_path)
+
+    # **The path is the request's, so it is checked before it is read.**
+    #
+    # Nothing else stops it. This activity does not stage a file — it is handed
+    # a path and hashes whatever is there — so without this an organisation
+    # could name another's inbox, or `/run/secrets/providers.env`, and have the
+    # pipeline index it into their own corpus under their own tenant. The
+    # containment check is against *their* tree, not the workspace: "somewhere
+    # under /workspace" is exactly the check that would wave a neighbour's file
+    # through.
+    scope = settings.paths.for_tenant(request.tenant_id)
+    if not scope.contains(path):
+        raise PermissionError(
+            f"{request.source_path!r} is outside this organisation's workspace "
+            f"({scope.root})"
+        )
+
     if not path.is_file():
         raise FileNotFoundError(f"no such file: {request.source_path}")
 
@@ -389,12 +472,26 @@ async def stage_source(request: IngestRequest) -> Staged:
         )
 
     digest, size = _sha256_file(path)
+    # **The title falls back to `source_key`, not to the staged path.**
+    #
+    # `path` is where the file *landed*, and in cloud mode the server named it
+    # itself — `randomUUID() + suffix` — precisely so that a name arriving over
+    # HTTP never becomes a path segment. So `path.stem` is by construction not a
+    # human name, and using it labelled every document imported through the paid
+    # plane with a UUID: seen on screen 2026-08-31 as
+    # "1f9c2599-2ffe-43f3-a386-eddd928c82c5" where the book's name belonged.
+    #
+    # `source_key` is the library-relative name a person reads, and it is what
+    # the document's identity already derives from. Its stem drops the extension
+    # the way `path.stem` did; a key with directories in it keeps only the last
+    # segment, since the folder is not part of the book's name.
+    fallback = pathlib.PurePosixPath(request.source_key).stem or path.stem
     return Staged(
         content_sha256=digest,
         byte_size=size,
         fmt=suffix.lstrip("."),
         extractor=extractor_name(str(path)),
-        title=request.title or path.stem,
+        title=request.title or fallback,
     )
 
 
@@ -410,11 +507,21 @@ async def register_document(
     """
     settings = _settings()
     doc_id = make_document_id(request.library_id, request.source_key)
-    ver_id = make_version_id(staged.content_sha256)
+    # Salted with the tenant: two customers importing the same PDF used to
+    # compute the same id, and this is a primary key.
+    ver_id = make_version_id(staged.content_sha256, request.tenant_id)
 
     with Catalog(settings.database_url) as catalog:
-        catalog.ensure_library(request.library_id, request.library_id)
+        # The name travels, and empty means "leave it alone". This used to pass
+        # the id in both positions, which is why a library seeded as «Teología»
+        # reads as `lib_teologia` in every picker after its first import.
+        catalog.ensure_library(
+            request.library_id,
+            request.library_name,
+            tenant_id=request.tenant_id,
+        )
         catalog.upsert_document(
+            tenant_id=request.tenant_id,
             document_id=doc_id,
             library_id=request.library_id,
             source_key=request.source_key,
@@ -433,14 +540,19 @@ async def register_document(
         # yet — and the resulting ForeignKeyViolation surfaces as a failed
         # ingest with no obvious connection to ordering.
         catalog.start_run(
+            tenant_id=request.tenant_id,
             run_id=run_id,
             workflow_id=workflow_id,
-            # 'reindex' has been in the CHECK constraint since the first
-            # migration and nothing had ever written it.
-            kind="reindex" if request.reindex else "index",
+            # Through `run_kind_of`, which `IngestWorkflow.open_run` also uses:
+            # `start_run` is `ON CONFLICT DO NOTHING`, so the workflow's earlier
+            # call is the one whose kind survives and two copies of the
+            # expression would eventually disagree.
+            kind=run_kind_of(request),
             document_id=doc_id,
+            library_id=request.library_id,
         )
         version, created = catalog.register_version(
+            tenant_id=request.tenant_id,
             version_id=ver_id,
             document_id=doc_id,
             content_sha256=staged.content_sha256,
@@ -453,6 +565,7 @@ async def register_document(
         version_id=version.id,
         created=created,
         already_indexed=version.state == "indexed",
+        tenant_id=request.tenant_id,
     )
 
 
@@ -515,6 +628,7 @@ async def extract_text(
         extractor=extractor_name(request.source_path),
         structured=structured,
         source_key=request.source_key,
+        tenant_id=request.tenant_id,
     )
 
 
@@ -635,9 +749,47 @@ async def preview_chunks(
     )
 
 
+def _persist_estimate(run_id: str, estimate: "Estimate") -> "Estimate":
+    """Write the quote the gate is about to show. See the video path's copy of
+    this for why the artifact kind existed for so long with no writer; the
+    reasoning is identical and the gap was the same on both gates."""
+    if not run_id:
+        return estimate
+    try:
+        settings = _settings()
+        store = ArtifactStore(settings.workspace, run_id)
+        _record(run_id, "estimate", store.write_json("estimate", asdict(estimate)))
+    except Exception:  # noqa: BLE001 — never fail a gate over its own receipt
+        log.warning("run %s: could not persist the estimate", run_id, exc_info=True)
+    return estimate
+
+
 @activity.defn(name="estimate_cost")
 async def estimate_cost(
-    preview: Preview, options: StageOptions, decision: ProfileDecision | None = None
+    preview: Preview,
+    options: StageOptions,
+    decision: ProfileDecision | None = None,
+    run_id: str = "",
+) -> Estimate:
+    """Project the work from a preview's character and chunk counts.
+
+    A thin wrapper over :func:`estimate_for`, which is where the arithmetic
+    lives so a second gate can reuse it rather than reimplement it. The video
+    route does exactly that: it has the same characters and chunks to reason
+    about and no `Preview` to put them in, and a gate whose numbers were
+    computed twice would eventually quote two different bills for one pipeline.
+    """
+    return _persist_estimate(
+        run_id,
+        estimate_for(preview.characters, preview.chunk_count, options, decision),
+    )
+
+
+def estimate_for(
+    characters: int,
+    chunk_count: int,
+    options: StageOptions,
+    decision: ProfileDecision | None = None,
 ) -> Estimate:
     """Project the work from character counts, before spending anything.
 
@@ -650,7 +802,7 @@ async def estimate_cost(
     `PRICES_PER_MILLION`.
     """
     settings = _settings()
-    tokens = int(preview.characters / CHARS_PER_TOKEN)
+    tokens = int(characters / CHARS_PER_TOKEN)
     stages: list[StageEstimate] = []
 
     # Reasoning is billed as output, so an estimate that ignored it under-reported
@@ -688,8 +840,8 @@ async def estimate_cost(
         )
 
     # Calls, not characters, is what the prompt overhead multiplies by.
-    correction_calls = max(1, -(-preview.characters // CORRECTION_BATCH_CHARS))
-    semantic_calls = max(1, preview.chunk_count)
+    correction_calls = max(1, -(-characters // CORRECTION_BATCH_CHARS))
+    semantic_calls = max(1, chunk_count)
 
     # Learning is skipped entirely when the family already has a profile, so the
     # second document of a family is cheaper than the first — which is the whole
@@ -739,7 +891,7 @@ async def estimate_cost(
         # cap rather than as one per concept. One per concept would over-report by
         # orders of magnitude, and pushing a user to decline affordable work
         # misleads them exactly as much as billing more than they approved.
-        condense_calls = max(1, preview.chunk_count // CONDENSE_SOURCE_CAP)
+        condense_calls = max(1, chunk_count // CONDENSE_SOURCE_CAP)
         add(
             "semantics-condense",
             settings.gemini.model,
@@ -747,12 +899,55 @@ async def estimate_cost(
             condense_calls * CONDENSE_OUTPUT_PER_CALL,
         )
     if options.generate_evalset:
+        # **One call per sampled chunk, not one call per document.** The previous
+        # figure charged the whole document's tokens once and 20% of them as
+        # output, which is the same class of miss this repository has already
+        # measured twice: a generation call pays for its system instruction,
+        # schema and JSON envelope *per call*, so the error scales with the call
+        # count. On a 600-chunk book the old line under-reported the input by
+        # roughly the overhead of forty calls and over-reported the output by an
+        # order of magnitude — wrong in both directions at once.
+        #
+        # It had never mattered, because nothing implemented the stage.
+        sample = EVAL_SAMPLE_TUNING if options.tune else EVAL_SAMPLE
+        evalset_calls = min(sample, max(1, chunk_count))
+        # The chunk this document actually has, not the cap — bounded by it.
+        # `EVALSET_INPUT_CHARS` is right for a document at the chunker's ceiling
+        # and 4.5x too big for one whose chunks run 580 characters, which is what
+        # the first real run had: 11,456 input tokens quoted against 4,408 spent.
+        # Over-reporting is the correct direction and *wildly* over-reporting is
+        # the other failure the range exists to avoid.
+        chunk_chars = characters / max(1, chunk_count)
+        evalset_chars = min(EVALSET_INPUT_CHARS, chunk_chars + 2 * EVALSET_NEIGHBOUR_CHARS)
         add(
             "evalset",
             settings.gemini.model,
-            tokens + SEMANTICS_CALL_OVERHEAD,
-            int(tokens * 0.2),
+            evalset_calls
+            * (int(evalset_chars / CHARS_PER_TOKEN) + SEMANTICS_CALL_OVERHEAD),
+            evalset_calls * EVALSET_OUTPUT_PER_CALL,
         )
+        if options.embed:
+            # Measuring embeds every question once and every noise query once.
+            # Small, and not nothing — and a stage that spends without a row is
+            # how the ledger came to be missing every question ever asked.
+            add(
+                "evaluation",
+                settings.gemini.embedding_model,
+                (evalset_calls + NOISE_QUERIES) * EVAL_QUERY_TOKENS,
+                0,
+            )
+            if options.tune:
+                # **The whole document, embedded a second time.** A chunking
+                # candidate re-cuts the text, so every chunk is a new string and
+                # not one of them is in the cache. This is the largest single
+                # line a gate can show and it is why tuning is off by default:
+                # at the measured quota of ~6 embeddings a minute it is also
+                # about a hundred minutes of wall clock for a 600-chunk book.
+                #
+                # The free half of a round — `min_score`, `per_section`,
+                # dense-only — changes nothing in the index and costs only the
+                # query embeddings already counted above.
+                add("tuning", settings.gemini.embedding_model, tokens, 0)
 
     priced = [s.usd for s in stages if s.usd is not None]
     priced_high = [s.usd_high for s in stages if s.usd_high is not None]
@@ -765,6 +960,23 @@ async def estimate_cost(
         price_source=PRICE_SOURCE,
         unpriced_stages=[s.stage for s in stages if s.usd is None],
     )
+
+
+def profile_dir(settings, tenant_id: str) -> "pathlib.Path":
+    """This organisation's profile directory.
+
+    `Paths.for_tenant` gives the legacy tenant the volume root itself, so the 23
+    profiles already on disk keep working untouched — the same exemption, for the
+    same reason, as the one `_salt()` makes for that tenant's ids. Every other
+    organisation gets `tenants/<id>/profiles`, which is what stops a profile
+    learned from one customer's book being applied to another's by structural
+    fingerprint.
+
+    Passed to `docagent.profiles` as an argument rather than arranged with a
+    `chdir`: the worker runs activities concurrently, and `os.chdir` is
+    process-global.
+    """
+    return settings.paths.for_tenant(tenant_id).profiles
 
 
 @activity.defn(name="resolve_profile")
@@ -800,7 +1012,10 @@ async def resolve_profile(
     fingerprint = engine_profiles.fingerprint(evidence, extraction.extractor)
     decision = ProfileDecision(fingerprint=fingerprint)
 
-    matches = [p for p in engine_profiles.all_profiles() if p.fingerprint == fingerprint]
+    root = profile_dir(settings, extraction.tenant_id)
+    matches = [
+        p for p in engine_profiles.all_profiles(root) if p.fingerprint == fingerprint
+    ]
     if not matches:
         return decision
 
@@ -809,7 +1024,7 @@ async def resolve_profile(
     # fingerprint, a real one with eight measured revisions and a stale one with
     # every score at 0.0. Going through `load` rather than `matches[0]` is what
     # keeps the family's rules from depending on a filename.
-    profile = engine_profiles.load(fingerprint)
+    profile = engine_profiles.load(fingerprint, root)
     if profile is None:  # pragma: no cover - all_profiles and load disagree
         return decision
 
@@ -832,7 +1047,21 @@ async def resolve_profile(
         decision.warnings = warnings
         return decision
 
-    disagreement = _heading_disagreement(store, extraction, rules)
+    # **Only for rules this document did not learn itself.** The check asks
+    # whether *inherited* rules read a different structure than the built-in
+    # ones, and a profile reused on the document it was learned from is not
+    # inherited from anywhere — the disagreement is the profile doing its job.
+    #
+    # Measured 2026-08-31 on `01_RetoDeDios_INT-S.pdf`: its own learned pattern
+    # reads 38 chapters where the defaults read 8, exactly the improvement
+    # profiles exist to provide, and without this every re-index of a document
+    # that had learned its own profile was blocked from activating. The
+    # `default == 0` escape below covers the same case only when the built-in
+    # detector finds *nothing*; here it found eight.
+    inherited = profile.learned_from != (extraction.source_key or "")
+    disagreement = (
+        _heading_disagreement(store, extraction, rules) if inherited else ""
+    )
     if disagreement:
         warnings.append(
             ProfileWarning(
@@ -840,6 +1069,7 @@ async def resolve_profile(
                 collides_with=profile.learned_from or profile.slug,
                 similarity=0.0,
                 detail=disagreement,
+                kind="heading_disagreement",
             )
         )
 
@@ -1168,6 +1398,7 @@ async def link_duplicate(
         source_key=request.source_key,
         content_sha256=staged.content_sha256,
         title=staged.title,
+        tenant_id=request.tenant_id,
         author=request.author,
         fmt=staged.fmt,
     )
@@ -1205,6 +1436,14 @@ async def project_structure(
             char_end=row.get("char_to", 0),
             section_path=paths.get(_heading_titles(row)),
             page=row.get("page"),
+            # `sheet` and `slide` were declared on ChunkNode, written by
+            # `_MERGE_CHUNKS` and rendered by `_locator` — and set by nothing,
+            # because no row schema carried them. Read them here rather than
+            # adding `start_s` beside two fields with the same bug.
+            sheet=row.get("cell_ref") or None,
+            slide=row.get("slide"),
+            start_s=row.get("start_s"),
+            end_s=row.get("end_s"),
         )
         for i, row in enumerate(rows)
     ]
@@ -1214,6 +1453,7 @@ async def project_structure(
         source_key=request.source_key,
         content_sha256=staged.content_sha256,
         title=staged.title,
+        tenant_id=request.tenant_id,
         author=request.author,
         fmt=staged.fmt,
         sections=tuple(nodes.values()),
@@ -1245,22 +1485,132 @@ async def activate_version(
         source_key=request.source_key,
         content_sha256=staged.content_sha256,
         title=staged.title,
+        tenant_id=request.tenant_id,
     )
     with Graph(settings.memgraph_url) as graph:
         proj.activate(graph, version)
 
 
+@activity.defn(name="open_run")
+async def open_run(opening: RunOpen) -> None:
+    """Open the catalog row before anything can fail against it.
+
+    Both ingest workflows call this first. Until they did, the row was created by
+    `register_document` — the *second* activity — so a failure in `probe_video`
+    or `stage_source` had nothing to be recorded against: `finish_run` is a bare
+    UPDATE, zero rows affected raises nothing, and the run vanished. Measured in
+    production on 2026-09-05, on a video YouTube refused from the EC2 egress IP:
+    the workflow failed in 2.8 s, `record_run_outcome` reported Completed, and
+    the import queue showed nothing at all.
+
+    The pattern is `asking.start_question_run`'s, which opens a question's row
+    before it asks for exactly the same reason and with the same caveat about
+    what a missing row costs downstream — `record_cost`, `record_artifact` and
+    `_insert_event` all derive their tenant from the run, so no row means no
+    bookkeeping of any kind.
+
+    **Best-effort, like every other write in this file.** An import that has not
+    spent anything must not fail because the catalog is blinking; a run that then
+    dies invisibly is no worse than what happened before this existed. Idempotent
+    at the database — `start_run` is `ON CONFLICT (id) DO NOTHING` — so a
+    Temporal retry writes nothing twice and `register_document`'s own call
+    remains a no-op that `attach_version` immediately completes.
+    """
+    settings = _settings()
+    try:
+        with Catalog(
+            settings.database_url, pooled=False, timeout=RECORD_TIMEOUT
+        ) as catalog:
+            catalog.start_run(
+                run_id=opening.run_id,
+                workflow_id=opening.workflow_id,
+                kind=opening.kind,
+                tenant_id=opening.tenant_id,
+                library_id=opening.library_id,
+                label=opening.label,
+            )
+    except Exception as e:  # noqa: BLE001 - bookkeeping never fails its stage
+        log.warning("could not open the run row for %s: %s", opening.run_id, e)
+
+
 @activity.defn(name="record_run_outcome")
 async def record_run_outcome(
-    run_id: str, state: str, error_kind: str | None = None, error_detail: str | None = None
+    run_id: str,
+    state: str,
+    error_kind: str | None = None,
+    error_detail: str | None = None,
+    seq: int | None = None,
+    at: datetime | None = None,
+    stage: str | None = None,
 ) -> None:
+    """Close the run, and close its last stage in the same statement pair.
+
+    `seq`, `at` and `stage` come from the workflow — never from here. See
+    `Catalog._insert_event`: the workflow's counter and `workflow.now()` are what
+    make a retry a no-op, and a timestamp taken here would move under one.
+    """
     settings = _settings()
     with Catalog(settings.database_url) as catalog:
-        catalog.finish_run(run_id, state, error_kind=error_kind, error_detail=error_detail)
+        closed = catalog.finish_run(
+            run_id,
+            state,
+            error_kind=error_kind,
+            error_detail=error_detail,
+            seq=seq,
+            at=at,
+            stage=stage,
+        )
+    if not closed:
+        # An UPDATE that matched nothing. This is what a failure before the run
+        # row existed used to look like from here — Completed, having written
+        # nothing — and `open_run` is what removed the cause. Say so rather than
+        # ticking; the run is about to fail and the catalog will not know why.
+        log.warning(
+            "closed no run row for %s (%s): the row does not exist", run_id, state
+        )
 
 
 @activity.defn(name="set_run_stage")
-async def set_run_stage(run_id: str, stage: str, state: str | None = None) -> None:
+async def set_run_stage(
+    run_id: str,
+    stage: str,
+    state: str | None = None,
+    seq: int | None = None,
+    at: datetime | None = None,
+    detail: str | None = None,
+) -> None:
+    """`detail` is optional and trails the signature deliberately: a history
+    written before it existed decodes against the default, so replay is
+    unaffected."""
     settings = _settings()
     with Catalog(settings.database_url) as catalog:
-        catalog.set_run_stage(run_id, stage, state=state)
+        catalog.set_run_stage(
+            run_id, stage, state=state, seq=seq, at=at, detail=detail
+        )
+
+
+@activity.defn(name="record_run_events")
+async def record_run_events(run_id: str, events: list[dict[str, Any]]) -> None:
+    """Flush the transitions that happened before the run row existed.
+
+    Takes dicts rather than `RunEvent`s because the workflow buffers them before
+    any dataclass the catalog owns is in scope, and because a payload that
+    crosses the converter is better off being the plain shape it will be
+    reassembled from anyway.
+    """
+    settings = _settings()
+    with Catalog(settings.database_url) as catalog:
+        catalog.record_run_events(
+            run_id,
+            [
+                RunEvent(
+                    seq=int(e["seq"]),
+                    at=e["at"] if isinstance(e["at"], datetime)
+                    else datetime.fromisoformat(str(e["at"])),
+                    stage=str(e["stage"]),
+                    outcome=e.get("outcome"),
+                    detail=e.get("detail"),
+                )
+                for e in events
+            ],
+        )

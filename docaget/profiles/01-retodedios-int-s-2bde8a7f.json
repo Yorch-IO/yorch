@@ -1,0 +1,337 @@
+{
+  "fingerprint": "2bde8a7f9fdb59d2",
+  "slug": "01-retodedios-int-s-2bde8a7f",
+  "extractor": "pdf_text",
+  "doc_rules": {
+    "header_patterns": [
+      "^El\\s+reto\\s+de\\s+Dios$",
+      "^\\d+/\\d+/\\d+\\s+\\d+:\\d+\\s+[AP]M$"
+    ],
+    "footer_cutoff": 0.06,
+    "line_gap_factor": 1.5
+  },
+  "chunk_rules": {
+    "target_chars": 1200,
+    "hard_cap_chars": 2000,
+    "overlap_chars": 150,
+    "min_chunk_chars": 40,
+    "max_embed_chars": 2600,
+    "question_chars_per_mark": 300,
+    "question_min_marks": 2,
+    "heading_l1_max": 30,
+    "heading_l2_max": 60,
+    "heading_l1_pattern": "^Capítulo\\s+\\d+$",
+    "heading_l2_pattern": null
+  },
+  "question_pattern": null,
+  "footnote_pattern": null,
+  "retrieval": {
+    "min_score": 0.6,
+    "per_section": 2,
+    "dense_only": false
+  },
+  "scores": {
+    "recall_at_1": 0.65,
+    "recall_at_5": 0.95,
+    "mrr_at_10": 0.775,
+    "recall_at_5_dense_only": 0.95,
+    "noise_floor": 0.6328,
+    "chunks": 600,
+    "eval_questions": 40
+  },
+  "evalset": [
+    {
+      "question": "¿Qué argumentación expone el texto para sostener que el instrumento de martirio no fue una ocurrencia circunstancial, sino una creación diseñada desde el origen por la misma divinidad?",
+      "chunk_index": 60,
+      "char_mid": 51643,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 3"
+    },
+    {
+      "question": "¿Qué denominaciones asignaban a la Divinidad creadora los integrantes de la tribu kamilaroi y la comunidad de los bosquimanos?",
+      "chunk_index": 273,
+      "char_mid": 211255,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 13"
+    },
+    {
+      "question": "¿Qué legados de la filosofía de Grecia y del derecho de Roma mantuvo el discurso de Pablo ante las corrientes paganas para dar origen a la cultura de Occidente?",
+      "chunk_index": 432,
+      "char_mid": 342207,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 22"
+    },
+    {
+      "question": "¿Qué hecho irónico ocurrió durante el intento de destrucción de los libros sagrados de una comunidad no católica en Bogotá a mediados del siglo XIX?",
+      "chunk_index": 231,
+      "char_mid": 176940,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 11"
+    },
+    {
+      "question": "¿Qué característica distingue a los seres humanos de otros seres vivos para permitirles establecer un contacto individual y rendir culto al Creador?",
+      "chunk_index": 396,
+      "char_mid": 315858,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 20"
+    },
+    {
+      "question": "¿Qué expresión de carácter bélico utilizó Alberto Lleras en una publicación periódica para definir el torneo mundial de balompié?",
+      "chunk_index": 134,
+      "char_mid": 108649,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 6"
+    },
+    {
+      "question": "¿Por qué razón los encuentros presenciales de los fieles mantendrán su vigencia a pesar del crecimiento de las redes digitales?",
+      "chunk_index": 562,
+      "char_mid": 450396,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 29"
+    },
+    {
+      "question": "¿Qué sistema de creencia pagana surgió tras el Gran Cataclismo atribuyendo la suerte de los seres humanos al movimiento de los cuerpos celestes?",
+      "chunk_index": 391,
+      "char_mid": 311275,
+      "cell_ref": "",
+      "breadcrumb": "2. Ibídem."
+    },
+    {
+      "question": "¿Qué actitud tomó un destacado predicador estadounidense hacia los académicos religiosos europeos refugiados en su país a pesar de los recelos de su propia comunidad?",
+      "chunk_index": 436,
+      "char_mid": 346147,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 22"
+    },
+    {
+      "question": "¿Qué equivocación cometieron las comunidades evangélicas al descalificar las corrientes musicales modernas y cuál es el criterio que sostiene que la valoración moral depende del mensaje y no del estilo?",
+      "chunk_index": 576,
+      "char_mid": 460927,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 30"
+    },
+    {
+      "question": "¿Qué modalidad lingüística surgida en las islas de Aruba, Bonaire y Curazao logró ser incorporada a la enseñanza oficial?",
+      "chunk_index": 110,
+      "char_mid": 90751,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 6"
+    },
+    {
+      "question": "¿Qué cita de las Escrituras se emplea para respaldar la postura de no rechazar apresuradamente las ideas novedosas antes de evaluar su utilidad?",
+      "chunk_index": 421,
+      "char_mid": 334619,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 21"
+    },
+    {
+      "question": "¿Cómo interpretaban influyentes teólogos de la antigüedad cristiana el fundamento de la iglesia en oposición a la primacía personal del apóstol obispo?",
+      "chunk_index": 160,
+      "char_mid": 130222,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 8"
+    },
+    {
+      "question": "¿Qué intelectual planteó la idea de sustituir el culto a la figura mariana en la catedral parisina por la deidad del intelecto humano?",
+      "chunk_index": 37,
+      "char_mid": 33662,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 2"
+    },
+    {
+      "question": "¿Por qué se afirma que la visión del destino final de la creación no consiste únicamente en sucesos de una era posterior, sino en un proceso en constante desarrollo?",
+      "chunk_index": 301,
+      "char_mid": 235669,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 15"
+    },
+    {
+      "question": "¿Cómo se describe el estilo de culto y la autenticidad espiritual de las antiguas comunidades protestantes de las islas caribeñas colombianas frente a ciertas vertientes actuales?",
+      "chunk_index": 226,
+      "char_mid": 173782,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 11"
+    },
+    {
+      "question": "¿Qué equivocaciones frecuentes existen sobre la uniformidad de las corrientes de renovación carismática y su postura teológica respecto a la Trinidad?",
+      "chunk_index": 54,
+      "char_mid": 45562,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 3"
+    },
+    {
+      "question": "¿Cuál es la principal estratagema que, según el poeta Charles Baudelaire, utiliza el ente maligno para pasar desapercibido?",
+      "chunk_index": 317,
+      "char_mid": 248908,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 16"
+    },
+    {
+      "question": "¿De qué manera se diferencia a la persona dispuesta a quitarle la vida a otros por sus dogmas de aquella que prefiere perder la suya por sus convicciones, ilustrado mediante la historia bíblica de Esteban?",
+      "chunk_index": 565,
+      "char_mid": 453438,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 29"
+    },
+    {
+      "question": "¿Qué lección indicó Jesús que debían recibir los líderes religiosos por parte de los jóvenes que lo aclamaban tras la expulsión de los mercaderes?",
+      "chunk_index": 578,
+      "char_mid": 463048,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 30"
+    },
+    {
+      "question": "¿En qué volumen y páginas del repertorio bibliográfico publicado por la editorial Montaner y Simón se ubica la entrada dedicada a José Ortega y Gasset?",
+      "chunk_index": 99,
+      "char_mid": 80802,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 5"
+    },
+    {
+      "question": "¿Cuál es la fuente bibliográfica específica de 1966 citada en la quinta nota a pie de página?",
+      "chunk_index": 264,
+      "char_mid": 204918,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 13"
+    },
+    {
+      "question": "¿Por qué razón se sostiene que una eventual duplicación biológica de un ser humano estaría limitada únicamente a su aspecto corporal?",
+      "chunk_index": 414,
+      "char_mid": 329829,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 21"
+    },
+    {
+      "question": "¿En qué medio informativo londinense y fecha exacta de finales de 1996 apareció publicado el trabajo de Paul Johnson mencionado?",
+      "chunk_index": 44,
+      "char_mid": 38493,
+      "cell_ref": "",
+      "breadcrumb": "6. Ibídem, p. 120."
+    },
+    {
+      "question": "¿Qué datos de publicación en Colombia se registran para la obra sobre proyecciones del futuro escrita por Maibit y Aburdene?",
+      "chunk_index": 354,
+      "char_mid": 278348,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 18"
+    },
+    {
+      "question": "¿En qué ciudad estadounidense y en qué año se editó el trabajo impreso de Ralph Woodrow sobre el culto misterioso de la antigua Babilonia?",
+      "chunk_index": 63,
+      "char_mid": 53910,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 3"
+    },
+    {
+      "question": "¿Qué libro de Lázaro Schallman publicado por el Congreso Judío Latinoamericano en 1971 se incluye en las referencias del texto?",
+      "chunk_index": 128,
+      "char_mid": 104038,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 6"
+    },
+    {
+      "question": "¿A quién se le atribuye la decisión de organizar e integrar los diversos componentes anatómicos según su propio criterio en la comparación expuesta?",
+      "chunk_index": 151,
+      "char_mid": 120952,
+      "cell_ref": "",
+      "breadcrumb": "3. Ibídem."
+    },
+    {
+      "question": "¿Qué reflexión se propone respecto a si las costumbres litúrgicas y el desempeño del clero católico están facilitando u obstaculizando la conexión de la sociedad contemporánea con Cristo?",
+      "chunk_index": 49,
+      "char_mid": 42262,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 3"
+    },
+    {
+      "question": "¿Qué edición norteamericana de 1978 publicada por la casa Cumbre corresponde al escrito de Thomas Carlyle sobre la admiración a personajes ilustres?",
+      "chunk_index": 133,
+      "char_mid": 108049,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 6"
+    },
+    {
+      "question": "¿En qué página y casa editorial de Buenos Aires se ubica la referencia de 1964 de la obra sobre el Caribe escrita por Germán Arciniegas?",
+      "chunk_index": 140,
+      "char_mid": 113818,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 7"
+    },
+    {
+      "question": "¿Qué discurso específico de Juan Crisóstomo sobre la esencia inasequible de la divinidad figura registrado como segunda cita?",
+      "chunk_index": 166,
+      "char_mid": 135224,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 8"
+    },
+    {
+      "question": "¿Cuál es el libro de C. S. Lewis editado por Andrés Bello que se cita en el texto y qué página se indica en su respectiva referencia bibliográfica?",
+      "chunk_index": 545,
+      "char_mid": 435004,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 28"
+    },
+    {
+      "question": "¿Qué fuente bibliográfica editada por Javier Vergara en Buenos Aires en 1989 registra el texto de Paul Johnson sobre el desarrollo histórico del credo cristiano en sus páginas 42 y 43?",
+      "chunk_index": 77,
+      "char_mid": 63607,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 4"
+    },
+    {
+      "question": "¿Qué contraste se plantea entre la comprensión de lo sagrado que poseían las comunidades originarias del continente y la de las fuerzas colonizadoras europeas?",
+      "chunk_index": 253,
+      "char_mid": 197899,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 12"
+    },
+    {
+      "question": "¿En qué ciudad y año fue publicado el libro de David H. Stern sobre la recuperación del trasfondo hebreo del mensaje cristiano?",
+      "chunk_index": 461,
+      "char_mid": 367363,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 24"
+    },
+    {
+      "question": "¿En qué fecha específica y página del periódico El Tiempo se publicó el artículo «Un alto en el camino» escrito por Alfonso Llano?",
+      "chunk_index": 51,
+      "char_mid": 43217,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 3"
+    },
+    {
+      "question": "¿Qué principio establece que las garantías inherentes a cada persona son infranqueables y deben respetarse siempre?",
+      "chunk_index": 207,
+      "char_mid": 162537,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 10"
+    },
+    {
+      "question": "¿Cuál es la casa editora y el año de publicación en España registrados para el texto de Eduardo Galeano en la octava ficha bibliográfica?",
+      "chunk_index": 511,
+      "char_mid": 407544,
+      "cell_ref": "",
+      "breadcrumb": "3. Ibídem, p. 413."
+    },
+    {
+      "question": "¿Qué datos de publicación se citan en las notas bibliográficas cuatro y cinco respecto a las obras de Max Weber y Luisa Jeter de Walker?",
+      "chunk_index": 175,
+      "char_mid": 142469,
+      "cell_ref": "",
+      "breadcrumb": "Capítulo 8"
+    }
+  ],
+  "learned_from": "libros/01_RetoDeDios_INT-S.pdf",
+  "learned_at": 1787983197.8570478,
+  "revisions": 1,
+  "validation_notes": [
+    "OK  header_patterns: '^El\\\\s+reto\\\\s+de\\\\s+Dios$' matches 'El reto de Dios' on 128 pages, no body hits",
+    "OK  header_patterns: '^\\\\d+/\\\\d+/\\\\d+\\\\s+\\\\d+:\\\\d+\\\\s+[AP]M$' matches '1/3/13   9:39 AM' on 304 pages, no body hits",
+    "OK  heading_patterns: nivel 1: '^Capítulo\\\\s+\\\\d+$' -> 30 encabezados sin numerar (1.9% de los párrafos)",
+    "FAIL heading_patterns: nivel 2: '^[A-ZÁÉÍÓÚÑ][^.?¿!]{2,50}$' coincide con 31.9% de los párrafos — ha dejado de discriminar",
+    "OK  heading_guards: the learned pattern explains 30 level-1 headings against 16 numbered lines, so the numbered path is footnote noise here and its sequence is not the signal",
+    "OK  question_pattern: none proposed; defaults apply",
+    "FAIL footnote_pattern: only 63% of 114 matches look like a footnote by an independent signal; e.g. ['10. El «concordato evangélico»............................................. 105', '11. Cristianismo y republicanismo....................................... 115', '12. La «enorme minoría».......................................................123']"
+  ],
+  "tuning_history": []
+}

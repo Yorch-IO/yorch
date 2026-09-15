@@ -31,6 +31,14 @@ KIND_FOOTNOTE = "nota"
 KIND_TABLE_ROW = "tabla_fila"
 KIND_TABLE_SUMMARY = "tabla_resumen"
 KIND_SLIDE = "diapositiva"
+#: A grouped run of transcript cues from a video.
+#:
+#: Spanish on the wire like every other kind, because these are stored in Qdrant
+#: payloads and used in filters; renaming one breaks every existing collection.
+#: It is a kind of its own rather than `cuerpo` because a transcript is speech
+#: the machine heard, not prose an editor set, and a reader deciding whether to
+#: trust a fragment should be told which.
+KIND_TRANSCRIPT = "transcripcion"
 
 
 @dataclass(frozen=True)
@@ -49,6 +57,18 @@ class ChunkRules:
     # A paragraph averaging one ¿ per this many chars or denser is a question
     # block, not prose. See classify_kind.
     question_chars_per_mark: int = 300
+    #: How many ¿ a paragraph must carry before the density rule may fire at all.
+    #:
+    #: The density rule exists for the one question block that does not begin
+    #: with a number ("Freud\n27. ¿Hasta dónde…"), and the reference book put
+    #: 17 marks in 2054 chars against prose at one per 800-4300. That gap is why
+    #: one mark was enough there — its paragraphs are long. On a rhetorical
+    #: essay split at the line pitch, a 280-char paragraph with a single
+    #: rhetorical ¿ clears 300 chars/mark on its own: 62 paragraphs of prose
+    #: were tagged `preguntas` on 01_RetoDeDios_INT-S.pdf. A block of review
+    #: questions is recognisable by carrying *several* marks, so corroboration
+    #: costs nothing on the documents the threshold was measured against.
+    question_min_marks: int = 2
     # Heading guards, copied from html/main.go's headingLevel.
     heading_l1_max: int = 40
     heading_l2_max: int = 120
@@ -97,7 +117,26 @@ class DocRules:
 # matching html/main.go's headingRe.
 HEADING_RE = re.compile(r"^(\d+(\.\d+)*)\.?\s+\w", re.UNICODE)
 # 5+ dots means a table-of-contents entry with dot leaders, not a heading.
-TOC_LINE_RE = re.compile(r"\.{5,}")
+# The dots may be spaced: a typeset TOC leader comes out of PyMuPDF as ". . . ."
+# and never matched `\.{5,}`. Measured 2026-09-03 on 04-TesorosDiosMeDio and
+# 06-SexoEnLaBiblia: 17 numbered TOC lines ("1. Lazos familiares.. . . . 11")
+# were tagged `preguntas`, each one resetting the section path (invariant #11).
+TOC_LINE_RE = re.compile(r"(?:\.\s?){5,}")
+# An endnote or bibliographic entry that happens to be numbered like a heading:
+# "2. Ibídem.", "6. Ibídem, p. 120.", "1. Tácito, Anales, 15, 44." Two shapes.
+# `ENDNOTE_RE` is the unambiguous vocabulary of a citation; `CITATION_TAIL_RE`
+# is the ", <number>" a publisher, year or page introduces, and only counts
+# when the line also ends in a period (a heading "Génesis 1, 2 y 3" does not).
+# Measured 2026-09-03 with the default rules: 26 such lines read as level-1
+# chapters across 01_RetoDeDios, 05-CodigoJesus and 06-SexoEnLaBiblia, and
+# 854 chunks carried one as their breadcrumb — 549 of RetoDeDios's 599.
+ENDNOTE_RE = re.compile(
+    r"\b(ib[ií]d(em)?\b|[ií]dem\b|op\.\s*cit|loc\.\s*cit|pp?\.\s*\d)", re.IGNORECASE
+)
+CITATION_TAIL_RE = re.compile(r",\s*\d")
+# A numbered line whose title starts lowercase is a list item, not a heading:
+# "1.\t la María humana," read as a chapter on 05-CodigoJesus (4 of them).
+LOWERCASE_TITLE_RE = re.compile(r"^\d+(\.\d+)*\.?\s+[^\W\d_]", re.UNICODE)
 # A numbered list item — "1. Defina…", "26. Señale…". The dot is REQUIRED, which
 # is what keeps footnotes out. See classify_kind.
 NUMBERED_ITEM_RE = re.compile(r"^\d+\.\s")
@@ -253,11 +292,33 @@ def heading_level(s: str, rules: ChunkRules) -> int:
         # Arrianismo" is indistinguishable from a numbered heading on shape
         # alone, and letting it through put a year in the chapter sequence once.
         return 0
+    if is_endnote(s):
+        # "2. Ibídem." is 10 characters, more letters than digits, no question
+        # mark and no dot leaders: it passed every guard above and became the
+        # chapter of 90% of a book. Runs before the learned patterns, like the
+        # question guard, because a profile does not repair it — the numbered
+        # path below is what it falls through to.
+        return 0
     if rules.heading_l1_pattern and re.match(rules.heading_l1_pattern, s):
         return 1 if len(s) <= rules.heading_l1_max else 0
     if rules.heading_l2_pattern and re.match(rules.heading_l2_pattern, s):
         return 2 if len(s) <= rules.heading_l2_max else 0
     if not HEADING_RE.match(s):
+        return 0
+    if sum(c.isdigit() for c in s) > sum(c.isalpha() for c in s):
+        # A "numbered heading" with more digits than letters is a printer's
+        # signature line or a run of page numbers, not a heading. Measured on
+        # 02-PuertasEternas: "12 13 14 15 16 v6 5 4 3 2 1" (18 digits, 1 letter)
+        # read as chapter 12 and became the breadcrumb of 13 chunks — the whole
+        # epigraph and introduction, including four named sections. The length
+        # cap above cannot catch it: at 27 chars it is well under heading_l1_max.
+        # A real numbered heading always carries its title ("2.1.1 Foo" is 3 and
+        # 3, which this lets through).
+        return 0
+    m = LOWERCASE_TITLE_RE.match(s)
+    if m and m.group(0)[-1].islower():
+        # A heading's title is capitalised; a numbered line whose first letter
+        # is lowercase is an item of a list the author set in the prose.
         return 0
     prefix = s.split()[0].rstrip(".")
     level = prefix.count(".") + 1
@@ -266,6 +327,18 @@ def heading_level(s: str, rules: ChunkRules) -> int:
     if level >= 2 and len(s) > rules.heading_l2_max:
         return 0
     return level
+
+
+def is_endnote(s: str) -> bool:
+    """Does this line read as a citation rather than as a title or a question?
+
+    The vocabulary (`ENDNOTE_RE`) is decisive on its own. The ", <number>" shape
+    needs the line to end in a period as well, so a heading such as "Génesis 1,
+    2 y 3" keeps its level while "1. Tácito, Anales, 15, 44." loses it.
+    """
+    if ENDNOTE_RE.search(s):
+        return True
+    return bool(CITATION_TAIL_RE.search(s)) and s.rstrip().endswith(".")
 
 
 def classify_kind(text: str, rules: ChunkRules) -> str:
@@ -280,6 +353,19 @@ def classify_kind(text: str, rules: ChunkRules) -> str:
       *optional* dot — as ``HEADING_RE`` does — tags nine footnotes as questions.
       That was a real bug, and it only surfaced by printing the classifier's
       output over the whole document rather than trusting the rule.
+
+      **Known to not hold on every editorial.** ``05-CodigoJesus-_int-S.pdf``
+      (Editorial Vida / Hechos & Crónicas) numbers its own footnotes *with* a
+      dot too ("1. Paul Johnson, Historia del cristianismo…", "4. Ibidem."),
+      which tags 46 of them `preguntas` on a 24-chapter essay with none —
+      the same family of defect as the "9 capítulos falsos" already recorded
+      for ``01_RetoDeDios_INT-S.pdf`` in ``doc/CLAUDE.md``. A fix requiring
+      ¿/?/an imperative to corroborate the dot (mirroring the check
+      ``heading_level`` already runs) was tried and reverted: on the real
+      corpus it left every footnote chunk with no ``section``, breaking
+      ``test_invariants.py::test_inv11_footnotes_keep_their_section_path`` —
+      a fix that moves that test is not a fix by this project's own rule.
+      Reported, not fixed, same as the sibling defect.
     * The ¿-density rule catches the one question paragraph that does not begin
       with a number at all: "Freud\\n27. ¿Hasta dónde…".
     * Body prose asks rhetorical questions too — seven paragraphs carried 2 to 5
@@ -289,11 +375,42 @@ def classify_kind(text: str, rules: ChunkRules) -> str:
     """
     if heading_level(text, rules) > 0:
         return KIND_BODY  # callers normally handle headings; be safe if not
+    if TOC_LINE_RE.search(text):
+        # A table-of-contents line ("10. El «concordato evangélico»......105") is
+        # numbered and dotted, so `NUMBERED_ITEM_RE` reads it as a review
+        # question. `heading_level` already refuses it for the same reason and
+        # returns 0; this classifier took that 0 and did not consult the guard.
+        # Measured on 01_RetoDeDios_INT-S.pdf: 99 index lines tagged `preguntas`,
+        # each one also resetting the section path (invariant #11).
+        return KIND_BODY
     if NUMBERED_ITEM_RE.match(text):
+        if ENDNOTE_RE.search(text):
+            # This publisher numbers its endnotes with a dot too ("2. Ibídem.",
+            # "1. Schaeffer, Huyendo de la razón, …, pp. 66"). The vocabulary
+            # of a citation settles it: a note, which keeps its section path
+            # (invariant #11), not a review question, which resets it.
+            return KIND_FOOTNOTE
+        if is_endnote(text) and not (
+            "¿" in text or "?" in text or IMPERATIVES.search(text)
+        ):
+            # ", 1989." at the end of a numbered line is a citation as well,
+            # unless the line also asks something — a cited title may carry a
+            # question mark ("¿Cuál camino?, Editorial Vida, 1968.") and is
+            # left as it was rather than guessed at.
+            return KIND_FOOTNOTE
         return KIND_QUESTIONS
     n = text.count("¿")
-    if n > 0 and n * rules.question_chars_per_mark >= len(text.encode("utf-8")):
-        return KIND_QUESTIONS
+    if n and n * rules.question_chars_per_mark >= len(text.encode("utf-8")):
+        # Density alone is not enough on a rhetorical essay. The rule exists for
+        # the block that does not *begin* with a number but still is one
+        # ("Freud\n27. ¿Hasta dónde…"), so a single mark must be corroborated by
+        # a numbered item somewhere inside the paragraph; several marks
+        # corroborate themselves. See `question_min_marks`.
+        numbered_inside = any(
+            NUMBERED_ITEM_RE.match(line) for line in text.splitlines()
+        )
+        if n >= rules.question_min_marks or numbered_inside:
+            return KIND_QUESTIONS
     if FOOTNOTE_RE.match(text):
         return KIND_FOOTNOTE
     return KIND_BODY
@@ -418,6 +535,31 @@ def _windowize(
         to = last.offset + len(last.text)
         text = src[frm:to].strip().decode("utf-8")
 
+        if len(text.encode("utf-8")) < rules.min_chunk_chars and out:
+            # A run too short to stand alone joins the chunk before it rather
+            # than vanishing. The loop below already carries such a run
+            # *forward*; this is the tail case, where nothing follows.
+            prev = out[-1]
+            merged = src[prev.char_from : to].strip().decode("utf-8")
+            if len(merged.encode("utf-8")) <= rules.hard_cap_chars:
+                grown = replace(
+                    prev, text=merged, char_to=to, para_to=last.para_idx
+                )
+                # The overlap was admitted against the shorter text, so its
+                # budget is re-checked here: `max_embed_chars` caps breadcrumb
+                # plus overlap plus text, and `test_port_fidelity` asserts it
+                # over the whole reference book. Dropping the overlap when it no
+                # longer fits is what the rule below already does.
+                budget = (
+                    len(grown.breadcrumb()) + len(grown.overlap) + len(merged) + 10
+                )
+                if budget > rules.max_embed_chars:
+                    grown.overlap = ""
+                out[-1] = grown
+                cur = []
+                size = 0
+                return
+
         if len(text.encode("utf-8")) >= rules.min_chunk_chars:
             c = Chunk(
                 index=start_index + len(out),
@@ -443,7 +585,19 @@ def _windowize(
 
     for u in units:
         if cur and size + 2 + len(u.text) > rules.target_chars:
-            emit()
+            # A run under `min_chunk_chars` is never emitted on its own: the
+            # old rule cut it off the moment the next unit would overshoot the
+            # target, and `emit` then discarded it as too small. Measured
+            # 2026-09-03 across 45 corrected texts: 168 paragraphs silently
+            # left out of the index, 59 in 05-CodigoJesus alone — almost all
+            # of them the books' unnumbered chapter titles ("Capítulo 2", "La
+            # corona no hace al rey"), because a title is short and the
+            # paragraph that follows it is long. It rides into the next chunk
+            # instead, unless that would breach the hard cap.
+            if size >= rules.min_chunk_chars or (
+                size + 2 + len(u.text) > rules.hard_cap_chars
+            ):
+                emit()
         cur.append(u)
         size += len(u.text) + (2 if len(cur) > 1 else 0)
     emit()
@@ -534,7 +688,10 @@ def _word_spans(b: bytes, rules: ChunkRules) -> list[tuple[int, int]]:
         if i > 0:
             cut = i
         spans.append((start, cut))
-        start = cut
+        # Skip the space itself. A span that began on it had its text
+        # `strip()`ed but its offset not, so `_windowize` measured the chunk's
+        # end from the wrong byte and every such chunk lost its last character.
+        start = cut + 1 if b[cut : cut + 1] == b" " else cut
     if start < len(b):
         spans.append((start, len(b)))
     return spans

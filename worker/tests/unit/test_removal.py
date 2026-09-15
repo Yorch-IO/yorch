@@ -15,6 +15,7 @@ import pytest
 
 from brainworker import config, removal
 from brainworker.catalog import Document
+from brainworker.graph.schema import LEGACY_TENANT_ID
 
 
 class FakeQdrant:
@@ -53,7 +54,7 @@ class FakeCatalog:
     def __exit__(self, *exc):
         return False
 
-    def document(self, document_id, *, library_id=None):
+    def document(self, document_id, *, library_id=None, tenant_id=None):
         if document_id not in {h for hs in self._holders.values() for h in hs}:
             return None
         return Document(
@@ -134,7 +135,16 @@ def test_a_failure_after_qdrant_leaves_the_catalog_naming_the_document(
     with pytest.raises(RuntimeError, match="memgraph went away"):
         removal.remove_document(settings, library_id="lib_1", document_id="doc_1")
 
-    assert fake_q.deleted == [{"library_id": "lib_1", "version_id": "ver_1"}]
+    # The tenant leads the filter: a delete-by-filter that named the wrong
+    # organisation would, before the payload carried one, have deleted
+    # somebody else's points.
+    assert fake_q.deleted == [
+        {
+            "tenant_id": LEGACY_TENANT_ID,
+            "library_id": "lib_1",
+            "version_id": "ver_1",
+        }
+    ]
     assert removed == [], "the catalog must still name the document for a retry"
 
 
@@ -173,7 +183,8 @@ def test_a_shared_version_is_repointed_rather_than_deleted(monkeypatch, settings
     assert fake_q.deleted == [], "the other document still holds these bytes"
     assert fake_q.repointed == [
         (
-            {"library_id": "lib_1", "version_id": "ver_1", "document_id": "doc_1"},
+            {"tenant_id": LEGACY_TENANT_ID, "library_id": "lib_1",
+             "version_id": "ver_1", "document_id": "doc_1"},
             {"document_id": "doc_2"},
         )
     ]

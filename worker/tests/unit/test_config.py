@@ -203,3 +203,76 @@ def test_every_named_stage_can_be_overridden_from_the_environment(monkeypatch):
         monkeypatch.setenv(f"BRAIN_THINKING_{stage.upper()}", "512")
     resolved = config.load().gemini
     assert all(resolved.thinking_for(s) == 512 for s in config.THINKING_STAGES)
+
+
+# -- one workspace, one tree per organisation --------------------------------
+
+
+def test_the_legacy_tenant_keeps_the_root_it_already_writes_to(tmp_path):
+    """Rerooting it would invalidate every `run_artifact` row at once.
+
+    A row stores a *workspace-relative* path, so an existing corpus that moved
+    would have 69 rows pointing at nothing — the same reasoning that keeps its
+    derived ids unsalted.
+    """
+    from brainworker.config import Paths
+    from brainworker.graph.schema import LEGACY_TENANT_ID
+
+    paths = Paths(root=tmp_path)
+    assert paths.for_tenant(LEGACY_TENANT_ID).runs == tmp_path / "runs"
+    other = "tnt_" + "b" * 24
+    assert paths.for_tenant(other).runs == tmp_path / "tenants" / other / "runs"
+
+
+def test_a_tenant_id_that_is_not_one_cannot_become_a_path_segment(tmp_path):
+    """A path built from an unchecked string is how a workspace gets escaped."""
+    import pytest
+
+    from brainworker.config import Paths
+
+    for bad in ("../etc", "", "tnt_short", "tnt_" + "Z" * 24):
+        with pytest.raises(ValueError):
+            Paths(root=tmp_path).for_tenant(bad)
+
+
+def test_the_legacy_tenant_cannot_reach_the_organisations_that_came_after(tmp_path):
+    """The hole the first version of `contains` left open.
+
+    Its root is the volume itself, so `tenants/<other>/…` is under it — and a
+    containment check alone would have let the one organisation that predates
+    tenancy read every organisation that came after.
+    """
+    from brainworker.config import Paths
+    from brainworker.graph.schema import LEGACY_TENANT_ID
+
+    other = "tnt_" + "b" * 24
+    theirs = tmp_path / "tenants" / other / "inbox" / "suyo.txt"
+    theirs.parent.mkdir(parents=True)
+    theirs.touch()
+    mine = tmp_path / "inbox" / "mio.txt"
+    mine.parent.mkdir()
+    mine.touch()
+
+    paths = Paths(root=tmp_path)
+    legacy = paths.for_tenant(LEGACY_TENANT_ID)
+    assert legacy.contains(mine)
+    assert not legacy.contains(theirs)
+
+    scoped = paths.for_tenant(other)
+    assert scoped.contains(theirs)
+    assert not scoped.contains(mine)
+
+
+def test_a_symlink_out_of_the_tree_does_not_count_as_inside_it(tmp_path):
+    """`resolve()` before comparing, or a link in the inbox is a way out."""
+    from brainworker.config import Paths
+
+    other = "tnt_" + "b" * 24
+    inbox = tmp_path / "tenants" / other / "inbox"
+    inbox.mkdir(parents=True)
+    outside = tmp_path / "fuera.txt"
+    outside.touch()
+    link = inbox / "parece-mio.txt"
+    link.symlink_to(outside)
+
+    assert not Paths(root=tmp_path).for_tenant(other).contains(link)

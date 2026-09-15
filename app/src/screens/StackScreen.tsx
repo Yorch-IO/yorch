@@ -2,10 +2,14 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { AnswerStyles } from "./AnswerStyles";
+
+import { useBackend } from "../lib/backend";
 import {
   api,
   errorGuidanceKey,
   errorMessage,
+  type BackendMode,
   type DockerInfo,
   type Health,
   type ProviderSettings,
@@ -51,6 +55,21 @@ export function StackScreen() {
   const [dockerError, setDockerError] = useState<string | null>(null);
   const [status, setStatus] = useState<StackStatus | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
+  // Held above this screen, not in it. Which plane the app talks to decides
+  // what every other screen may read, so the four writes below — the initial
+  // read, a saved mode, a sign-in and a sign-out — are what invalidates the
+  // library list and remounts the rest of the app. See `lib/backend.tsx`.
+  const { info: backend, publish: setBackend, reload: reloadBackend } = useBackend();
+  /** No organisation here on purpose. This release supports an account with a
+   *  single membership, and the server resolves that one from the token — so
+   *  offering a field would be offering a choice with one option and a way to
+   *  get it wrong. The header and its plumbing stay in Rust, because that is
+   *  what a picker would use the day several memberships are provisioned. */
+  const [backendDraft, setBackendDraft] = useState<{
+    mode: BackendMode;
+    baseUrl: string;
+  } | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
   const [provider, setProvider] = useState<ProviderSettings | null>(null);
   const [projectDraft, setProjectDraft] = useState("");
   /** Set once a project has been saved in this session. The containers keep the
@@ -77,22 +96,56 @@ export function StackScreen() {
   }, []);
 
   const refresh = useCallback(async () => {
-    try {
-      setStatus(await api.stackStatus());
-      setError(null);
-    } catch (e) {
-      setError(e);
-      return;
+    // First, and deliberately before the stack is asked about: this is the one
+    // read that must work when there is no local stack at all. In cloud mode
+    // Docker is irrelevant, and a user whose stack cannot start still has to be
+    // able to see — and change — which backend they are pointed at. Putting it
+    // after `stackStatus`'s early return hid the whole section on exactly the
+    // machine that needed it.
+    // Read through the provider rather than calling Rust here. It is the one
+    // owner of this value now, because the rest of the app is invalidated by
+    // it; two reads would be two chances for this screen and everything else to
+    // disagree about which plane is selected.
+    const chosen = await reloadBackend();
+    const mode: BackendMode = chosen?.mode ?? "local";
+    if (chosen) {
+      setBackendDraft(
+        (draft) => draft ?? { mode: chosen.mode, baseUrl: chosen.baseUrl },
+      );
     }
-    // The provider is read from `.env` by Rust, so unlike health it answers
-    // whether or not the stack is running — which is the point: a user should
-    // be able to name their project *before* bringing anything up.
-    try {
-      const settings = await api.providerSettings();
-      setProvider(settings);
-      setProjectDraft((draft) => (draft === "" ? settings.projectId : draft));
-    } catch {
+
+    // The stack and the provider project belong to the local backend and to
+    // nothing else, so in cloud mode they are not asked about at all.
+    //
+    // Not merely tidier — the commands *refuse* in cloud mode now, and the
+    // `return` below treats a refusal as fatal, so asking anyway skipped the
+    // health read underneath it. That is how the paid plane ended up never
+    // being contacted from a signed-in window: no request, no `last_login_at`,
+    // no health table, and a red panel saying Docker was unavailable to a user
+    // for whom Docker is irrelevant. Docker's absence is already explicitly not
+    // an error further down this file; this is the same rule, one call earlier.
+    if (mode === "local") {
+      try {
+        setStatus(await api.stackStatus());
+        setError(null);
+      } catch (e) {
+        setError(e);
+        return;
+      }
+      // The provider is read from `.env` by Rust, so unlike health it answers
+      // whether or not the stack is running — which is the point: a user should
+      // be able to name their project *before* bringing anything up.
+      try {
+        const settings = await api.providerSettings();
+        setProvider(settings);
+        setProjectDraft((draft) => (draft === "" ? settings.projectId : draft));
+      } catch {
+        setProvider(null);
+      }
+    } else {
+      setStatus(null);
       setProvider(null);
+      setError(null);
     }
     // Health comes from the control API, which is only up once the stack is.
     // A failure here is expected before that and must not surface as an error.
@@ -101,7 +154,58 @@ export function StackScreen() {
     } catch {
       setHealth(null);
     }
+  }, [reloadBackend]);
+
+  /**
+   * Save the chosen plane.
+   *
+   * The address is validated in Rust, not here: it has to be refused by the
+   * request that set it rather than by every screen afterwards, and a check in
+   * the webview would only be the first of two.
+   */
+  /**
+   * The button stays disabled for as long as the browser has the user, which
+   * can be minutes — a password and possibly a one-time code. Without the flag
+   * a second press binds a second listener to the same port and fails with an
+   * error about an address in use, which says nothing about what happened.
+   */
+  const startSession = useCallback(async () => {
+    setError(null);
+    setSigningIn(true);
+    try {
+      setBackend(await api.signIn());
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSigningIn(false);
+    }
   }, []);
+
+  const endSession = useCallback(async () => {
+    setError(null);
+    try {
+      setBackend(await api.signOut());
+    } catch (e) {
+      setError(e);
+    }
+  }, []);
+
+  const saveBackend = useCallback(async () => {
+    if (!backendDraft) return;
+    setError(null);
+    try {
+      setBackend(
+        // Empty: an absent `X-Tenant-Id`, which is what tells the server to
+        // use the account's sole membership. Not an empty header.
+        await api.setBackendMode(backendDraft.mode, backendDraft.baseUrl, ""),
+      );
+      // Everything on this screen describes whichever plane is now selected,
+      // so it is all stale.
+      await refresh();
+    } catch (e) {
+      setError(e);
+    }
+  }, [backendDraft, refresh]);
 
   const saveProject = useCallback(async () => {
     setError(null);
@@ -178,12 +282,123 @@ export function StackScreen() {
     }
   }
 
-  if (dockerError !== null) {
+  /**
+   * The backend chooser, rendered by *both* returns below.
+   *
+   * A machine with no Docker used to get a screen that talked only about
+   * installing Docker — with no way off it. That is precisely the user the paid
+   * service exists for: Docker is a requirement of the local backend and of
+   * nothing else, and stranding them on an install prompt made the switch
+   * unreachable exactly where it mattered.
+   */
+  const backendChooser = backendDraft && (
+    <>
+  {/* Which plane, before anything about the local one. The two speak the
+            same requests, so this is the only place in the app that knows there
+            is more than one. */}
+        <h3>{t("backend.title")}</h3>
+        <p>{t("backend.intro")}</p>
+        {backendDraft && (
+          <>
+            <label className="field">
+              <span>{t("backend.mode")}</span>
+              {/* `aria-label` as well as the visible span: a `<select>` inside a
+                  `<label>` folds its own option text into the label's accessible
+                  name, so "Which backend" becomes "Which backendLocal…Paid
+                  service" — unmatchable, and wrong for a screen reader too. The
+                  inputs beside it need no such thing: they have no text content. */}
+              <select
+                aria-label={t("backend.mode")}
+                value={backendDraft.mode}
+                onChange={(e) =>
+                  setBackendDraft({
+                    ...backendDraft,
+                    mode: e.target.value as BackendMode,
+                  })
+                }
+              >
+                <option value="local">{t("backend.local")}</option>
+                <option value="cloud">{t("backend.cloud")}</option>
+              </select>
+            </label>
+            {backendDraft.mode === "cloud" ? (
+              <>
+                <label className="field">
+                  <span>{t("backend.baseUrl")}</span>
+                  <input
+                    value={backendDraft.baseUrl}
+                    placeholder={t("backend.baseUrlHint")}
+                    onChange={(e) =>
+                      setBackendDraft({ ...backendDraft, baseUrl: e.target.value })
+                    }
+                  />
+                </label>
+              </>
+            ) : (
+              <p className="caveat">{t("backend.localNote")}</p>
+            )}
+            <div className="actions">
+              <button
+                type="button"
+                onClick={() => void saveBackend()}
+                disabled={busy !== "idle"}
+              >
+                {t("backend.save")}
+              </button>
+            </div>
+            {backend?.mode === "cloud" && (
+              <>
+                <ul className="probes">
+                  <li>
+                    <span className={backend.signedIn ? "ok" : "bad"}>
+                      {backend.signedIn ? "✓" : "✕"}
+                    </span>{" "}
+                    {backend.signedIn
+                      ? backend.email
+                        ? t("backend.signedInAs", { email: backend.email })
+                        : t("backend.signedIn")
+                      : t("backend.signedOut")}
+                  </li>
+                </ul>
+                <div className="actions">
+                  {backend.signedIn ? (
+                    <button type="button" onClick={() => void endSession()}>
+                      {t("backend.signOut")}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void startSession()}
+                      disabled={signingIn}
+                    >
+                      {signingIn ? t("backend.signingIn") : t("backend.signIn")}
+                    </button>
+                  )}
+                </div>
+                {backend.signedIn && (
+                  <>
+                    <p className="caveat">
+                      {t(`backend.secretStore.${backend.secretStore}`)}
+                    </p>
+                    <p className="caveat">{t("backend.signOutNote")}</p>
+                  </>
+                )}
+              </>
+            )}
+          </>
+        )}
+    </>
+  );
+
+  // Docker is a requirement of the local backend and of nothing else, so its
+  // absence is not an error at all for someone using the paid service.
+  if (dockerError !== null && backend?.mode !== "cloud") {
     return (
       <section className="panel">
         <h2>{t("docker.missingTitle")}</h2>
         <p>{t("docker.missingBody")}</p>
         <pre className="detail">{dockerError}</pre>
+        {backendChooser}
         <div className="actions">
           <button type="button" onClick={() => void checkDocker()}>
             {t("docker.retry")}
@@ -205,6 +420,7 @@ export function StackScreen() {
     <section className="panel">
       <h2>{t("stack.title")}</h2>
       <p>{t("stack.intro")}</p>
+      {backendChooser}
 
       <p className="muted">
         {docker
@@ -376,6 +592,8 @@ export function StackScreen() {
           {savedProject && <p className="warn">{t("provider.needsRestart")}</p>}
         </>
       )}
+
+      <AnswerStyles />
 
       <h3>{t("ping.title")}</h3>
       <p>{t("ping.intro")}</p>

@@ -17,32 +17,53 @@ from ..graph import Graph, GraphError
 from ..graph.schema import canonical_concept
 from ..providers import Provider
 from ..providers.gemini import RETRIEVAL_QUERY
+from .effort import BUDGETS, DEFAULT_EFFORT, Budget, budget_for, resolve_top_k
 from .types import Evidence, EvidenceClaim, Plan, Question
 
 log = logging.getLogger(__name__)
 
 #: Payload keys a caller may filter on. An allowlist because filters arrive from
 #: the API and a free-form key would let a caller probe payload internals.
+#:
+#: **`tenant_id` is deliberately absent, and must stay absent.** It is not a
+#: narrowing a caller may request; it is the scope the caller is confined to,
+#: and it is written over whatever arrived just below. Adding it here would turn
+#: the one filter that decides whose corpus is searched into one a request can
+#: name.
 ALLOWED_FILTERS = frozenset({"document_id", "version_id", "kind", "library_id"})
 
 #: Cosine floor on the dense leg. Inherited from the engine, where it was tuned:
 #: `min_score` may only ever be applied to the dense prefetch, never to the
 #: fused output (invariant #8), or lexical matches sail past it.
+#:
+#: **The one retrieval knob `effort` deliberately does not scale**, and it stays
+#: a module constant to say so. It is the topicality gate: a sweep on a real
+#: index measured `min_score = 0.50` scoring best of everything tried and being
+#: wrong, because that index's noise floor is 0.5153 — what a *wrong* chunk
+#: scores. A level that lowered it would win its own metric by admitting exactly
+#: what the floor was measured to exclude.
 MIN_SCORE = 0.60
-
-#: How many candidates to fuse before diversifying down to `top_k`.
-CANDIDATE_LIMIT = 40
 
 #: Chunks allowed from any one section. Measured in the engine: without a cap an
 #: on-topic query spent 7 of 10 slots on near-identical chunks of one section —
 #: fewer distinct sections than a nonsense query returned.
+#:
+#: **The second knob `effort` does not scale**, and for a different reason from
+#: `MIN_SCORE`. It is not a volume control: `diversify` backfills in score order
+#: when the cap leaves it short, so a wider `top_k` fills either way and raising
+#: this would only buy back the near-duplicates the cap was measured to remove.
+#: It also already has a claimant — a profile's `retrieval` block records a
+#: measured, per-version value, and the recorded fix is for `search` to read it.
 PER_SECTION = 2
 
-#: Claims attached to any one chunk. The answering model has to read all of them
-#: alongside the chunk's own text, and they compete with it for the attention
-#: that makes a citation accurate — the same reasoning behind `Question.top_k`
-#: being small. The template orders by confidence, so a cap keeps the best ones.
-CLAIMS_PER_CHUNK = 3
+#: The two knobs that *do* move with the level, at the default level.
+#:
+#: Derived rather than restated, so there is one definition and no pair to drift
+#: apart. They keep their names because `scripts/probe_retrieval.py` imports them
+#: from here and because they read as what they are at the point of use;
+#: `effort.py` carries the measurement behind each.
+CANDIDATE_LIMIT = BUDGETS[DEFAULT_EFFORT].candidate_limit
+CLAIMS_PER_CHUNK = BUDGETS[DEFAULT_EFFORT].claims_per_chunk
 
 
 class OffCorpus(Exception):
@@ -59,37 +80,154 @@ class OffCorpus(Exception):
 
 
 def search(
-    settings: Settings, provider: Provider, question: Question, plan: Plan
+    settings: Settings,
+    provider: Provider,
+    question: Question,
+    plan: Plan,
+    spend: "list | None" = None,
+    supported: "list | None" = None,
 ) -> list[Evidence]:
-    """Retrieve, expand, and return the evidence an answer may rest on."""
+    """Retrieve, expand, and return the evidence an answer may rest on.
+
+    ``supported`` is a second out-parameter, for the same reason and by the same
+    convention: it receives how many chunks cleared the *dense* floor, which is
+    what `effort.effective_style_level` needs to tell a narrow question from a
+    broad one. It costs nothing — the topicality gate was already making that
+    search and throwing away everything but whether it was empty.
+
+    ``spend`` is an out-parameter rather than a second return value, so the eight
+    existing call sites are untouched. It exists because embedding the question
+    is a real charge that nothing was recording: `Answer.spend` carried planning
+    and answering and not this, so even a fixed ledger would have under-reported
+    every question by the cost of its own query vector. Small — four orders of
+    magnitude under the answering call — and a stage that spends without a row is
+    exactly how the ledger came to be missing every question ever asked.
+    """
     from docagent.qdrant import Qdrant, SearchOpts, diversify
 
     # RETRIEVAL_QUERY, not RETRIEVAL_DOCUMENT. The model embeds questions and
     # passages asymmetrically on purpose (invariant #5) and using one task for
     # both measurably degrades retrieval.
-    vector = provider.embed([question.text], task=RETRIEVAL_QUERY)[0].values
+    #
+    # **Cached, and the reason is latency rather than money.** This one call is
+    # the whole of `search` that can be slow: measured 2026-09-06 inside the
+    # worker, everything else in this function — the dense probe, the hybrid
+    # search, every graph read in `_expand` — totals **9 ms**, while ten
+    # consecutive embeddings of one question took 0.4 s to **18.8 s**, one of
+    # them logging a `provider_quota` retry and the slowest logging nothing at
+    # all. The quota is a *per-minute* bucket, so a burst of questions makes
+    # each one wait on the ones before it.
+    #
+    # The charge is four orders of magnitude under the answering call, which is
+    # exactly why nothing had bothered: `ask-embedding` costs about $0.000004
+    # and is nonetheless the dominant latency risk in retrieval. Cost said
+    # nothing about that; a stage event did.
+    #
+    # `CachedEmbedder` rather than a second cache of its own — it is the same
+    # class indexing uses, over the same `docagent.embedcache` keyed on
+    # (model, width, task, text), reading the same directory. A question's
+    # vector is content-addressed exactly like a chunk's, and asking the same
+    # question twice should not roll the same dice twice.
+    #
+    # One consequence, stated because it is not nothing: the cache stores
+    # float32, so a repeat question searches with a rounded vector where a first
+    # ask searches with whatever the API returned. Qdrant stores and compares
+    # float32 regardless, so the document side has always been rounded and the
+    # ranking cannot move measurably — but the two asks are not bit-identical,
+    # and anything comparing scores across them should know that.
+    from ..providers import CachedEmbedder
+
+    embedder = CachedEmbedder(
+        provider,
+        settings.paths.embed_cache,
+        model=provider.settings.embedding_model,
+        dimensions=provider.settings.embedding_dimensions,
+        # One text, so concurrency has nothing to do here. `Provider.embed`
+        # sends one request per text regardless — batching silently drops
+        # (invariant on the collection), which is why throughput comes from
+        # concurrency at all — and a pool for a single item is a thread nobody
+        # needs.
+        workers=1,
+    )
+    embedded = embedder.embed_many([question.text], task_type=RETRIEVAL_QUERY)[0]
+    vector = embedded.values
+    if spend is not None:
+        from ..activities.ingest import price_for
+        from ..pipeline import Spend
+
+        # **From the embedder, not from the returned vector.** A cache hit hands
+        # back an `Embedding` carrying the token count the *original* call cost,
+        # which is the right thing for reporting what a vector was worth and the
+        # wrong thing to bill: reading it here would book a charge on every
+        # repeat question for tokens nobody spent, and the ledger would claim
+        # money that was never taken. `embedder.usage` accumulates misses only,
+        # so it is zero on a hit.
+        tokens = embedder.usage.input_tokens
+        # The row is written either way. A stage that ran for nothing and a
+        # stage that did not run are different facts, and `cache_hits` exists on
+        # the embedder for the same reason — "cheap because cached" and "cheap
+        # because small" are not the same thing.
+        spend.append(
+            Spend(
+                stage="ask-embedding",
+                model=provider.settings.embedding_model,
+                input_tokens=tokens,
+                output_tokens=0,
+                usd=price_for(provider.settings.embedding_model, tokens, 0),
+            )
+        )
 
     filters = {
         k: v for k, v in question.filters.items() if k in ALLOWED_FILTERS
     }
     filters["library_id"] = question.library_id
+    # Assigned after the allowlist, so a caller who found a way to smuggle the
+    # key in still loses it here. Two guards for one property, because this is
+    # the property.
+    filters["tenant_id"] = question.tenant_id
+
+    # Resolved once, here, and passed down. Every number below moves with the
+    # level except `MIN_SCORE`, which is the floor and is deliberately fixed.
+    budget = budget_for(question.effort)
+    top_k = resolve_top_k(question.top_k, budget)
 
     with Qdrant(settings.qdrant_url, settings.qdrant_collection) as q:
-        gate_opts = SearchOpts(
-            limit=CANDIDATE_LIMIT, min_score=MIN_SCORE,
-            dense_only=True, query_text=question.text, filters=filters,
+        # The gate, run directly rather than through `topicality_gate`, which
+        # builds its own `SearchOpts(limit=1, …)` and answers only "was it
+        # empty". The question is identical — dense only, same floor, same
+        # filters, one round trip and no tokens (invariant #9) — and asking for
+        # the whole width instead of one row also answers "how much of this
+        # corpus actually clears the floor", which is the only signal that can
+        # tell a narrow question from a broad one. Every on-corpus question
+        # fills `top_k` after RRF fusion, however narrow, because the fused
+        # output carries no floor (invariant #8); this is what does not.
+        #
+        # `min_score` stays on the constant. Whether a question is about this
+        # corpus is a fact about the corpus, not about how hard the asker looked.
+        probe = q.search(
+            vector,
+            SearchOpts(
+                limit=top_k, min_score=MIN_SCORE, dense_only=True,
+                query_text=question.text, filters=filters,
+            ),
         )
-        on_topic = q.topicality_gate(vector, gate_opts)
+        on_topic = bool(probe)
+        if supported is not None:
+            supported.append(len(probe))
 
         hits = q.search(
             vector,
             SearchOpts(
-                limit=CANDIDATE_LIMIT, min_score=MIN_SCORE,
+                limit=budget.candidate_limit, min_score=MIN_SCORE,
                 query_text=question.text, filters=filters,
+                prefetch_limit=budget.prefetch_limit,
             ),
         )
 
-    ranked = diversify(hits, PER_SECTION, question.top_k)
+    # `PER_SECTION` is a diversity policy rather than a volume one and stays off
+    # the ladder — `diversify` backfills in score order when the cap leaves it
+    # short, so a wider `top_k` is filled either way. See `effort.py`.
+    ranked = diversify(hits, PER_SECTION, top_k)
     evidence = [_evidence(h.payload, h.score, "vector") for h in ranked]
 
     if not on_topic:
@@ -97,11 +235,16 @@ def search(
         # indistinguishable from a broken index.
         raise OffCorpus(nearby=evidence[:3])
 
-    return _expand(settings, question, plan, evidence)
+    return _expand(settings, question, plan, evidence, budget, top_k)
 
 
 def _expand(
-    settings: Settings, question: Question, plan: Plan, evidence: list[Evidence]
+    settings: Settings,
+    question: Question,
+    plan: Plan,
+    evidence: list[Evidence],
+    budget: Budget,
+    top_k: int,
 ) -> list[Evidence]:
     """Add graph context around what vector search already found.
 
@@ -122,16 +265,22 @@ def _expand(
             # chunk has no locator. A question the vector index had answered
             # perfectly well came back as "no verifiable citation".
             if plan.concepts:
-                added += _by_concept(graph, question, plan, found)
+                added += _by_concept(graph, question, plan, found, top_k)
             if plan.template_id is not None:
-                added += _by_template(graph, plan, found, question.library_id)
+                added += _by_template(graph, plan, found, question)
             # Graph hits go after vector hits: the vector score is a similarity
             # to the actual question, while a graph hit is only topically
             # adjacent. Truncated before the two lookups below rather than after,
             # so neither pays for evidence that will not reach the prompt.
-            kept = evidence + added[: max(0, question.top_k - len(evidence))]
-            _attach_citations(graph, kept)
-            _attach_claims(graph, kept, question.confidence_floor)
+            kept = evidence + added[: max(0, top_k - len(evidence))]
+            _attach_citations(graph, kept, question.tenant_id)
+            _attach_claims(
+                graph,
+                kept,
+                question.confidence_floor,
+                question.tenant_id,
+                budget.claims_per_chunk,
+            )
     except GraphError as e:
         log.warning("graph expansion unavailable, answering from vectors: %s", e)
         return evidence
@@ -139,10 +288,15 @@ def _expand(
     return kept
 
 
-def _by_concept(graph: Graph, question: Question, plan: Plan, found: set[str]) -> list[Evidence]:
+def _by_concept(
+    graph: Graph, question: Question, plan: Plan, found: set[str], top_k: int
+) -> list[Evidence]:
     rows = graph.query(
         "concept_by_name",
-        {"canonical_names": [canonical_concept(c) for c in plan.concepts]},
+        {
+            "canonical_names": [canonical_concept(c) for c in plan.concepts],
+            "tenant_id": question.tenant_id,
+        },
     )
     if not rows:
         return []
@@ -155,16 +309,21 @@ def _by_concept(graph: Graph, question: Question, plan: Plan, found: set[str]) -
             # above are library-agnostic and this is what keeps the chunks they
             # reach in scope.
             "library_id": question.library_id,
+            "tenant_id": question.tenant_id,
             "confidence_floor": question.confidence_floor,
-            "limit": question.top_k,
+            "limit": top_k,
         },
     )
     return _hydrate(
-        graph, [r["id"] for r in chunks if r["id"] not in found], "graph", question.library_id
+        graph,
+        [r["id"] for r in chunks if r["id"] not in found],
+        "graph",
+        question.library_id,
+        question.tenant_id,
     )
 
 
-def _by_template(graph: Graph, plan: Plan, found: set[str], library_id: str) -> list[Evidence]:
+def _by_template(graph: Graph, plan: Plan, found: set[str], question: Question) -> list[Evidence]:
     """Turn whatever a template returned into chunks an answer can rest on.
 
     A row names a chunk in one of two ways, and both are read: templates over
@@ -187,11 +346,11 @@ def _by_template(graph: Graph, plan: Plan, found: set[str], library_id: str) -> 
                 found.add(candidate)
                 ids.append(candidate)
                 break
-    return _hydrate(graph, ids, "graph", library_id)
+    return _hydrate(graph, ids, "graph", question.library_id, question.tenant_id)
 
 
 def _hydrate(
-    graph: Graph, chunk_ids: list[str], source: str, library_id: str
+    graph: Graph, chunk_ids: list[str], source: str, library_id: str, tenant_id: str
 ) -> list[Evidence]:
     """Fetch the text of chunks the graph named, within one library.
 
@@ -199,9 +358,10 @@ def _hydrate(
     must be assemblable from the graph's own citation path even when a vector
     index has been rebuilt and its point ids have moved.
 
-    **This is the choke point for the library scope, and it is deliberately
-    belt-and-braces.** `chunks_for_concepts` already filters, but every path that
-    turns a graph result into `Evidence` goes through here — including
+    **This is the choke point for the library and the organisation scope, and it
+    is deliberately belt-and-braces.** `chunks_for_concepts` already filters, and
+    the registry now refuses to load a template that does not, but every path
+    that turns a graph result into `Evidence` goes through here — including
     `_by_template`, which extracts chunk ids from whatever template the planner
     chose. Filtering once, here, means a template added later cannot reopen the
     hole by forgetting to scope itself.
@@ -212,6 +372,7 @@ def _hydrate(
         """
         MATCH (d:Document)-[:HAS_VERSION]->(v:DocumentVersion)-[:HAS_CHUNK]->(c:Chunk)
         WHERE c.id IN $ids AND d.library_id = $library_id
+          AND d.tenant_id = $tenant_id
         RETURN c.id AS chunk_id, c.text AS text, c.kind AS kind,
                c.page AS page, v.id AS version_id, v.title AS title,
                d.id AS document_id
@@ -220,7 +381,7 @@ def _hydrate(
         # owning Document cannot be attributed to a library or shown a source,
         # and dropping it is the safe direction: an answer is not allowed to
         # cite something it cannot name the origin of.
-        {"ids": chunk_ids, "library_id": library_id},
+        {"ids": chunk_ids, "library_id": library_id, "tenant_id": tenant_id},
     )
     return [
         Evidence(
@@ -239,7 +400,7 @@ def _hydrate(
     ]
 
 
-def _attach_citations(graph: Graph, evidence: list[Evidence]) -> None:
+def _attach_citations(graph: Graph, evidence: list[Evidence], tenant_id: str) -> None:
     """Fill in each chunk's verifiable locator.
 
     Done in one query rather than per chunk: the answer step refuses any
@@ -249,7 +410,10 @@ def _attach_citations(graph: Graph, evidence: list[Evidence]) -> None:
     ids = [e.chunk_id for e in evidence if e.chunk_id]
     if not ids:
         return
-    rows = graph.query("citations_for_chunks", {"chunk_ids": ids, "limit": len(ids)})
+    rows = graph.query(
+        "citations_for_chunks",
+        {"chunk_ids": ids, "tenant_id": tenant_id, "limit": len(ids)},
+    )
     by_chunk = {r["chunk_id"]: r for r in rows}
     for e in evidence:
         if (row := by_chunk.get(e.chunk_id)) is not None:
@@ -259,7 +423,13 @@ def _attach_citations(graph: Graph, evidence: list[Evidence]) -> None:
                 e.breadcrumb = e.breadcrumb or row["section_title"]
 
 
-def _attach_claims(graph: Graph, evidence: list[Evidence], floor: float) -> None:
+def _attach_claims(
+    graph: Graph,
+    evidence: list[Evidence],
+    floor: float,
+    tenant_id: str,
+    per_chunk: int = CLAIMS_PER_CHUNK,
+) -> None:
     """Attach what a model read out of each chunk, above the confidence floor.
 
     One query for the whole set, like the citations and for the same reason.
@@ -277,8 +447,9 @@ def _attach_claims(graph: Graph, evidence: list[Evidence], floor: float) -> None
         "claims_for_chunks",
         {
             "chunk_ids": ids,
+            "tenant_id": tenant_id,
             "confidence_floor": floor,
-            "limit": len(ids) * CLAIMS_PER_CHUNK,
+            "limit": len(ids) * per_chunk,
         },
     )
     by_chunk: dict[str, list[EvidenceClaim]] = {}
@@ -286,7 +457,7 @@ def _attach_claims(graph: Graph, evidence: list[Evidence], floor: float) -> None
         # The row limit is global and the ordering is by confidence, so one
         # heavily annotated chunk could otherwise spend the whole budget.
         bucket = by_chunk.setdefault(r["chunk_id"], [])
-        if len(bucket) >= CLAIMS_PER_CHUNK:
+        if len(bucket) >= per_chunk:
             continue
         bucket.append(
             EvidenceClaim(

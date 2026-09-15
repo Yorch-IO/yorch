@@ -1,5 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { VersionAudit } from "../RunAudit";
+import { VersionStatistics } from "./VersionStatistics";
 
 import {
   api,
@@ -25,6 +27,7 @@ import { useLibraries } from "../lib/libraries";
  * component. It also lets the confirmation name what is about to be destroyed
  * *and* what survives, which "are you sure?" cannot.
  */
+
 export function LibraryScreen() {
   const { t } = useTranslation();
 
@@ -40,6 +43,13 @@ export function LibraryScreen() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  /** Which version's audit is open, if any. One at a time: two ledgers side by
+   *  side in a table cell is unreadable, and the question is about one version. */
+  const [auditing, setAuditing] = useState<string | null>(null);
+  // One at a time, like the audit panel beside it: the pane reads three
+  // stores and two artifacts, so opening every version's at once would be a
+  // burst of work nobody asked for.
+  const [statsFor, setStatsFor] = useState<string | null>(null);
   const [removed, setRemoved] = useState<Removal | null>(null);
   const [started, setStarted] = useState<{ kind: string; id: string } | null>(
     null,
@@ -116,6 +126,31 @@ export function LibraryScreen() {
       setBusy(true);
       try {
         setRemoved(await api.versionRemove(libraryId, versionId));
+        if (openId) setDetail(await api.documentDetail(libraryId, openId));
+        await load();
+      } catch (e) {
+        setError(errorMessage(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [libraryId, load, openId],
+  );
+
+  /** Promote a version that is indexed and not the active one.
+   *
+   *  Two things reach it: an ingest that withheld activation on a structural
+   *  collision, and a plain rollback — the previous version stays in the graph
+   *  deactivated rather than deleted, precisely so a bad re-index can be undone
+   *  by flipping the flag instead of paying for the pipeline again.
+   *
+   *  Not behind a confirm, unlike removal: this is reversible by pressing the
+   *  same button on the other version. */
+  const activateVersion = useCallback(
+    async (versionId: string) => {
+      setBusy(true);
+      try {
+        await api.versionActivate(libraryId, versionId);
         if (openId) setDetail(await api.documentDetail(libraryId, openId));
         await load();
       } catch (e) {
@@ -347,6 +382,15 @@ export function LibraryScreen() {
                                     · {t("library.detail.noArtifacts")}
                                   </span>
                                 )}
+                                {!v.active && v.state === "indexed" && (
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => void activateVersion(v.id)}
+                                  >
+                                    {t("library.detail.activateVersion")}
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   disabled={busy}
@@ -354,6 +398,42 @@ export function LibraryScreen() {
                                 >
                                   {t("library.detail.removeVersion")}
                                 </button>
+                                {/* The index status a person opens to ask what
+                                    actually happened: every stage, its duration,
+                                    its charges, and underneath them the raw
+                                    workflow history. */}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setAuditing(auditing === v.id ? null : v.id)
+                                  }
+                                >
+                                  {auditing === v.id
+                                    ? t("library.detail.hideAudit")
+                                    : t("library.detail.showAudit")}
+                                </button>
+                                {/* How big it is, what the extractor found,
+                                    whether the three stores still agree, and
+                                    what it cost across every run that touched
+                                    it. Fetched on demand — free, but three
+                                    stores and two artifacts. */}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setStatsFor(statsFor === v.id ? null : v.id)
+                                  }
+                                >
+                                  {statsFor === v.id
+                                    ? t("library.detail.hideStats")
+                                    : t("library.detail.showStats")}
+                                </button>
+                                {statsFor === v.id && libraryId && (
+                                  <VersionStatistics
+                                    libraryId={libraryId}
+                                    versionId={v.id}
+                                  />
+                                )}
+                                {auditing === v.id && <VersionAudit versionId={v.id} />}
                               </li>
                             ))}
                           </ul>

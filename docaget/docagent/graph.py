@@ -504,16 +504,21 @@ def n_index(state: IndexState, deps: Deps) -> dict:
             for i, (c, r) in enumerate(zip(chunks, results))
         ]
         q.upsert(points)
+        pruned = q.prune_tail(doc_id, keep=len(points))
         info = q.info()
     finally:
         q.close()
 
-    return {
-        "log": [
-            f"index: {len(points)} points into {state['collection']!r} "
-            f"(status {info.status}, {info.points_count} total)"
-        ]
-    }
+    log = [
+        f"index: {len(points)} points into {state['collection']!r} "
+        f"(status {info.status}, {info.points_count} total)"
+    ]
+    if pruned:
+        log.append(
+            f"  pruned {pruned} stale point(s) left by a larger previous "
+            "chunking (e.g. a rejected tuning candidate)"
+        )
+    return {"log": log}
 
 
 def n_evaluate(state: IndexState, deps: Deps) -> dict:
@@ -732,22 +737,10 @@ def n_persist(state: IndexState, deps: Deps) -> dict:
     }
 
 
-def _next_chunk_candidate(p: prof.Profile, history: list[dict]) -> ev.Candidate | None:
-    """The next chunking candidate not already tried, and not a no-op.
-
-    A candidate whose value already matches the current profile would spend a full
-    reindex to measure something known.
-    """
-    tried = {h["candidate"] for h in history}
-    for cand in ev.CHUNK_CANDIDATES:
-        if cand.label in tried:
-            continue
-        if cand.target_chars is not None and cand.target_chars == p.chunk_rules.target_chars:
-            continue
-        if cand.overlap_chars is not None and cand.overlap_chars == p.chunk_rules.overlap_chars:
-            continue
-        return cand
-    return None
+#: Moved to `evaluate.py`, beside the grid it reads, so the Temporal worker can
+#: pick a candidate without importing this module — which would pull in LangGraph
+#: and the whole node set for one function.
+_next_chunk_candidate = ev.next_chunk_candidate
 
 
 # --- conditional edges -------------------------------------------------------

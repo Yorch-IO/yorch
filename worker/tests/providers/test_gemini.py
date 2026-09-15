@@ -106,6 +106,14 @@ def test_a_permission_error_names_the_role_to_grant():
 
 
 def test_a_quota_error_is_retried_then_surfaced(monkeypatch):
+    """A quota gets its own, longer patience than an outage.
+
+    `online_prediction_requests_per_base_model` is metered per *minute*. Three
+    attempts at 1.5^n is about seven seconds, so every attempt landed inside the
+    same exhausted bucket and the stage failed without having waited for the
+    thing it was waiting for. A run stalled at `embedding 1/600` under 127 of
+    these before the engine grew the longer policy this now matches.
+    """
     monkeypatch.setattr(g.time, "sleep", lambda _: None)
     attempts = []
 
@@ -116,8 +124,60 @@ def test_a_quota_error_is_retried_then_surfaced(monkeypatch):
     p = Provider(settings())
     with pytest.raises(ProviderError) as e:
         p._call("embed", always_429)
-    assert len(attempts) == g.MAX_ATTEMPTS
+    assert len(attempts) == g.RATE_LIMIT_ATTEMPTS
+    assert g.RATE_LIMIT_ATTEMPTS > g.MAX_ATTEMPTS
     assert e.value.kind == "provider_quota"
+
+
+def test_an_outage_keeps_the_shorter_patience(monkeypatch):
+    """The longer budget is for a bucket that refills on a clock. An outage does
+    not, and queueing behind one leaves the user watching a spinner."""
+    monkeypatch.setattr(g.time, "sleep", lambda _: None)
+    attempts = []
+
+    def always_503():
+        attempts.append(1)
+        raise FakeAPIError(503, "UNAVAILABLE")
+
+    with pytest.raises(ProviderError):
+        Provider(settings())._call("generate", always_503)
+    assert len(attempts) == g.MAX_ATTEMPTS
+
+
+def test_the_quota_backoff_reaches_the_length_of_the_window():
+    """2, 8, 32, 60, 60 — capped, because sleeping longer than the window buys
+    nothing, and long enough that the last attempts are in a fresh bucket."""
+    quota = ProviderError("x", kind="provider_quota", retryable=True)
+    delays = [g._backoff(quota, n, 0.0) for n in range(1, g.RATE_LIMIT_ATTEMPTS)]
+
+    assert [int(d) for d in delays] == [2, 8, 32, 60, 60]
+    assert sum(delays) > 60, "the whole budget is shorter than one quota window"
+
+
+def test_the_service_gets_to_say_how_long_to_wait(monkeypatch):
+    """`Retry-After` wins over the guess: it knows when its bucket refills."""
+    quota = ProviderError("x", kind="provider_quota", retryable=True)
+
+    assert g._backoff(quota, 1, retry_after=17.0) == 17.0
+    # Still capped: a header asking for ten minutes would strand the activity.
+    assert g._backoff(quota, 1, retry_after=600.0) == g.RATE_LIMIT_MAX_BACKOFF
+
+
+def test_a_missing_retry_after_header_costs_a_guess_not_a_failure():
+    class Bare:
+        pass
+
+    assert g._retry_after(Bare()) == 0.0
+
+    class Weird:
+        headers = {"Retry-After": "not a number"}
+
+    assert g._retry_after(Weird()) == 0.0
+
+    class Real:
+        headers = {"retry-after": "12"}
+
+    assert g._retry_after(Real()) == 12.0
 
 
 def test_a_permission_error_is_not_retried(monkeypatch):
@@ -302,3 +362,207 @@ def test_json_mode_is_requested_by_schema_not_by_prompt_wording(monkeypatch):
     config = client.models.calls[0]["config"]
     assert config.response_mime_type == "application/json"
     assert config.response_schema == {"type": "object"}
+
+
+# -- streaming --------------------------------------------------------------
+#
+# The two rules `generate_stream` exists to keep are both about *when* things
+# happen rather than what they are: retry stops once the reader has seen a
+# delta, and usage is read at the end rather than the beginning.
+
+
+class FakeChunk:
+    """One streamed piece. `text` may be absent, empty, or raise."""
+
+    def __init__(self, text=None, usage=None, explode=False):
+        self._text = text
+        self._explode = explode
+        self.usage_metadata = usage
+
+    @property
+    def text(self):
+        if self._explode:
+            raise RuntimeError("no candidates on this chunk")
+        return self._text
+
+
+class FakeStreamModels:
+    def __init__(self, *attempts):
+        # One entry per attempt: either a list of chunks, or an exception to
+        # raise, or a ("mid", chunks, exc) tuple that fails part-way through.
+        self.attempts = list(attempts)
+        self.calls = 0
+
+    def generate_content_stream(self, **kw):
+        self.calls += 1
+        plan = self.attempts[min(self.calls - 1, len(self.attempts) - 1)]
+        if isinstance(plan, Exception):
+            raise plan
+
+        def gen():
+            for item in plan:
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+
+        return gen()
+
+
+def stream_provider(monkeypatch, models):
+    p = Provider(settings())
+    client = type("C", (), {"models": models})()
+    monkeypatch.setattr(type(p), "client", property(lambda self: client))
+    return p
+
+
+def test_every_delta_reaches_the_callback_and_the_text_is_their_concatenation(monkeypatch):
+    models = FakeStreamModels([FakeChunk("hola "), FakeChunk("mundo")])
+    seen: list[str] = []
+    out = stream_provider(monkeypatch, models).generate_stream("q", on_delta=seen.append)
+    assert seen == ["hola ", "mundo"]
+    assert out.text == "hola mundo"
+
+
+def test_usage_is_taken_from_the_last_chunk_that_carries_any(monkeypatch):
+    """The first chunk's counts are a fraction of the bill.
+
+    Reading them would under-report the most expensive call in a turn, and
+    nothing downstream could tell — a `Spend` row with plausible small numbers
+    looks exactly like a cheap call.
+    """
+    models = FakeStreamModels([
+        FakeChunk("a", usage=FakeUsage(prompt=10, candidates=1)),
+        FakeChunk("b"),
+        FakeChunk(None, usage=FakeUsage(prompt=10, candidates=900)),
+    ])
+    out = stream_provider(monkeypatch, models).generate_stream("q", on_delta=lambda _: None)
+    assert out.usage.input_tokens == 10
+    assert out.usage.output_tokens == 900
+    assert out.usage.calls == 1
+
+
+def test_a_stream_that_never_reports_usage_still_counts_the_call(monkeypatch):
+    models = FakeStreamModels([FakeChunk("x")])
+    out = stream_provider(monkeypatch, models).generate_stream("q", on_delta=lambda _: None)
+    assert out.usage.calls == 1
+
+
+def test_a_chunk_with_no_text_is_not_an_error(monkeypatch):
+    """Every stream ends with one: a finish_reason and usage, and no parts."""
+    models = FakeStreamModels([FakeChunk("solo"), FakeChunk(None), FakeChunk(explode=True)])
+    seen: list[str] = []
+    out = stream_provider(monkeypatch, models).generate_stream("q", on_delta=seen.append)
+    assert seen == ["solo"]
+    assert out.text == "solo"
+
+
+def test_a_failure_opening_the_stream_is_retried(monkeypatch):
+    monkeypatch.setattr(g.time, "sleep", lambda _: None)
+    models = FakeStreamModels(FakeAPIError(503, "UNAVAILABLE"), [FakeChunk("al fin")])
+    out = stream_provider(monkeypatch, models).generate_stream("q", on_delta=lambda _: None)
+    assert out.text == "al fin"
+    assert models.calls == 2
+
+
+def test_a_failure_after_the_first_delta_is_not_retried(monkeypatch):
+    """A retry here would replay text somebody has already read.
+
+    The reader would watch the answer start over, which is worse than the error
+    — and the tokens of the abandoned attempt are billed either way.
+    """
+    monkeypatch.setattr(g.time, "sleep", lambda _: None)
+    models = FakeStreamModels([FakeChunk("empez"), FakeAPIError(503, "UNAVAILABLE")])
+    seen: list[str] = []
+    with pytest.raises(ProviderError) as e:
+        stream_provider(monkeypatch, models).generate_stream("q", on_delta=seen.append)
+    assert e.value.kind == "provider_unavailable"
+    assert models.calls == 1
+    assert seen == ["empez"]
+
+
+def test_a_transport_failure_mid_stream_is_classified_not_swallowed(monkeypatch):
+    models = FakeStreamModels([FakeChunk("a"), RuntimeError("connection reset")])
+    with pytest.raises(ProviderError) as e:
+        stream_provider(monkeypatch, models).generate_stream("q", on_delta=lambda _: None)
+    assert e.value.kind == "provider_unavailable"
+    assert "connection reset" in str(e.value)
+
+
+def test_streaming_and_whole_calls_are_configured_identically(monkeypatch):
+    """Both go through `_prepare`, which is the point of it existing.
+
+    A thinking budget or a schema resolved differently on the two paths would
+    make a streamed answer a different answer, not merely a differently
+    delivered one.
+    """
+    p = Provider(settings())
+    whole = p._prepare("q", system="S", response_schema={"x": 1}, stage="answering")
+    streamed = p._prepare("q", system="S", response_schema={"x": 1}, stage="answering")
+    assert whole[1].system_instruction == streamed[1].system_instruction
+    assert whole[1].response_mime_type == streamed[1].response_mime_type == "application/json"
+    assert whole[2] == streamed[2]
+
+
+# -- why the model stopped ---------------------------------------------------
+
+
+class _Candidate:
+    def __init__(self, finish_reason):
+        self.finish_reason = finish_reason
+
+
+class _Response:
+    def __init__(self, finish_reason=None, candidates=None):
+        self.candidates = (
+            candidates if candidates is not None
+            else ([_Candidate(finish_reason)] if finish_reason is not None else [])
+        )
+
+
+def test_the_finish_reason_is_read_by_name_and_never_by_str():
+    """`types.FinishReason` is a *str-valued* `enum.Enum`, so `str(reason)` is
+    `"FinishReason.MAX_TOKENS"` and matches nothing.
+
+    Exactly the `HistoryEvent.event_type` trap already recorded in this
+    repository, where `getattr(t, "name", str(t))` read as careful and silently
+    yielded `"3"` — filtering a whole Temporal history to nothing and reporting
+    a run that did nothing. Asserted against the SDK's own enum rather than a
+    string, because a hand-built double would agree with the assumption.
+    """
+    from google.genai import types
+
+    assert g._finish_of(_Response(types.FinishReason.MAX_TOKENS)) == g.MAX_TOKENS
+    assert g._finish_of(_Response(types.FinishReason.STOP)) == "STOP"
+
+
+def test_a_plain_string_finish_reason_survives_the_same_reader():
+    """An SDK version that hands back the bare string instead of the enum: a
+    `str` has no `.name`, so it falls through to itself."""
+    assert g._finish_of(_Response("MAX_TOKENS")) == g.MAX_TOKENS
+
+
+def test_a_response_with_no_candidates_reports_nothing_rather_than_guessing():
+    assert g._finish_of(_Response()) is None
+    assert g._finish_of(_Response(candidates=None)) is None
+
+
+def test_a_streamed_call_reports_the_last_finish_reason_it_saw(monkeypatch):
+    """The same rule as the usage, and for the same reason: a truncated stream
+    ends with a chunk that carries a `finish_reason` and no text at all, so
+    reading the first would report `None` for every call."""
+    from google.genai import types
+
+    class _FinishingChunk(FakeChunk):
+        def __init__(self, text=None, usage=None, finish=None):
+            super().__init__(text, usage)
+            self.candidates = [_Candidate(finish)] if finish else []
+
+    models = FakeStreamModels([
+        _FinishingChunk("Según el corpus"),
+        _FinishingChunk(None, finish=types.FinishReason.MAX_TOKENS),
+    ])
+    result = stream_provider(monkeypatch, models).generate_stream(
+        "q", on_delta=lambda _: None
+    )
+    assert result.finish_reason == g.MAX_TOKENS
+    assert result.text == "Según el corpus"

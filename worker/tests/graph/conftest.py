@@ -21,8 +21,37 @@ import pytest
 
 from brainworker.graph import Graph, GraphError
 from brainworker.graph.projection import ChunkNode, SectionNode, VersionNode
+from brainworker.graph.schema import LEGACY_TENANT_ID
 
 URL = os.environ.get("BRAIN_MEMGRAPH_URL", "bolt://127.0.0.1:7788")
+
+
+class _ScopedGraph:
+    """A `Graph` that fills in the tenant when a test did not name one.
+
+    Every template now requires `$tenant_id`, and most of the tests in this
+    directory are not about tenancy — they are about whether the confidence
+    floor filters, whether the degree counts books, whether a claim names a
+    chunk a person can check. Threading a tenant through each of them would add
+    a constant to thirty call sites and make none of them clearer.
+
+    **This convenience is exactly why isolation has a test of its own.**
+    `test_tenant_isolation.py` builds two organisations with the same shape and
+    asserts each sees only its own; nothing there goes through this wrapper. A
+    test double that quietly supplies the thing under test would be worthless,
+    so the thing under test is tested somewhere this double cannot reach.
+    """
+
+    def __init__(self, inner: Graph):
+        self._inner = inner
+
+    def query(self, template_id, args=None):
+        args = dict(args or {})
+        args.setdefault("tenant_id", LEGACY_TENANT_ID)
+        return self._inner.query(template_id, args)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
 
 
 @pytest.fixture(scope="session")
@@ -33,7 +62,7 @@ def graph():
     except Exception as e:
         pytest.skip(f"no Memgraph at {URL}: {type(e).__name__}: {e}")
     g.ensure_schema()
-    yield g
+    yield _ScopedGraph(g)
     g.close()
 
 
@@ -43,6 +72,7 @@ def version(graph) -> VersionNode:
     sha = secrets.token_hex(32)
     node = VersionNode(
         library="lib_test",
+        tenant_id=LEGACY_TENANT_ID,
         source_key=f"libros/{sha[:8]}.pdf",
         content_sha256=sha,
         title="Institución de la religión cristiana",

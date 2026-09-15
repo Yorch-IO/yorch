@@ -13,8 +13,10 @@ from dataclasses import dataclass
 import httpx
 import psycopg
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from .. import config
+from ..providers import Provider, ProviderError
 
 PROBE_TIMEOUT = 5.0
 
@@ -85,3 +87,32 @@ def _probe_postgres(settings: config.Settings) -> ServiceProbe:
         return ServiceProbe("postgres", True, version or "connected")
     except Exception as e:
         return ServiceProbe("postgres", False, f"{type(e).__name__}: {e}")
+
+
+@activity.defn(name="probe_provider")
+async def probe_provider() -> dict[str, str]:
+    """Prove the credentials, the project and the models all work.
+
+    Separate from `probe_services` and deliberately not part of `/health`,
+    because this one **spends**: it is one short embedding, the cheapest request
+    Vertex bills for, and a health check that costs real money is one people
+    turn off. It runs when a person presses a button.
+
+    An activity rather than a call from the control plane, for the reason the
+    whole product is arranged this way: Vertex is reached with Application
+    Default Credentials mounted into the worker, and Gemini Enterprise rejects
+    API keys outright — so the credential lives here and travels nowhere.
+    """
+    import asyncio
+
+    settings = config.load()
+    try:
+        detail = await asyncio.to_thread(Provider(settings.gemini).probe)
+    except ProviderError as e:
+        # The `kind` is what the desktop app keys its advice on — "the project
+        # is unset" and "the quota is exhausted" have different fixes — so it
+        # crosses the boundary in `details[0]` rather than being flattened.
+        raise ApplicationError(
+            str(e), e.kind, type="ProviderError", non_retryable=not e.retryable
+        ) from e
+    return {"ok": "true", "detail": detail}

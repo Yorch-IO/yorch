@@ -127,6 +127,24 @@ image data for OCR — all three verified.
 - **OCR costs $0.00068/page, measured** — ~8× the cost of embedding the whole book —
   so it is gated behind an estimate and `--ocr-confirm` above $0.05, with a
   page-hash cache.
+- **`costo.json` is a history of runs, because it used to be one run.**
+  `Ledger.dump` was `json.dump` over the whole file, so every invocation erased
+  the last one's accounting. That is the mechanism behind
+  `INFORME_INDEXACION.md`'s "per-document cost accounting does not exist and is
+  not reconstructible": 28 documents had been indexed and the file could account
+  for the most recent one. Read on 2026-09-03 it held **$1.335820, the total of
+  book 07 alone**, while the corpus behind it had cost several times that.
+  It appends now — `run_id`, timestamp, the paths given, and the run's stages —
+  and each run stores the price table that produced its own figures, because
+  the multipliers changed on 2026-08-20 and a figure that cannot be re-checked
+  against the prices of its own day is not a measurement. Three properties are
+  what the tests stand on: an old-shaped file *is* a run record and becomes the
+  first entry rather than being dropped; a file this cannot parse is **moved
+  aside**, never overwritten, because it is somebody's record of money already
+  spent; and `run_id`/`at`/`documents` stay `null` for the migrated one, since
+  "nobody recorded which documents" is not "this run touched none". The write
+  goes through `os.replace`, which was not worth it while the file held one run
+  and is worth it now that losing it loses everything.
 
 ## Bugs found by running the loop, not by reading it
 
@@ -165,6 +183,93 @@ short run never shows:
 
 ReadTimeouts still occur — 3 retries across 19 batches on the reference book, all
 recovered. They are transient and server-side.
+
+## What a wide audit of the indexing path found, 2026-09-03
+
+Root `CLAUDE.md` carries the whole list and its measurements. What belongs here
+is the part that is about *this* engine, and the rules worth not relearning.
+
+- **`heading_level`'s four guards had no fifth for an endnote list, and the
+  learned pattern could not repair it.** `2. Ibídem.` is ten characters, more
+  letters than digits, no question mark and no dot leaders. The fall-through is
+  the load-bearing part: `heading_level` consults the profile's pattern and, when
+  it does not match, drops to the built-in numbered detector — so the line read
+  as a level-1 chapter both with `05-CodigoJesus`'s own profile and without it.
+  The new guard therefore runs *before* the learned patterns, where the review-
+  question check already does, and for the same reason.
+- **The dot after the number decides questions from footnotes (invariant #12),
+  and this corpus has publishers who dot their footnotes too.** That was recorded
+  in `classify_kind`'s docstring as reported-and-not-fixed, with a note that the
+  obvious fix — requiring ¿/?/an imperative to corroborate — was reverted because
+  it left every footnote with no section. Keying on the *vocabulary of a
+  citation* instead does not move invariant #11: a citation becomes a `nota`, and
+  a `nota` keeps its path. A numbered line that asks something is still left
+  alone, because a cited title can carry a question mark.
+- **A run under `min_chunk_chars` was discarded, not merged.** The rule looked
+  like a junk filter and was not one: of the 158 paragraphs it dropped across the
+  corpus, 44 are content appearing once, and of the 114 running headers, 49 of
+  the 55 distinct lines already sit inside a chunk elsewhere in the same book. A
+  short run travels forward into the chunk it opens — a title belongs to the
+  section it opens, not to the one before it — and merges backwards only when
+  nothing follows.
+- **`_word_spans` returned each span starting on the space it cut at**, and
+  `_split_oversized` strips the unit's text without moving its offset, so
+  `emit`'s `to = last.offset + len(last.text)` landed one byte short and the
+  chunk lost its final character. The invariant #1 test could not see it: it
+  compares `src[from:to].strip()`, and the truncated slice still strips to the
+  truncated text. Measured: **0 of the corpus's 4,246 chunks reach that path**,
+  which needs one sentence over `hard_cap_chars` with no accepted boundary — so
+  this was fixed on the shape rather than on a measurement, and stated as such.
+  After the fix `src[char_from:char_to]` equals `text` **without stripping** for
+  all 4,246, which is a stronger property than the invariant asks for.
+- **`_page_rows` broke a baseline tie with the row's own text.** Alphabetical
+  order, not reading order: 679 paragraphs across 41 of the 84 PDFs, and
+  `Hermeneutica Capitulo 4.pdf.corrected.txt` has shipped with "cada siete años
+  se 15:2 perdona toda clase de deudas" ever since. Correction cannot repair
+  that, because reformulating is precisely what its prompt forbids — which is a
+  general property worth holding on to: **anything extraction scrambles is
+  permanent.**
+- **`verify` guarded what a correction may not lose and not how much.** ±25% of a
+  1,600-character paragraph is four hundred characters. Measured over the 2,684
+  corrections in `cache/correct/paragraphs.json` — recovered for free by
+  re-extracting each PDF and looking its paragraphs up by cache key, a 98.8% hit
+  rate — seven had deleted real content, four of them a negation or a section
+  title, and **not one was rejected by the gate as it stood**. `MAX_LOST_CHARS`
+  is an absolute floor beside the ratio because the ratio is the wrong shape:
+  on "pág 33." → "pág. 33." a single character is 14%.
+  **A limit of that measurement, found later and worth stating here:** the cache
+  holds only corrections this gate *accepted*, because a rejection `continue`s
+  before `cache.put`. So those 2,684 could not contain a false positive by
+  construction — the measurement bounds what `verify` lets through and says
+  nothing about what it wrongly stops. `Rejection.proposed` exists so the next
+  such audit can look at both halves; the first transcript it would have
+  covered refused 22 of 107 paragraphs, every one a name the captioner had
+  mangled.
+- **A cache hit skipped `verify` entirely**, so the gate's rules could be
+  tightened and the entries written under the old ones would still be applied for
+  ever. The cache is the output of a gate that changes; it is verified on read
+  now, which costs nothing.
+- **`_SCRIPTURE_RE`'s book name was capped at 12 letters**, shorter than
+  "Tesalonicenses" (14) and "Lamentaciones" (13) — so the longest book names in
+  the canon were the ones the rule could not reach, which is the failure it
+  exists to prevent. 17 references, and the wider cap mints 13 extra tokens with
+  no junk among them.
+- **`Validation.passed` blocked a proposal whose good half `adopt` was keeping.**
+  The two heading levels report under one rule name; `heading_levels_ok` exists
+  precisely because `failed_rules()` cannot tell them apart, and `adopt` already
+  consults it. `passed` did not.
+
+**A hypothesis this refuted, worth not re-running.** `verify` checks that
+*capitalised* words survive a correction, so the obvious next question is whether
+lowercase content words are being lost. They are — 332 of the 2,684 corrections
+lose at least one 5-letter-or-longer word that is not a substring of the result —
+and **a guard on it would be wrong**: nearly every one is a genuine spelling
+repair (`compartimientos` → `compartimentos`, `eclessia` → `ecclesia`,
+`latinamericano` → `latinoamericano`, `ideosincracia` → `idiosincrasia`), which
+is what the pass is for. The 19 corrections that changed a number are the same
+story: every one repairs an extraction artifact, `p. l6` → `p. 16` and
+`Romanos l0:9` → `Romanos 10:9`, so `NUMBER_RE`'s two-digit floor is right rather
+than lax.
 
 ## Inherited invariants
 
@@ -305,7 +410,13 @@ decide.
   comparing a path against a stored `doc_id`, so the filter matched nothing.
 - **`--dry-run` ends without persisting.** It measures nothing; routing it to
   `persist` wrote empty scores over a profile that had paid for its numbers.
-- **`costo.json`, `*.corrected.txt` and `logs/` are no longer tracked.** They are
-  rewritten on every run. `profiles/` and `cache/` stay tracked, deliberately — see
-  `.gitignore`.
+- **`logs/` is not tracked; `costo.json` and `*.corrected.txt` are.** This entry
+  used to name all three as untracked "because they are rewritten on every run",
+  and that was wrong about two of them: `.gitignore` ignores `logs` and
+  `docaget/cache/embed/`, and nothing else here. 170 files under `libros/` and
+  the ledger are in git, which is what lets a corrected text be diffed against
+  the run that produced it. `costo.json` is also no longer rewritten — see the
+  ledger entry above. `profiles/` and `cache/correct/` stay tracked
+  deliberately: a correction costs generation tokens and its cache is what
+  survives an interrupted run.
 

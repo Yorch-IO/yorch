@@ -25,16 +25,17 @@ from uuid import uuid4
 import httpx
 import psycopg
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client
 
-from .. import auditlog, auditversion as av, config
+from .. import auditlog, auditversion as av, bookexport, config
 from ..artifacts import ArtifactRef, ArtifactStore
 from ..catalog import Catalog, MigrationError, current_version, require_schema
 from ..graph import DEFAULT_CONFIDENCE_FLOOR, Graph, GraphError
 from ..graph.queries import TemplateError, bind, get
 from ..answering.effort import DEFAULT_EFFORT, MAX_STYLE_CHARS
+from ..artifacts import ArtifactError
 from ..chat.title import fallback as fallback_title
 from ..chat.types import (
     MAX_MESSAGE_CHARS,
@@ -63,6 +64,7 @@ from ..pipeline import (
 )
 from ..workflows.ask import AskWorkflow
 from ..workflows.chat import ChatWorkflow
+from ..workflows.epub import EpubWorkflow
 from ..workflows.ingest import Approval, IngestWorkflow
 from ..workflows.rebuild import RebuildWorkflow
 from ..workflows.video import VideoIngestWorkflow
@@ -71,6 +73,15 @@ from ..workflows.ping import PingWorkflow
 log = logging.getLogger(__name__)
 
 PROBE_TIMEOUT = 5.0
+
+#: Caps on what a person may type for a document's title and author.
+#:
+#: Generous rather than tight: the longest title in this corpus is 68 characters
+#: and a subtitle can legitimately double that. What these are for is refusing a
+#: body that is a mistake or an attack, not policing a bibliography — and they
+#: are field constraints so both planes refuse one the same way.
+MAX_TITLE_CHARS = 500
+MAX_AUTHOR_CHARS = 300
 
 #: How long to wait for a workflow to answer a `stage` query before giving up.
 #:
@@ -1506,6 +1517,12 @@ def document_detail(library_id: str, document_id: str) -> dict[str, Any]:
             for v in versions
         }
         shared = {v.id: catalog.documents_holding(v.id) for v in versions}
+        # Which run holds the book for each version. A run id rather than a
+        # boolean, because the download is addressed by run: a client that knew
+        # only *whether* one existed would have to ask again to find out where.
+        epub_from = {
+            v.id: catalog.latest_run_with_artifact(v.id, "epub") for v in versions
+        }
         # The newest run of each version that measured anything, and what it
         # measured. A version indexed before the stage existed — which is every
         # version on this installation today — simply has none, and renders as
@@ -1522,6 +1539,14 @@ def document_detail(library_id: str, document_id: str) -> dict[str, Any]:
         # Computed inside the `with`: the check reads the artifact row, and the
         # catalog is closed by the time the response below is assembled.
         can_rebuild = _replayable(s.workspace, catalog, rebuild_from.get(active))
+        # The same predicate as `can_rebuild`, and deliberately not a second
+        # computation of it: both verbs read this version's `chunks.jsonl`, so
+        # "the file is still there" is one question with one answer. It is named
+        # separately on the wire because the two verbs are not the same act —
+        # one replays an index and costs embedding, the other packages a file
+        # and costs nothing — and a client should not have to know they happen
+        # to share a precondition.
+        can_build_epub = can_rebuild
 
     return {
         "id": document.id,
@@ -1536,6 +1561,7 @@ def document_detail(library_id: str, document_id: str) -> dict[str, Any]:
         "active_version_id": active,
         "can_reindex": bool(document.source_path),
         "can_rebuild": can_rebuild,
+        "can_build_epub": can_build_epub,
         "versions": [
             {
                 "id": v.id,
@@ -1546,6 +1572,7 @@ def document_detail(library_id: str, document_id: str) -> dict[str, Any]:
                 "active": v.id == active,
                 "created_at": v.created_at.isoformat() if v.created_at else None,
                 "rebuild_run_id": rebuild_from.get(v.id),
+                "epub_run_id": epub_from.get(v.id),
                 # None means nobody measured this version, never "it scored 0".
                 "scores": scores.get(v.id),
                 # Which other documents hold these same bytes. Removing this
@@ -2283,6 +2310,186 @@ async def rebuild_document(library_id: str, document_id: str) -> dict[str, Any]:
         memo=_OWNED_BY_LEGACY,
     )
     return {"workflow_id": handle.id, "state": "running", "kind": "rebuild"}
+
+
+#: The only artifact this plane will hand over as bytes.
+#:
+#: An allowlist and not a convenience. Every other kind is a working file — the
+#: text streams, `semantics.json`, an eval set with the corpus's own questions in
+#: it — and this plane has **no authentication**: it is safe only because nothing
+#: off the machine can route to it. A generic `/artifacts/{name}` would make that
+#: the only thing standing between a misconfigured port and the whole corpus, and
+#: it would do it for a feature that needs exactly one file.
+DOWNLOADABLE = {"epub": "application/epub+zip"}
+
+
+def _content_disposition(filename: str) -> str:
+    """`attachment`, with the accented name as well as one a header can carry.
+
+    Both forms, because an HTTP header is Latin-1 and «Teología» is not: the
+    plain `filename=` is the ASCII fallback an old client reads, and RFC 5987's
+    `filename*` is what every current one prefers. Sending only the second is
+    fine in practice and sending only the first renames the book.
+    """
+    from urllib.parse import quote
+
+    ascii_name = bookexport.ascii_filename_for(filename)
+    return (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(bookexport.filename_for(filename))}"
+    )
+
+
+@app.get("/runs/{workflow_id}/artifacts/{name}")
+def download_artifact(workflow_id: str, name: str) -> FileResponse:
+    """The book this run produced, as a file.
+
+    The digest is checked before the file is served, which is the one thing that
+    distinguishes this from a static mount: `run_artifact` records what the run
+    wrote, and a file that no longer hashes to it is not the book the catalog is
+    describing. Serving it anyway would be the quiet kind of wrong this codebase
+    keeps finding — a well-formed answer about the wrong thing.
+    """
+    media_type = DOWNLOADABLE.get(name)
+    if media_type is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "kind": "artifact_not_found",
+                "message": (
+                    f"{name!r} no es un artefacto descargable; "
+                    f"se pueden descargar: {sorted(DOWNLOADABLE)}"
+                ),
+            },
+        )
+    s = settings()
+    with Catalog(s.database_url) as catalog:
+        ref = _artifact_ref(catalog.artifacts(workflow_id), name)
+        run = catalog.run(workflow_id, tenant_id=LEGACY_TENANT_ID)
+    if ref is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "kind": "artifact_not_found",
+                "message": f"la ejecución {workflow_id!r} no produjo {name!r}",
+            },
+        )
+
+    store = ArtifactStore(s.workspace, workflow_id)
+    try:
+        # Read to verify, then hand the path to `FileResponse` rather than the
+        # bytes: a book is a few hundred kilobytes and reading it twice is
+        # cheap, while holding it in the response would put it in memory for the
+        # whole transfer on a plane that serves one process.
+        store.read_bytes(ref)
+        path = store.resolve(ref)
+    except ArtifactError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={"kind": "artifact_changed", "message": str(e)},
+        ) from e
+
+    # The document's title, which is what a reader expects the file to be
+    # called. `RunSummary.title` is None for a run whose document has since been
+    # removed — the artifact outlives it — so the run id stands in rather than a
+    # blank name.
+    title = (run.title if run else None) or workflow_id
+    return FileResponse(
+        path,
+        media_type=media_type,
+        headers={"Content-Disposition": _content_disposition(str(title))},
+    )
+
+
+@app.post("/libraries/{library_id}/documents/{document_id}/versions/{version_id}/epub")
+async def build_version_epub(
+    library_id: str, document_id: str, version_id: str
+) -> dict[str, Any]:
+    """Package an already-indexed version as a book.
+
+    Free but for one small call, and the argument is `activate_version`'s
+    arriving from another direction: the expensive work is already paid for and
+    what is missing is a last, cheap step. Every version on this installation was
+    indexed before the `epub` stage existed, so without this the switch at the
+    gate would reach nothing already in the catalog.
+
+    A workflow rather than a call inside this handler, unlike removal and
+    activation. It writes an artifact and it can spend, and both of those derive
+    their tenant from a run row — which means they belong in an activity.
+    """
+    s = settings()
+    client = await temporal()
+    handle = await client.start_workflow(
+        EpubWorkflow.run,
+        args=[library_id, document_id, version_id, LEGACY_TENANT_ID],
+        id=f"epub-{_ulid()}",
+        task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
+    )
+    # Awaited rather than handed back as a running workflow, the same shape
+    # `activate` answers in. A book is a file read, a render and a file write —
+    # seconds, not the minutes a paid stage takes — and the caller's very next
+    # act is to download it, so returning a run id it would have to poll would
+    # make every client implement a wait for something that is already done.
+    return await handle.result()
+
+
+@dataclass
+class DocumentMetadata:
+    """What a person may correct about a document.
+
+    Length caps as *field constraints* rather than a hand-raised 400, so that
+    both planes answer an oversized body with FastAPI's own 422-and-a-list. The
+    paid plane's filter renders `class-validator` failures in that same shape on
+    purpose, and a hand-rolled kind here would make the two answer one bad
+    request two different ways — the decision `Question.effort` and
+    `answer_style` already made.
+
+    `None` means "leave this one alone", which is what lets a screen send one
+    field. An empty author is how a person says the document has none.
+    """
+
+    title: Annotated[str | None, Field(max_length=MAX_TITLE_CHARS)] = None
+    author: Annotated[str | None, Field(max_length=MAX_AUTHOR_CHARS)] = None
+
+
+@app.patch("/libraries/{library_id}/documents/{document_id}")
+def update_document(
+    library_id: str, document_id: str, payload: DocumentMetadata
+) -> dict[str, Any]:
+    """Correct a document's title or its author.
+
+    Both are placeholders until somebody says otherwise: `title` is the picked
+    file's stem and `author` is a column nothing wrote for the first year of this
+    product. A model fills them once, on the way to building a book, and this is
+    the half that says the model was wrong — so it is unconditional where that
+    one is careful, and it is what stops the model being asked again.
+    """
+    s = settings()
+    with Catalog(s.database_url) as catalog:
+        document = catalog.document(
+            document_id, library_id=library_id, tenant_id=LEGACY_TENANT_ID
+        )
+        if document is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "kind": "document_not_found",
+                    "message": f"no existe {document_id!r} en {library_id!r}",
+                },
+            )
+        catalog.set_document_metadata(
+            document_id,
+            title=payload.title,
+            author=payload.author,
+            tenant_id=LEGACY_TENANT_ID,
+        )
+        updated = catalog.document(document_id, tenant_id=LEGACY_TENANT_ID)
+    return {
+        "id": document_id,
+        "title": updated.title if updated else document.title,
+        "author": updated.author if updated else document.author,
+    }
 
 
 @app.get("/runs/{workflow_id}/rebuild-gate")

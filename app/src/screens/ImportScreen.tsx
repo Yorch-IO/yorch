@@ -389,6 +389,7 @@ export function ImportScreen() {
             ["tune", "import.stageTune"],
             ["learnProfile", "import.stageLearnProfile"],
             ["reviewCorrection", "import.stageReview"],
+            ["buildEpub", "import.stageBuildEpub"],
           ] as const
         ).map(([key, label]) => (
           <label key={key}>

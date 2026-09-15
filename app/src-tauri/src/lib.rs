@@ -24,9 +24,11 @@ use auth::{AuthConfig, Pkce, Session};
 use backend::{BackendMode, BackendSettings};
 use control::{
     AnswerStyleSaved, AnswerStyleUpdate, AnswerStyles,
-    Activation, Approval, Auth, AskProgress, AskStarted, ChatEvent, ChunkContext, ConceptClaims,
+    Activation, Approval, Auth, AskProgress, AskStarted, BookBuilt, ChatEvent, ChunkContext,
+    ConceptClaims,
     Control, ConversationDetail, ConversationStarted, Conversations,
-    DocumentDetail, NewConversation, NewTurn, TurnStarted,
+    DocumentDetail, DocumentMetadata, DocumentMetadataResult,
+    NewConversation, NewTurn, TurnStarted,
     GateReport, Health, IngestRequest, Libraries, Library, LibraryGraph, Outline, PingResult,
     ProjectSummary, Question, RebuildReport, RelatedDocuments, Removal, RunAudit,
     RunEventPage, RunListPage, SectionChunks,
@@ -966,6 +968,83 @@ async fn version_activate(
     control.activate_version(&library_id, &version_id).await
 }
 
+/// Build a book for a version already indexed, and say where it landed.
+#[tauri::command]
+async fn version_build_epub(
+    state: State<'_, AppState>,
+    library_id: String,
+    document_id: String,
+    version_id: String,
+) -> Result<BookBuilt> {
+    let control = state.control().await?;
+    control
+        .build_epub(&library_id, &document_id, &version_id)
+        .await
+}
+
+/// Correct what the catalog calls a document.
+#[tauri::command]
+async fn document_update(
+    state: State<'_, AppState>,
+    library_id: String,
+    document_id: String,
+    metadata: DocumentMetadata,
+) -> Result<DocumentMetadataResult> {
+    let control = state.control().await?;
+    control
+        .update_document(&library_id, &document_id, &metadata)
+        .await
+}
+
+/// Fetch a book and write it wherever the person says.
+///
+/// The dialog is opened *here*, for the reason `pick_source` records at length:
+/// a capability grants the **webview** the right to invoke a plugin command, and
+/// the webview invokes only this. So no entry appears in
+/// `capabilities/default.json` and the webview keeps its `default-src 'self'`
+/// CSP with no localhost exception — which is also why the bytes cannot simply
+/// be fetched by an `<a download>` in the page.
+///
+/// Cancelling is `Ok(None)`, not an error: it is the ordinary way to leave a
+/// file dialog and the screen must not paint a red panel over it.
+///
+/// The fetch happens **after** the dialog rather than before. A person who
+/// dismisses the chooser should not have paid for a transfer, and a failure
+/// then has somewhere to land — an error raised before a path exists cannot say
+/// which file it was about.
+#[tauri::command]
+async fn artifact_save(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    workflow_id: String,
+    name: String,
+    suggested_name: String,
+) -> Result<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+    app.dialog()
+        .file()
+        .set_file_name(&suggested_name)
+        .add_filter("EPUB", &["epub"])
+        .save_file(move |chosen| {
+            let _ = tx.try_send(chosen);
+        });
+
+    let chosen = match rx.recv().await {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let Some(path) = chosen.and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+
+    let control = state.control().await?;
+    let bytes = control.download_artifact(&workflow_id, &name).await?;
+    std::fs::write(&path, &bytes).map_err(|e| AppError::io(path.display().to_string(), e))?;
+    Ok(Some(path.display().to_string()))
+}
+
 #[tauri::command]
 async fn document_reindex(
     state: State<'_, AppState>,
@@ -1268,6 +1347,9 @@ pub fn run() {
             document_remove,
             version_remove,
             version_activate,
+            version_build_epub,
+            document_update,
+            artifact_save,
             document_reindex,
             document_rebuild,
             rebuild_gate,

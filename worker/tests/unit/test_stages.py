@@ -127,6 +127,7 @@ def _every_stage() -> set[str]:
         | set(stages.VIDEO_STAGES)
         | set(stages.REMOVAL_STAGES)
         | set(stages.ACTIVATION_STAGES)
+        | set(stages.EPUB_STAGES)
     )
 
 

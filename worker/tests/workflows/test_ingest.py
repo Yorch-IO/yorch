@@ -258,6 +258,39 @@ async def chunk_final(*_args) -> Chunked:
     return Chunked(chunks=FINAL_REF, count=3, kinds=[ChunkKindCount("cuerpo", 3)])
 
 
+BOOK_REF = ArtifactRef(
+    kind="epub", path="runs/r/book.epub", sha256="b" * 64, bytes=9000
+)
+BOOKS: list[tuple[str, str]] = []
+
+
+# Typed like the real activities, for the reason `evaluate_index` records above:
+# an untyped `*args` double accepts any arity, so five workflow tests once passed
+# against a workflow the real converter could not run at all.
+@activity.defn(name="resolve_book_metadata")
+async def resolve_book_metadata(
+    run_id: str, registered: Registered, chunks: ArtifactRef
+) -> Spend | None:
+    SPENT.append("epub-metadata")
+    return Spend("epub-metadata", "gemini-3.6-flash", 2400, 120, 0.0045)
+
+
+@activity.defn(name="resolve_book_metadata")
+async def resolve_book_metadata_free(
+    run_id: str, registered: Registered, chunks: ArtifactRef
+) -> Spend | None:
+    """The ordinary case: the catalog already knows who wrote this."""
+    return None
+
+
+@activity.defn(name="build_epub")
+async def build_epub(
+    run_id: str, library_id: str, registered: Registered, chunks: ArtifactRef
+) -> ArtifactRef:
+    BOOKS.append((run_id, chunks.path))
+    return BOOK_REF
+
+
 @activity.defn(name="embed_and_index")
 async def embed_and_index(*_args) -> Indexed:
     SPENT.append("embedding")
@@ -400,6 +433,8 @@ def activities(**kw):
         set_run_stage,
         record_run_events,
         kw.get("correct_text", correct_text),
+        kw.get("resolve_book_metadata", resolve_book_metadata),
+        build_epub,
         chunk_final,
         embed_and_index,
         kw.get("build_evalset", build_evalset),
@@ -424,11 +459,13 @@ def _clear():
     PERSISTED.clear()
     PROMOTED.clear()
     EVALUATED_INTO.clear()
+    BOOKS.clear()
     LINKED.clear()
     OUTCOMES.clear()
     yield
     SPENT.clear()
     OUTCOMES.clear()
+    BOOKS.clear()
 
 
 async def _start(env: WorkflowEnvironment, req: IngestRequest, opts: StageOptions, acts):
@@ -750,6 +787,120 @@ async def test_each_paid_stage_is_switchable_on_its_own(env: WorkflowEnvironment
     assert SPENT == ["embedding"], "only the approved stage may spend"
     assert result.state == "indexed"
     assert result.total_usd == pytest.approx(0.00045)
+
+
+async def test_no_book_is_built_unless_somebody_asked_for_one(
+    env: WorkflowEnvironment,
+):
+    """Off by default, and the default is what every existing run replays as.
+
+    That is also what makes the switch safe without a `workflow.patched`: a gate
+    parked for seven days decodes a payload that never carried the field as
+    `False`, so neither command is issued and the replay's sequence is unchanged.
+    """
+    acts = activities()
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(env, request(), StageOptions(), acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve,
+            Approval(approved=True, options=StageOptions(build_epub=False)),
+        )
+        await handle.result()
+
+    assert BOOKS == []
+    assert "epub-metadata" not in SPENT
+    assert not any(e[1] == "epub" for e in EVENTS)
+
+
+async def test_a_book_is_built_from_the_chunks_this_run_produced(
+    env: WorkflowEnvironment,
+):
+    """The same rows the graph was just projected from, which is what makes the
+    book agree with the index rather than describing a different cutting."""
+    acts = activities()
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(env, request(), StageOptions(), acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve,
+            Approval(
+                approved=True,
+                options=StageOptions(
+                    correct=False, embed=False, extract_semantics=False,
+                    build_epub=True,
+                ),
+            ),
+        )
+        result = await handle.result()
+
+    assert [chunks for _, chunks in BOOKS] == [FINAL_REF.path]
+    assert any(e[1] == "epub" for e in EVENTS), "the stage must leave a trail"
+    # Structure only, because nothing else was approved — a book is not an
+    # index, and building one must not change what the run claims to have
+    # published.
+    assert result.state == "structure_indexed"
+
+
+async def test_the_metadata_call_is_the_only_thing_a_book_can_charge(
+    env: WorkflowEnvironment,
+):
+    """Packaging reads a file and writes one. What can spend is the single call
+    that reads a title and an author off the opening pages — and it runs once per
+    document ever, so the ordinary case is a stage that charges nothing at all."""
+    acts = activities()
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(env, request(), StageOptions(), acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve,
+            Approval(
+                approved=True,
+                options=StageOptions(
+                    correct=False, embed=False, extract_semantics=False,
+                    build_epub=True,
+                ),
+            ),
+        )
+        result = await handle.result()
+
+    assert SPENT == ["epub-metadata"]
+    assert result.total_usd == pytest.approx(0.0045)
+
+
+async def test_a_document_whose_author_is_known_pays_nothing_and_still_gets_a_book(
+    env: WorkflowEnvironment,
+):
+    """`None` from the metadata activity means "nothing was asked", which is the
+    case for every re-index and for every video — and it must not show up in the
+    ledger as a charge of zero."""
+    acts = activities(resolve_book_metadata=resolve_book_metadata_free)
+    async with Worker(
+        env.client, task_queue=TASK_QUEUE, workflows=[IngestWorkflow], activities=acts
+    ):
+        handle = await _start(env, request(), StageOptions(), acts)
+        await _wait_for_gate(handle)
+        await handle.signal(
+            IngestWorkflow.approve,
+            Approval(
+                approved=True,
+                options=StageOptions(
+                    correct=False, embed=False, extract_semantics=False,
+                    build_epub=True,
+                ),
+            ),
+        )
+        result = await handle.result()
+
+    assert SPENT == []
+    assert len(BOOKS) == 1
+    assert result.total_usd == 0.0
 
 
 async def test_the_switches_chosen_at_the_gate_override_the_ones_requested(

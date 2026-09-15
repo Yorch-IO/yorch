@@ -49,7 +49,8 @@
         "ask": "pregunta",
         "removal": "eliminación",
         "activate": "activación",
-        "video": "vídeo"
+        "video": "vídeo",
+        "epub": "libro"
       },
       "state": {
         "running": "en curso",
@@ -166,7 +167,10 @@
     "videoIsLive": "Un directo no tiene duración ni final, así que todavía no hay nada que indexar. Inténtalo cuando se publique la grabación.",
     "audioUnavailable": "Este vídeo no tiene subtítulos, así que hay que descargar su audio, y YouTube no ha querido servírselo a este ordenador.",
     "resolutionNotTrusted": "Los datos del vídeo no corresponden al enlace. Prueba a pegar el enlace otra vez.",
-    "audioFormatUnsupported": "El audio ha llegado en un contenedor que Amazon Transcribe no sabe leer, y este producto no lo reconvierte."
+    "audioFormatUnsupported": "El audio ha llegado en un contenedor que Amazon Transcribe no sabe leer, y este producto no lo reconvierte.",
+    "artifactNotFound": "Ese archivo no está para descargar. Solo se puede bajar un libro, y solo de una ejecución que lo haya producido.",
+    "artifactChanged": "El archivo en disco ya no coincide con lo que el catálogo registró, así que no es el libro que produjo esta ejecución. Vuelve a generarlo.",
+    "epubSourceMissing": "No queda ninguna ejecución con los fragmentos de esta versión, así que no hay con qué componer el libro. Reindexar los restaura, pero vuelve a pagar la corrección."
   },
   "library": {
     "title": "Biblioteca",
@@ -304,9 +308,25 @@
         "transcription": "transcripción",
         "planning": "planificación",
         "ask-embedding": "vector de la pregunta",
-        "answering": "respuesta"
+        "answering": "respuesta",
+        "epub-metadata": "título y autor"
       }
-    }
+    },
+    "downloadEpub": "Descargar EPUB",
+    "downloadingEpub": "Guardando…",
+    "downloadedEpub": "Guardado en {{path}}.",
+    "buildEpub": "Generar EPUB",
+    "buildingEpub": "Generando…",
+    "builtEpub": "Generado: {{title}}.",
+    "cannotBuildEpub": "No queda ninguna ejecución con los fragmentos de esta versión, así que no hay con qué componer el libro.",
+    "editMetadata": "Editar título y autor",
+    "metadataTitle": "Título",
+    "metadataAuthor": "Autor",
+    "metadataAuthorHint": "Déjalo vacío si el documento no lo tiene.",
+    "metadataSave": "Guardar",
+    "metadataSaving": "Guardando…",
+    "metadataCancel": "Cancelar",
+    "metadataWhy": "El título empieza siendo el nombre del archivo y el autor empieza vacío. Lo que escribas aquí manda: nada lo sobrescribe después."
   },
   "import": {
     "title": "Importar un documento",
@@ -338,7 +358,8 @@
       "downloadingOf": "Descargando el audio: {{done}} de {{total}}",
       "uploading": "Enviando el audio al servicio…",
       "starting": "Iniciando la ejecución…"
-    }
+    },
+    "stageBuildEpub": "Generar un EPUB para descargar (casi gratis)"
   },
   "queue": {
     "title": "Importaciones",
@@ -386,7 +407,8 @@
       "profile": "Aprender las reglas del documento",
       "tuning": "Ajuste — una segunda pasada de embeddings",
       "evaluation": "Medición — embeber las preguntas",
-      "transcription": "Transcripción — Amazon lee el audio"
+      "transcription": "Transcripción — Amazon lee el audio",
+      "epub-metadata": "leyendo el título y el autor"
     },
     "profileTitle": "Reglas",
     "profileReused": "Se reutiliza el perfil «{{slug}}», aprendido de {{learnedFrom}} (revisión {{revisions}}).",
@@ -708,7 +730,8 @@
       "done": "terminando",
       "evaluating": "midiendo el índice",
       "tuning": "afinando",
-      "blocked": "retenida"
+      "blocked": "retenida",
+      "epub": "empaquetando el libro"
     },
     "kind": {}
   },
@@ -770,7 +793,8 @@
       "estimating": "estimando",
       "replaying semantics": "reproduciendo la semántica",
       "projections": "proyecciones",
-      "catalog": "catálogo"
+      "catalog": "catálogo",
+      "epub": "empaquetando el libro"
     },
     "noRuns": "No consta ninguna ejecución para esta versión.",
     "whichRun": "Ejecución"

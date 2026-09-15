@@ -51,6 +51,17 @@ export function LibraryScreen() {
   // burst of work nobody asked for.
   const [statsFor, setStatsFor] = useState<string | null>(null);
   const [removed, setRemoved] = useState<Removal | null>(null);
+  /** What the last book verb did, so the row can say so rather than going
+   *  quiet. `null` while nothing has happened; a dismissed save dialog leaves
+   *  it null too, because cancelling is not an outcome worth reporting. */
+  const [book, setBook] = useState<string | null>(null);
+  /** Which document's title and author are being edited, and the draft. One at
+   *  a time, like the panels below: two open editors in one table is a form
+   *  nobody can tell apart. */
+  const [editing, setEditing] = useState<{
+    title: string;
+    author: string;
+  } | null>(null);
   const [started, setStarted] = useState<{ kind: string; id: string } | null>(
     null,
   );
@@ -162,6 +173,79 @@ export function LibraryScreen() {
     [libraryId, load, openId],
   );
 
+  /** Build a book for a version already indexed.
+   *
+   *  Awaited rather than started and polled: it is a file read, a render and a
+   *  file write, and the very next thing a person does is download it. Not
+   *  behind a confirm, because the worst case is a fraction of a cent for
+   *  reading a title off the first page — and only the first time.
+   */
+  const buildEpub = useCallback(
+    async (versionId: string) => {
+      if (!openId) return;
+      setBusy(true);
+      try {
+        const built = await api.versionBuildEpub(libraryId, openId, versionId);
+        setBook(t("library.builtEpub", { title: built.title }));
+        setDetail(await api.documentDetail(libraryId, openId));
+        setError(null);
+      } catch (e) {
+        setError(errorMessage(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [libraryId, openId, t],
+  );
+
+  /** Fetch a book and let the person say where it goes.
+   *
+   *  The chooser and the write both happen in Rust, which is why no capability
+   *  was added for this. A dismissed dialog resolves to `null` and must leave
+   *  the screen exactly as it was: it is the ordinary way out of a file dialog,
+   *  not a failure.
+   */
+  const saveEpub = useCallback(
+    async (runId: string, title: string) => {
+      setBusy(true);
+      try {
+        const path = await api.artifactSave(runId, "epub", `${title}.epub`);
+        setBook(path ? t("library.downloadedEpub", { path }) : null);
+        setError(null);
+      } catch (e) {
+        setError(errorMessage(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [t],
+  );
+
+  /** Correct what the catalog calls this document.
+   *
+   *  Whatever is typed here stands: `fill_document_metadata` only ever writes a
+   *  title that is still the filename stem and an author that is still NULL, so
+   *  an edit is never second-guessed by a later run.
+   */
+  const saveMetadata = useCallback(async () => {
+    if (!openId || !editing) return;
+    setBusy(true);
+    try {
+      await api.documentUpdate(libraryId, openId, {
+        title: editing.title,
+        author: editing.author,
+      });
+      setEditing(null);
+      setDetail(await api.documentDetail(libraryId, openId));
+      await load();
+      setError(null);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [editing, libraryId, load, openId]);
+
   const run = useCallback(
     async (kind: "reindex" | "rebuild", documentId: string) => {
       setBusy(true);
@@ -213,6 +297,11 @@ export function LibraryScreen() {
           )}
         </p>
       )}
+
+      {/* What the last book verb did. A dismissed save dialog leaves this null
+          rather than reporting a cancellation: it is the ordinary way out of a
+          file chooser, not an outcome. */}
+      {book && <p className="notice">{book}</p>}
 
       {removed && (
         <div className="notice removed">
@@ -340,6 +429,22 @@ export function LibraryScreen() {
                             </button>
                             <button
                               type="button"
+                              disabled={busy}
+                              onClick={() =>
+                                setEditing(
+                                  editing
+                                    ? null
+                                    : {
+                                        title: detail.title,
+                                        author: detail.author ?? "",
+                                      },
+                                )
+                              }
+                            >
+                              {t("library.editMetadata")}
+                            </button>
+                            <button
+                              type="button"
                               className="danger"
                               disabled={busy}
                               onClick={() => setConfirming(d.id)}
@@ -347,6 +452,64 @@ export function LibraryScreen() {
                               {t("library.actions.remove")}
                             </button>
                           </div>
+
+                          {/* The title starts as the file's own name and the
+                              author starts empty — a column nothing wrote for
+                              the first year of this product. A model fills them
+                              once on the way to building a book; this is the
+                              half that says the model was wrong, and writing a
+                              value is also what stops it being asked again. */}
+                          {editing && (
+                            <div className="metadata">
+                              <label>
+                                <span>{t("library.metadataTitle")}</span>
+                                <input
+                                  type="text"
+                                  value={editing.title}
+                                  onChange={(e) =>
+                                    setEditing({
+                                      ...editing,
+                                      title: e.target.value,
+                                    })
+                                  }
+                                />
+                              </label>
+                              <label>
+                                <span>{t("library.metadataAuthor")}</span>
+                                <input
+                                  type="text"
+                                  value={editing.author}
+                                  placeholder={t(
+                                    "library.metadataAuthorHint",
+                                  )}
+                                  onChange={(e) =>
+                                    setEditing({
+                                      ...editing,
+                                      author: e.target.value,
+                                    })
+                                  }
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                disabled={busy || !editing.title.trim()}
+                                onClick={() => void saveMetadata()}
+                              >
+                                {busy
+                                  ? t("library.metadataSaving")
+                                  : t("library.metadataSave")}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditing(null)}
+                              >
+                                {t("library.metadataCancel")}
+                              </button>
+                              <p className="model">
+                                {t("library.metadataWhy")}
+                              </p>
+                            </div>
+                          )}
 
                           {!detail.canReindex && (
                             <p className="warn">{t("library.cannotReindex")}</p>
@@ -389,6 +552,47 @@ export function LibraryScreen() {
                                     onClick={() => void activateVersion(v.id)}
                                   >
                                     {t("library.detail.activateVersion")}
+                                  </button>
+                                )}
+                                {/* Two verbs, and which one is offered says
+                                    what exists. A run id means a book is
+                                    already built and the only thing left is to
+                                    fetch it; no run id means building is the
+                                    verb — and `canBuildEpub` is what decides
+                                    whether it can be offered at all, because a
+                                    version whose chunks were pruned has nothing
+                                    to compose one from. A button that fails
+                                    when pressed is worse than one that says
+                                    why it is disabled. */}
+                                {v.epubRunId ? (
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      void saveEpub(
+                                        v.epubRunId as string,
+                                        detail.title,
+                                      )
+                                    }
+                                  >
+                                    {busy
+                                      ? t("library.downloadingEpub")
+                                      : t("library.downloadEpub")}
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={busy || !detail.canBuildEpub}
+                                    title={
+                                      detail.canBuildEpub
+                                        ? ""
+                                        : t("library.cannotBuildEpub")
+                                    }
+                                    onClick={() => void buildEpub(v.id)}
+                                  >
+                                    {busy
+                                      ? t("library.buildingEpub")
+                                      : t("library.buildEpub")}
                                   </button>
                                 )}
                                 <button

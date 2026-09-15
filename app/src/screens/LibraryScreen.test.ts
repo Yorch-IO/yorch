@@ -70,3 +70,45 @@ describe("the three verbs are told apart by what they cost", () => {
     expect(SOURCE).toContain("library.cannotRebuild");
   });
 });
+
+describe("the two book verbs are told apart by what already exists", () => {
+  it("offers the download only when a run actually holds one", () => {
+    // `epubRunId` is the *address* of the file, not a flag — the download is
+    // addressed by run. Deriving the button from anything else would mean
+    // offering a fetch with nowhere to fetch from.
+    expect(SOURCE).toContain("v.epubRunId ?");
+    expect(SOURCE).toContain("library.downloadEpub");
+  });
+
+  it("disables building on the server's own flag, with a reason", () => {
+    // The same file a rebuild needs. A version whose `chunks.jsonl` was pruned
+    // can do neither, and a button that fails when pressed is worse than one
+    // that says why it is disabled.
+    expect(SOURCE).toContain("!detail.canBuildEpub");
+    expect(SOURCE).toContain("library.cannotBuildEpub");
+  });
+
+  it("never treats a dismissed save dialog as a failure", () => {
+    // `artifactSave` resolves to null when the person closes the chooser. That
+    // is the ordinary way out of a file dialog and must not paint the red panel
+    // — so the path has to be truthy-checked before it is reported.
+    expect(SOURCE).toMatch(/setBook\(path \? t\("library\.downloadedEpub"/);
+  });
+});
+
+describe("a person's own title outranks the one a model guessed", () => {
+  it("edits through the metadata route rather than a reindex", () => {
+    // Correcting a title must not cost a pipeline run. `documentUpdate` is the
+    // only writer, and it is unconditional where the model's own fill is
+    // careful — which is also what stops the model being paid to guess again.
+    expect(SOURCE).toContain("api.documentUpdate(");
+    expect((SOURCE.match(/api\.documentUpdate\(/g) ?? []).length).toBe(1);
+  });
+
+  it("refuses to save an empty title", () => {
+    // The catalog's title is never blank: it starts as the filename stem. An
+    // empty one would render as a nameless row and name the downloaded file
+    // `libro.epub`.
+    expect(SOURCE).toContain("!editing.title.trim()");
+  });
+});

@@ -382,6 +382,28 @@ async def project_structure(
     return {"chunks": 13, "citations": 13}
 
 
+BOOKS: list[str] = []
+
+
+@activity.defn(name="resolve_book_metadata")
+async def resolve_book_metadata(
+    run_id: str, registered: Registered, chunks: ArtifactRef
+) -> Spend | None:
+    """`None`, and for a video that is not a stub but the real behaviour:
+    `register_video` fills the author from the channel, so `needs_metadata` is
+    already false by the time this runs and nothing is ever asked."""
+    return None
+
+
+@activity.defn(name="build_epub")
+async def build_epub(
+    run_id: str, library_id: str, registered: Registered, chunks: ArtifactRef
+) -> ArtifactRef:
+    BOOKS.append(chunks.path)
+    return ArtifactRef(kind="epub", path=f"runs/{run_id}/book.epub",
+                       sha256="b" * 64, bytes=4096)
+
+
 @activity.defn(name="embed_and_index")
 async def embed_and_index(
     run_id: str, library_id: str, registered: Registered,
@@ -409,6 +431,7 @@ def activities(*, captions=True, already_indexed=False, statuses=None,
         stage_audio, discard_audio,
         start_transcription, poller(statuses or []), collect_transcript,
         abandon_transcription, correct_text, chunk_transcript, project_structure,
+        resolve_book_metadata, build_epub,
         embed_and_index, extract_semantics, activate_version,
     ]
 
@@ -422,10 +445,10 @@ async def env():
 @pytest.fixture(autouse=True)
 def _clear():
     SPENT.clear(); CALLED.clear(); POLLS.clear(); QUOTED.clear(); OPENED.clear()
-    CHUNK_WARNINGS.clear()
+    CHUNK_WARNINGS.clear(); BOOKS.clear()
     yield
     SPENT.clear(); CALLED.clear(); POLLS.clear(); QUOTED.clear(); OPENED.clear()
-    CHUNK_WARNINGS.clear()
+    CHUNK_WARNINGS.clear(); BOOKS.clear()
 
 
 async def _start(env: WorkflowEnvironment, req: VideoRequest, opts: StageOptions):
@@ -1017,3 +1040,42 @@ async def test_a_video_nobody_asked_concepts_for_does_not_pay_for_them(env):
     assert "extract_semantics" not in CALLED
     assert "stage:semantics" not in CALLED
     assert "semantics" not in SPENT
+
+
+async def test_a_transcript_can_be_packaged_as_a_book_and_pays_nothing_for_it(env):
+    """The one path where the metadata call is free by construction.
+
+    `register_video` fills the author from the channel, so `needs_metadata` is
+    already false by the time the stage runs — which is why the double above
+    returns `None` rather than a stub charge. The book is still built, from the
+    same chunk rows the graph was projected from.
+    """
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow], activities=activities()):
+        handle = await _start(env, request(), StageOptions())
+        await _wait_for_gate(handle)
+        await handle.signal(
+            VideoIngestWorkflow.approve,
+            Approval(approved=True, options=StageOptions(build_epub=True)),
+        )
+        result = await handle.result()
+
+    assert result.state == "indexed"
+    assert len(BOOKS) == 1
+    assert "epub-metadata" not in SPENT
+    assert "stage:epub" in CALLED
+
+
+async def test_a_video_nobody_asked_a_book_for_does_not_get_one(env):
+    async with Worker(env.client, task_queue=TASK_QUEUE,
+                      workflows=[VideoIngestWorkflow], activities=activities()):
+        handle = await _start(env, request(), StageOptions())
+        await _wait_for_gate(handle)
+        await handle.signal(
+            VideoIngestWorkflow.approve,
+            Approval(approved=True, options=StageOptions(build_epub=False)),
+        )
+        await handle.result()
+
+    assert BOOKS == []
+    assert "stage:epub" not in CALLED

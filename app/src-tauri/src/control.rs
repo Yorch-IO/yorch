@@ -100,6 +100,13 @@ const UPLOAD_TIMEOUT: Duration = Duration::from_secs(900);
 /// progress.
 const AUDIO_UPLOAD_TIMEOUT: Duration = Duration::from_secs(3600);
 
+/// Downloading a book. Bandwidth-bound like the uploads above rather than
+/// server-bound: the file is already on disk by the time this is called, and
+/// what sets the duration is the link between here and the plane. A 600-chunk
+/// book is a few hundred kilobytes, so this bounds a stalled connection rather
+/// than a slow one.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceHealth {
     pub ok: bool,
@@ -270,6 +277,14 @@ pub struct StageOptions {
     /// the effect the round is looking for.
     #[serde(default)]
     pub tune: bool,
+    /// Package what was indexed as an EPUB a person can read on a device.
+    ///
+    /// `#[serde(default)]` for the reason `tune` has it: an older webview that
+    /// does not send the key must not fail the whole call. Nearly free — the
+    /// packaging costs nothing, and the one call it can make runs once per
+    /// document ever and never at all for a video.
+    #[serde(default)]
+    pub build_epub: bool,
 }
 
 impl Default for StageOptions {
@@ -283,6 +298,7 @@ impl Default for StageOptions {
             ignore_profile: false,
             review_correction: false,
             tune: false,
+            build_epub: false,
         }
     }
 }
@@ -1201,6 +1217,12 @@ pub struct VersionRow {
     /// The run whose artifacts a rebuild would replay, or `None` when no run
     /// kept them — which is why the button can be disabled with a reason.
     pub rebuild_run_id: Option<String>,
+    /// The run to fetch this version's book from, or `None` when it has none
+    /// yet. A run id rather than a flag, because the download is addressed by
+    /// run: a client that knew only *whether* one existed would have to ask
+    /// again to find out where.
+    #[serde(default)]
+    pub epub_run_id: Option<String>,
     /// Other documents holding these same bytes. Non-empty means removing this
     /// document leaves the version standing, and the confirm has to say so.
     #[serde(default)]
@@ -1231,8 +1253,57 @@ pub struct DocumentDetail {
     pub active_version_id: Option<String>,
     pub can_reindex: bool,
     pub can_rebuild: bool,
+    /// Whether this version's chunks are still on disk to compose a book from.
+    /// Defaulted, so a plane that predates the feature reads as "no" rather
+    /// than failing the whole detail payload.
+    #[serde(default)]
+    pub can_build_epub: bool,
     #[serde(default)]
     pub versions: Vec<VersionRow>,
+}
+
+/// What a standalone build produced.
+///
+/// Awaited rather than a run id to poll, because the book is a file read, a
+/// render and a file write — and the caller's very next act is to download it.
+/// `run_id` is what the download is addressed by.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct BookBuilt {
+    pub version_id: String,
+    pub run_id: String,
+    pub artifact: String,
+    pub bytes: u64,
+    pub title: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    /// What the metadata call cost, or `None` when it was not made — which is
+    /// the ordinary case, because it runs once per document ever.
+    #[serde(default)]
+    pub usd: Option<f64>,
+}
+
+/// What a person may correct about a document.
+///
+/// Both fields optional, and `None` means "leave this one alone" — which is
+/// what lets a screen send only the field somebody edited. Renamed on the
+/// deserialize side like every other request type, because the webview speaks
+/// camelCase and Python speaks snake_case.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct DocumentMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct DocumentMetadataResult {
+    pub id: String,
+    pub title: String,
+    pub author: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2600,6 +2671,62 @@ impl Control {
         .await
     }
 
+    /// Build a book for a version that was indexed before books existed.
+    ///
+    /// Nearly free, and the argument is `activate_version`'s arriving from
+    /// another direction: the expensive work is already paid for and what is
+    /// missing is a last, cheap step.
+    pub async fn build_epub(
+        &self,
+        library_id: &str,
+        document_id: &str,
+        version_id: &str,
+    ) -> Result<BookBuilt> {
+        self.post(
+            &format!(
+                "/libraries/{library_id}/documents/{document_id}/versions/{version_id}/epub"
+            ),
+            START_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Correct what the catalog calls a document.
+    pub async fn update_document(
+        &self,
+        library_id: &str,
+        document_id: &str,
+        metadata: &DocumentMetadata,
+    ) -> Result<DocumentMetadataResult> {
+        let path = format!("/libraries/{library_id}/documents/{document_id}");
+        let url = format!("{}{path}", self.base);
+        self.send(self.http.patch(&url).json(metadata), &path, START_TIMEOUT)
+            .await
+    }
+
+    /// One artifact, as bytes.
+    ///
+    /// Through `send_raw` like every other request, which is what gives it the
+    /// bearer token and the tenant header without a second place for those to
+    /// be attached — and what makes a 404 arrive as an `AppError` carrying the
+    /// plane's own `detail.kind` rather than as an empty file on disk.
+    pub async fn download_artifact(
+        &self,
+        workflow_id: &str,
+        name: &str,
+    ) -> Result<Vec<u8>> {
+        let path = format!("/runs/{workflow_id}/artifacts/{name}");
+        let url = format!("{}{path}", self.base);
+        let response = self
+            .send_raw(self.http.get(&url), &path, Some(DOWNLOAD_TIMEOUT))
+            .await?;
+        response
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|source| unreachable(url, source))
+    }
+
     pub async fn rebuild(&self, library_id: &str, document_id: &str) -> Result<StartedRun> {
         self.post(
             &format!("/libraries/{library_id}/documents/{document_id}/rebuild"),
@@ -3142,6 +3269,63 @@ mod request_direction {
         let out = serde_json::to_value(&parsed).unwrap();
         assert_eq!(out["extract_semantics"], false);
         assert_eq!(out["learn_profile"], true);
+    }
+
+    #[test]
+    fn a_book_switch_survives_both_renames_and_its_absence_is_off() {
+        // Two properties in one, because they fail differently. A webview that
+        // *sends* the switch must have it reach Python under Python's own
+        // spelling — `buildEpub` arriving as-is would be dropped by the
+        // dataclass converter with no error anywhere, which is the recorded
+        // `style_effort` shape. And an older webview that sends nothing must
+        // still decode, which is what `#[serde(default)]` is for: without it
+        // the whole approval fails and the gate cannot be answered at all.
+        let ticked: StageOptions = serde_json::from_str(
+            r#"{"correct": true, "embed": true, "extractSemantics": true,
+                "generateEvalset": false, "learnProfile": true,
+                "ignoreProfile": false, "reviewCorrection": false,
+                "buildEpub": true}"#,
+        )
+        .unwrap();
+        assert!(ticked.build_epub);
+        assert_eq!(serde_json::to_value(&ticked).unwrap()["build_epub"], true);
+
+        let older: StageOptions = serde_json::from_str(
+            r#"{"correct": true, "embed": true, "extractSemantics": true,
+                "generateEvalset": false, "learnProfile": true,
+                "ignoreProfile": false, "reviewCorrection": false}"#,
+        )
+        .unwrap();
+        assert!(!older.build_epub, "an absent switch is off, not a failure");
+    }
+
+    #[test]
+    fn a_version_row_survives_a_plane_that_has_never_heard_of_a_book() {
+        // Every field the feature added is defaulted, so the *detail* payload
+        // still decodes against a plane that predates it. Without that a user
+        // whose desktop app updated before their cloud plane did would lose the
+        // Library screen entirely rather than lose one button on it.
+        let row: VersionRow = serde_json::from_str(
+            r#"{"id": "ver_1", "content_sha256": "a", "byte_size": 10,
+                "page_count": null, "state": "indexed", "active": true,
+                "created_at": null, "rebuild_run_id": null}"#,
+        )
+        .unwrap();
+        assert!(row.epub_run_id.is_none());
+        assert_eq!(serde_json::to_value(&row).unwrap()["epubRunId"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_metadata_edit_sends_only_the_field_somebody_changed() {
+        // `None` means "leave this alone" on both planes, and it has to travel
+        // as *absence* rather than as an explicit null: a null author is how a
+        // person says the document has none, and the two must not be the same
+        // request.
+        let only_author: DocumentMetadata =
+            serde_json::from_str(r#"{"author": "Darío Silva-Silva"}"#).unwrap();
+        let out = serde_json::to_value(&only_author).unwrap();
+        assert!(out.get("title").is_none());
+        assert_eq!(out["author"], "Darío Silva-Silva");
     }
 
     #[test]

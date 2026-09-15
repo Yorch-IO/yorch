@@ -791,6 +791,109 @@ class Catalog:
             )
         return document_id
 
+    def fill_document_metadata(
+        self,
+        document_id: str,
+        *,
+        title: str | None,
+        author: str | None,
+        filename_title: str,
+        tenant_id: str,
+    ) -> bool:
+        """Write a title and an author the catalog never had. Never overwrite.
+
+        `document.author` is a column nothing has ever written and
+        `document.title` is the picked file's stem — so for every document on
+        this installation both are placeholders, and a model reading the opening
+        pages can do better. What it may **not** do is disagree with a person.
+
+        So the title moves only while it is still *exactly* the filename stem
+        the import derived it from, which is computed by the caller with the
+        same `PurePosixPath(source_key).stem` `stage_source` used, not guessed
+        at with a heuristic. The author moves only from NULL. Both are the
+        `COALESCE(EXCLUDED.author, document.author)` rule `upsert_document`
+        already applies, moved to the one write that has a model's opinion in
+        its hands.
+
+        The tenant is in the WHERE and not in a lookup beforehand: an id is not
+        authorization, and this is a write.
+
+        Returns whether anything moved, so a caller can say "already named"
+        rather than reporting a change it did not make.
+        """
+        if title is None and author is None:
+            return False
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                UPDATE document
+                   SET author = COALESCE(document.author, %s),
+                       title = CASE WHEN document.title = %s
+                                    THEN COALESCE(%s, document.title)
+                                    ELSE document.title END,
+                       updated_at = now()
+                 WHERE id = %s AND tenant_id = %s
+                   AND (document.author IS NULL OR document.title = %s)
+             RETURNING id
+                """,
+                (author, filename_title, title, document_id, tenant_id,
+                 filename_title),
+            ).fetchone()
+        return row is not None
+
+    def set_document_metadata(
+        self,
+        document_id: str,
+        *,
+        title: str | None = None,
+        author: str | None = None,
+        tenant_id: str,
+    ) -> bool:
+        """A person's own edit, which outranks everything.
+
+        Unconditional where `fill_document_metadata` is careful, because the
+        caller here *is* the authority this product defers to. `None` means
+        "leave this one alone", which is what lets a screen send one field; an
+        empty author is how a person says the document has none, and it is
+        stored as NULL so `fill_document_metadata` does not read it as unset and
+        pay to guess again.
+        """
+        sets: list[str] = []
+        params: list[Any] = []
+        if title is not None:
+            sets.append("title = %s")
+            params.append(title)
+        if author is not None:
+            sets.append("author = %s")
+            params.append(author or None)
+        if not sets:
+            return False
+        params += [document_id, tenant_id]
+        with self._conn() as conn:
+            row = conn.execute(
+                f"""
+                UPDATE document SET {", ".join(sets)}, updated_at = now()
+                 WHERE id = %s AND tenant_id = %s
+             RETURNING id
+                """,
+                tuple(params),
+            ).fetchone()
+        return row is not None
+
+    def library_language(self, library_id: str, *, tenant_id: str) -> str:
+        """What language a library's documents are written in.
+
+        Defaulted to the column's own default rather than raising: a book in an
+        unknown language is still a book, and `dc:language` is metadata a reader
+        uses for hyphenation, not a correctness property.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT language FROM library WHERE id = %s AND tenant_id = %s",
+                (library_id, tenant_id),
+            ).fetchone()
+        return (row[0] if row and row[0] else "es")
+
     def mark_absent(self, document_id: str) -> None:
         """A deleted file keeps its history; removal is a separate, explicit act.
 

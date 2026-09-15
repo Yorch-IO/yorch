@@ -36,6 +36,7 @@ from temporalio.exceptions import TimeoutType
 
 with workflow.unsafe.imports_passed_through():
     from ..artifacts import ArtifactRef
+    from ..activities import exporting as export
     from ..activities import ingest as act
     from ..activities import paid
     from ..activities import video as vid
@@ -357,6 +358,28 @@ class VideoIngestWorkflow:
             start_to_close_timeout=FREE_TIMEOUT,
             retry_policy=_RETRY,
         )
+
+        # A transcript makes an unusual book — one chapter, no sections, a
+        # timestamp against each fragment — and it is the shape the source has.
+        # The metadata call is skipped for every video without being asked to
+        # be: `register_video` fills the author from the channel, so
+        # `needs_metadata` is already false by the time this runs.
+        if options.build_epub:
+            await self._enter(run_id, "epub")
+            metadata: Spend | None = await workflow.execute_activity(
+                export.resolve_book_metadata,
+                args=[run_id, registered, chunked.chunks],
+                start_to_close_timeout=FREE_TIMEOUT,
+                retry_policy=_PAID_RETRY,
+            )
+            if metadata is not None:
+                spent.append(metadata)
+            await workflow.execute_activity(
+                export.build_epub,
+                args=[run_id, request.library_id, registered, chunked.chunks],
+                start_to_close_timeout=FREE_TIMEOUT,
+                retry_policy=_RETRY,
+            )
 
         indexed: Indexed | None = None
         if options.embed:

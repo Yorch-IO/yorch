@@ -14,14 +14,18 @@ import { RunAudit } from "./RunAudit";
  * nothing, and the raw log must not be fetched until somebody asks for it — it
  * is the one call here that can genuinely be slow.
  */
-const { runAudit, runEvents } = vi.hoisted(() => ({
+const { runAudit, runEvents, artifactSave } = vi.hoisted(() => ({
   runAudit: vi.fn(),
   runEvents: vi.fn(),
+  artifactSave: vi.fn(),
 }));
 
 vi.mock("./lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./lib/api")>();
-  return { ...actual, api: { ...actual.api, runAudit, runEvents } };
+  return {
+    ...actual,
+    api: { ...actual.api, runAudit, runEvents, artifactSave },
+  };
 });
 
 const t = (key: string, options?: Record<string, unknown>): string =>
@@ -99,6 +103,7 @@ const events = (over: Partial<RunEventPage> = {}): RunEventPage => ({
 beforeEach(async () => {
   runAudit.mockReset();
   runEvents.mockReset();
+  artifactSave.mockReset();
   await i18n.changeLanguage("es");
 });
 
@@ -229,4 +234,84 @@ it("names the charges no stage claims rather than dropping them", async () => {
   render(<RunAudit runId="ingest-1" />);
   await waitFor(() => expect(screen.getByText(t("audit.unattributed"))).toBeTruthy());
   expect(screen.getByText("$0.043600")).toBeTruthy();
+});
+
+it("offers the book as a button and every other artifact as a label", async () => {
+  // A book is the one artifact a person reads rather than a stage. Everything
+  // else is a working file, and the allowlist that decides which is which lives
+  // on the server — so a button offered for anything else would be a 404 a
+  // person had to press to discover.
+  runAudit.mockResolvedValue(
+    audit({
+      stages: [
+        stage({
+          stage: "epub",
+          cost: null,
+          artifacts: [
+            { name: "epub", relPath: "runs/x/book.epub", sha256: "bb", sizeBytes: 9000 },
+            { name: "chunks", relPath: "runs/x/chunks.jsonl", sha256: "cc", sizeBytes: 10 },
+          ],
+        }),
+      ],
+    }),
+  );
+  render(<RunAudit runId="ingest-1" />);
+
+  const book = await screen.findByRole("button", { name: "epub" });
+  expect(book).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "chunks" })).toBeNull();
+});
+
+it("names the saved file after the document, not after the run", async () => {
+  // `title` is the document's. A run that failed before registering one has
+  // none, which is why the queue's own rule is `title ?? label ?? workflowId` —
+  // the file must never be called `ingest-1787….epub`.
+  artifactSave.mockResolvedValue("/home/alguien/Institución.epub");
+  runAudit.mockResolvedValue(
+    audit({
+      stages: [
+        stage({
+          stage: "epub",
+          cost: null,
+          artifacts: [
+            { name: "epub", relPath: "runs/x/book.epub", sha256: "bb", sizeBytes: 9000 },
+          ],
+        }),
+      ],
+    }),
+  );
+  render(<RunAudit runId="ingest-1" />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "epub" }));
+  await waitFor(() =>
+    expect(artifactSave).toHaveBeenCalledWith("ingest-1", "epub", "Institución.epub"),
+  );
+  await screen.findByText(
+    t("library.downloadedEpub", { path: "/home/alguien/Institución.epub" }),
+  );
+});
+
+it("says nothing at all when the save dialog is dismissed", async () => {
+  // `artifactSave` resolves to null when the person closes the chooser. That is
+  // the ordinary way out of a file dialog, and reporting it would put a notice
+  // on screen for something nobody did.
+  artifactSave.mockResolvedValue(null);
+  runAudit.mockResolvedValue(
+    audit({
+      stages: [
+        stage({
+          stage: "epub",
+          cost: null,
+          artifacts: [
+            { name: "epub", relPath: "runs/x/book.epub", sha256: "bb", sizeBytes: 9000 },
+          ],
+        }),
+      ],
+    }),
+  );
+  const { container } = render(<RunAudit runId="ingest-1" />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "epub" }));
+  await waitFor(() => expect(artifactSave).toHaveBeenCalled());
+  expect(container.querySelector(".notice")).toBeNull();
 });

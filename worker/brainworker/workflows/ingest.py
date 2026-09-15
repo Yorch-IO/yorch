@@ -29,6 +29,7 @@ from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.exceptions import CancelledError as TemporalCancelledError
 
 with workflow.unsafe.imports_passed_through():
+    from ..activities import exporting as export
     from ..activities import ingest as act
     from ..activities import paid
     from ..pipeline import (
@@ -465,6 +466,32 @@ class IngestWorkflow:
             start_to_close_timeout=FREE_TIMEOUT,
             retry_policy=_RETRY,
         )
+
+        # Between projecting and embedding, and that position is a decision.
+        # After projecting, because the book is made of the same chunk rows the
+        # graph was just built from and a failure here must not cost a document
+        # its structure. Before embedding, because it is the free half of the
+        # run: a person who ticked this and nothing else gets their book without
+        # waiting on the longest paid stage in the pipeline.
+        if approved.build_epub:
+            await self._enter(run_id, "epub")
+            metadata: Spend | None = await workflow.execute_activity(
+                export.resolve_book_metadata,
+                args=[run_id, registered, chunked.chunks],
+                start_to_close_timeout=FREE_TIMEOUT,
+                # Paid, and therefore two attempts rather than three. It returns
+                # `None` far more often than it spends — once per document ever,
+                # and never for a video.
+                retry_policy=_PAID_RETRY,
+            )
+            if metadata is not None:
+                spent.append(metadata)
+            await workflow.execute_activity(
+                export.build_epub,
+                args=[run_id, request.library_id, registered, chunked.chunks],
+                start_to_close_timeout=FREE_TIMEOUT,
+                retry_policy=_RETRY,
+            )
 
         indexed: Indexed | None = None
         if approved.embed:

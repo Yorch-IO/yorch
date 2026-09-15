@@ -136,6 +136,19 @@ class StageOptions:
     #: spends. Off by default: extracting the descriptions is free, and turning
     #: them into one sentence is the part that costs.
     condense_descriptions: bool = False
+    #: Package what was indexed as an EPUB a person can read on a device.
+    #:
+    #: Appended and defaulted, which is what makes it safe without a
+    #: `workflow.patched`: a history in flight — a gate parked for up to seven
+    #: days — decodes a payload that never carried the field as `False`, so the
+    #: conditional command is never issued and the replay's command sequence is
+    #: unchanged. The one patch in this codebase guards an activity inserted at
+    #: the *head* of a workflow, which is the case that cannot be defaulted away.
+    #:
+    #: Nearly free: the packaging costs nothing, and the one call it can make —
+    #: a title and an author for a document the catalog has neither for — runs
+    #: once per document ever.
+    build_epub: bool = False
 
 
 @dataclass

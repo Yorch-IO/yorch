@@ -64,6 +64,13 @@ export function VideoGateReview({
       learnProfile: false,
       generateEvalset: false,
       tune: false,
+      // `buildEpub` is deliberately *not* in this list. It travels through the
+      // spread from the Import screen, because a video run does have an `epub`
+      // stage — a transcript makes an unusual book (one chapter, a timestamp
+      // against each fragment) and it is the shape the source has. It has no
+      // switch of its own here for the same reason correction and embedding are
+      // the only two: this gate asks the two questions that decide the bill,
+      // and the book costs nothing on this path.
     });
 
   return (

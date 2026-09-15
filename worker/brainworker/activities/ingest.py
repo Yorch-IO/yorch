@@ -141,6 +141,14 @@ CORRECTION_CALL_OVERHEAD = 600
 #: was 678 to 701, so a ceiling costs almost nothing in over-reporting.
 SEMANTICS_CALL_OVERHEAD = 710
 
+#: What a title and an author come back as. Two short strings in a JSON envelope
+#: — ``{"titulo": "…", "autor": "…"}`` — and reasoning is off for the stage, so
+#: there is no thinking budget hiding underneath this. Generous by a factor of
+#: about four against the longest title in this corpus, because the whole line
+#: is worth a fraction of a cent and the cost of guessing low is the one failure
+#: the estimate may not have.
+EPUB_METADATA_OUTPUT = 120
+
 #: Correction returns text of roughly the length it was given. Measured 560
 #: output tokens against 433 of input text with reasoning disabled, so 1.5 keeps
 #: a margin over the 1.29 observed.
@@ -948,6 +956,28 @@ def estimate_for(
                 # dense-only — changes nothing in the index and costs only the
                 # query embeddings already counted above.
                 add("tuning", settings.gemini.embedding_model, tokens, 0)
+
+    if options.build_epub:
+        # **One call, and usually none.** The metadata call runs only when the
+        # catalog has no author for the document, which is every document today
+        # and none of them twice — and never for a video, whose author is the
+        # channel. So this line over-reports on a re-index and on every video,
+        # which is the direction the gate's rule permits and the opposite of the
+        # one it forbids.
+        #
+        # The packaging itself gets no line at all: it reads a file and writes
+        # one. A workflow stage absent from `COST_STAGES` renders `cost: null`
+        # in the audit, which is what distinguishes "this was free" from "the
+        # charge was lost" — and a `$0.000000` row here would say the second.
+        from ..bookmeta import METADATA_CHARS
+
+        add(
+            "epub-metadata",
+            settings.gemini.model,
+            int(min(characters, METADATA_CHARS) / CHARS_PER_TOKEN)
+            + SEMANTICS_CALL_OVERHEAD,
+            EPUB_METADATA_OUTPUT,
+        )
 
     priced = [s.usd for s in stages if s.usd is not None]
     priced_high = [s.usd_high for s in stages if s.usd_high is not None]

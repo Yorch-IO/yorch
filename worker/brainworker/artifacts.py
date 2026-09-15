@@ -93,6 +93,18 @@ KINDS: dict[str, str] = {
     "transcript": "transcript.json",
     "transcript_text": "transcript.txt",
     "events": "events.jsonl",
+    #: The one artifact a person reads rather than a stage. Binary, which every
+    #: other kind here is not — `write_bytes` was already the primitive the
+    #: text and JSON writers go through, so nothing about the store had to
+    #: change, and `index()` already withholds a row count from anything that
+    #: is not `.jsonl`.
+    #:
+    #: Written by the `epub` stage on three paths — an ingest, a video, and the
+    #: standalone run that builds one for a version indexed before the stage
+    #: existed — which is why all three name that stage identically:
+    #: `ARTIFACT_STAGES` is keyed by artifact name alone and can hold one
+    #: writer, and `evidence` is the recorded cost of discovering that twice.
+    "epub": "book.epub",
 }
 
 TEXT_ENCODING = "utf-8"

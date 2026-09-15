@@ -21,7 +21,7 @@
  * One component, two entry points: a version row in the Library, and a finished
  * item in the Import queue.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, errorGuidanceKey, errorMessage } from "./lib/api";
 import type { AuditStage, RunAudit as Audit, RunEventPage } from "./lib/api";
@@ -43,7 +43,19 @@ function StageName({ stage }: { stage: string | null }) {
   return <>{t(`audit.stage.${stage}`, { defaultValue: stage })}</>;
 }
 
-function StageRow({ row, locale }: { row: AuditStage; locale: string }) {
+function StageRow({
+  row,
+  locale,
+  onDownload,
+}: {
+  row: AuditStage;
+  locale: string;
+  /** Fetch one of this stage's artifacts. Only ever passed for a kind the
+   *  plane will actually serve — the allowlist lives on the server, and a
+   *  button offered for anything else would be a 404 a person had to press to
+   *  discover. */
+  onDownload?: (name: string) => void;
+}) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const took = duration(row.seconds);
@@ -108,11 +120,26 @@ function StageRow({ row, locale }: { row: AuditStage; locale: string }) {
           {row.artifacts.length === 0 ? (
             <span className="muted">—</span>
           ) : (
-            row.artifacts.map((a) => (
-              <code className="locator" key={a.name} title={a.relPath}>
-                {a.name}
-              </code>
-            ))
+            row.artifacts.map((a) =>
+              // A book is the one artifact a person reads rather than a stage,
+              // so it is the one that is a button here. Everything else is a
+              // working file and stays a label.
+              a.name === "epub" && onDownload ? (
+                <button
+                  type="button"
+                  className="link"
+                  key={a.name}
+                  title={a.relPath}
+                  onClick={() => onDownload(a.name)}
+                >
+                  {a.name}
+                </button>
+              ) : (
+                <code className="locator" key={a.name} title={a.relPath}>
+                  {a.name}
+                </code>
+              ),
+            )
           )}
         </td>
       </tr>
@@ -221,6 +248,20 @@ export function RunAudit({ runId }: { runId: string }) {
   const locale = i18n.language;
   const [audit, setAudit] = useState<Audit | null>(null);
   const [error, setError] = useState<unknown>(null);
+  /** Where the last book was saved, or null — which a dismissed chooser also
+   *  leaves, because cancelling is the ordinary way out of a file dialog. */
+  const [saved, setSaved] = useState<string | null>(null);
+
+  const download = useCallback(
+    (name: string) => {
+      const title = audit?.run.title ?? audit?.run.label ?? runId;
+      void api
+        .artifactSave(runId, name, `${title}.epub`)
+        .then((path) => setSaved(path))
+        .catch((e) => setError(e));
+    },
+    [audit, runId],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -278,6 +319,12 @@ export function RunAudit({ runId }: { runId: string }) {
 
       {run.errorDetail && <pre className="detail">{run.errorDetail}</pre>}
 
+      {/* A dismissed chooser leaves this null rather than reporting a
+          cancellation: it is the ordinary way out of a file dialog. */}
+      {saved && (
+        <p className="notice">{t("library.downloadedEpub", { path: saved })}</p>
+      )}
+
       {warnings.length > 0 && (
         <ul className="audit-warnings">
           {warnings.map((w, i) => (
@@ -310,7 +357,12 @@ export function RunAudit({ runId }: { runId: string }) {
           </thead>
           <tbody>
             {stages.map((row, i) => (
-              <StageRow row={row} locale={locale} key={row.seq ?? `loose-${i}`} />
+              <StageRow
+                row={row}
+                locale={locale}
+                onDownload={download}
+                key={row.seq ?? `loose-${i}`}
+              />
             ))}
           </tbody>
         </table>

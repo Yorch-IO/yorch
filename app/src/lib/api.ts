@@ -83,7 +83,17 @@ export type ControlErrorKind =
    *  `video_start`, which builds both from one URL. */
   | "resolution_not_trusted"
   /** Audio in a container Amazon Transcribe cannot read. */
-  | "audio_format_unsupported";
+  | "audio_format_unsupported"
+  /** A downloadable artifact this run does not have, or a kind that is not
+   *  downloadable at all. The allowlist is one entry on both planes. */
+  | "artifact_not_found"
+  /** The file no longer hashes to what the catalog recorded. Refused rather
+   *  than served: a file that changed under its reference is not the artifact
+   *  the run produced. */
+  | "artifact_changed"
+  /** A version whose chunks are gone, so there is nothing to compose a book
+   *  from. The remedy is a re-index, not a retry. */
+  | "epub_source_missing";
 
 export interface AppError {
   kind: AppErrorKind;
@@ -163,6 +173,9 @@ const CONTROL_GUIDANCE: Partial<Record<ControlErrorKind, string>> = {
   tenant_scope_pending: "error.tenantScopePending",
   resolution_not_trusted: "error.resolutionNotTrusted",
   audio_format_unsupported: "error.audioFormatUnsupported",
+  artifact_not_found: "error.artifactNotFound",
+  artifact_changed: "error.artifactChanged",
+  epub_source_missing: "error.epubSourceMissing",
 };
 
 /**
@@ -397,6 +410,13 @@ export interface StageOptions {
    *  eval sample, because at 40 questions the bootstrap margin cannot resolve
    *  the effect the round is looking for. */
   tune: boolean;
+  /** Package what was indexed as an EPUB a person can read on a device.
+   *
+   *  Nearly free: the packaging costs nothing and the one call it can make — a
+   *  title and an author for a document the catalog has neither for — runs once
+   *  per document ever, and never at all for a video, whose author is the
+   *  channel. */
+  buildEpub: boolean;
 }
 
 export const DEFAULT_STAGES: StageOptions = {
@@ -408,6 +428,7 @@ export const DEFAULT_STAGES: StageOptions = {
   ignoreProfile: false,
   reviewCorrection: false,
   tune: false,
+  buildEpub: false,
 };
 
 /**
@@ -1338,6 +1359,9 @@ export interface VersionRow {
   createdAt: string | null;
   /** The run a rebuild would replay. null means there is nothing to replay. */
   rebuildRunId: string | null;
+  /** The run to fetch this version's book from, or null when it has none yet.
+   *  A run id rather than a flag, because the download is addressed by run. */
+  epubRunId: string | null;
   /** Other documents holding these same bytes; non-empty means removing this
    *  document leaves the version standing. */
   alsoHeldBy: string[];
@@ -1345,6 +1369,33 @@ export interface VersionRow {
    *  it. null means nobody measured — which is every version indexed before the
    *  stage existed, and is not the same claim as a recall of zero. */
   scores: RunScores | null;
+}
+
+/** What a standalone book build produced. */
+export interface BookBuilt {
+  versionId: string;
+  /** What the download is addressed by. */
+  runId: string;
+  artifact: string;
+  bytes: number;
+  title: string;
+  author: string | null;
+  /** What the metadata call cost, or null when it was not made — the ordinary
+   *  case, because it runs once per document ever. */
+  usd: number | null;
+}
+
+/** What a person may correct about a document. An omitted field is left
+ *  alone; an empty author is how somebody says the document has none. */
+export interface DocumentMetadata {
+  title?: string;
+  author?: string;
+}
+
+export interface DocumentMetadataResult {
+  id: string;
+  title: string;
+  author: string | null;
 }
 
 export interface DocumentDetail {
@@ -1360,6 +1411,10 @@ export interface DocumentDetail {
   activeVersionId: string | null;
   canReindex: boolean;
   canRebuild: boolean;
+  /** Whether this version's chunks are still on disk to compose a book from.
+   *  The same file `canRebuild` needs, named separately because the two verbs
+   *  are not the same act. */
+  canBuildEpub: boolean;
   versions: VersionRow[];
 }
 
@@ -1757,6 +1812,21 @@ export const api = {
   /** Replays artifacts already paid for; only embedding can spend. */
   documentRebuild: (libraryId: string, documentId: string) =>
     invoke<StartedRun>("document_rebuild", { libraryId, documentId }),
+  /** Builds a book for a version already indexed, and waits: it is a file read,
+   *  a render and a file write, and the caller's next act is to download it. */
+  versionBuildEpub: (libraryId: string, documentId: string, versionId: string) =>
+    invoke<BookBuilt>("version_build_epub", { libraryId, documentId, versionId }),
+  /** Corrects what the catalog calls a document. An omitted field is left
+   *  alone, which is what lets a screen send only what somebody edited. */
+  documentUpdate: (libraryId: string, documentId: string,
+                   metadata: DocumentMetadata) =>
+    invoke<DocumentMetadataResult>("document_update",
+                                   { libraryId, documentId, metadata }),
+  /** Opens the save dialog, fetches the file and writes it. Resolves to the
+   *  path, or to null when the person dismissed the chooser — which is not an
+   *  error and must not paint one. */
+  artifactSave: (workflowId: string, name: string, suggestedName: string) =>
+    invoke<string | null>("artifact_save", { workflowId, name, suggestedName }),
   /** null while the artifacts are still being read — a normal first answer. */
   rebuildGate: (workflowId: string) =>
     invoke<RebuildReport | null>("rebuild_gate", { workflowId }),

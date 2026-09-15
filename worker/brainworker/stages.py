@@ -51,6 +51,7 @@ INGEST_STAGES: tuple[str, ...] = (
     "awaiting_correction_review",
     "chunking",
     "projecting",
+    "epub",
     "embedding",
     "evaluating",
     "tuning",
@@ -101,6 +102,7 @@ VIDEO_STAGES: tuple[str, ...] = (
     "correcting",
     "chunking",
     "projecting",
+    "epub",
     "embedding",
     # Added after the first real video shipped with an empty Graph screen.
     # `library_mentions` derives its node list from `MENTIONS` edges and those
@@ -124,6 +126,17 @@ VIDEO_STAGES: tuple[str, ...] = (
 REMOVAL_STAGES: tuple[str, ...] = ("projections", "catalog")
 
 ACTIVATION_STAGES: tuple[str, ...] = ("activating",)
+
+#: The standalone build, for a version indexed before the stage existed.
+#:
+#: ``epub`` and not ``building``, and that is the whole decision: the stage is
+#: named identically on all three paths that write the artifact, so
+#: ``ARTIFACT_STAGES`` — which is keyed by artifact name alone and can therefore
+#: name one writer — is right for every one of them and needs no override. The
+#: alternative was a third entry in ``ARTIFACT_STAGE_OVERRIDES``, which exists
+#: because ``evidence`` was attributed to a stage a video run does not have and
+#: spent months rendering under the trailing ``stage: null`` heading.
+EPUB_STAGES: tuple[str, ...] = ("epub", "done")
 
 #: What a run can end as. Constrained in ``run_state_check``, which Prisma owns.
 #:
@@ -158,6 +171,12 @@ COST_STAGES: dict[str, tuple[str, ...]] = {
     # where the stage never runs — which is what makes `cost: null` there mean
     # "free", not "the charge was lost".
     "transcribing": ("transcription",),
+    # One call, and only when the catalog has no author for the document. A
+    # video never pays it: `register_video` already fills the author from the
+    # channel. So this stage is charged on a minority of the runs that enter it,
+    # which is why the estimate over-reports rather than skipping the line —
+    # over-reporting is the direction the gate's rule permits.
+    "epub": ("epub-metadata",),
 }
 
 #: ``cost_entry.stage`` -> the workflow stage that charged it.
@@ -216,6 +235,8 @@ ARTIFACT_STAGES: dict[str, str] = {
     "transcription_result": "transcribing",
     "transcript": "grouping",
     "transcript_text": "grouping",
+    # Written by a stage of the same name on all three paths. See EPUB_STAGES.
+    "epub": "epub",
 }
 
 
@@ -295,6 +316,7 @@ def as_json() -> str:
             "video_stages": list(VIDEO_STAGES),
             "removal_stages": list(REMOVAL_STAGES),
             "activation_stages": list(ACTIVATION_STAGES),
+            "epub_stages": list(EPUB_STAGES),
             "terminal_outcomes": sorted(TERMINAL_OUTCOMES),
             "cost_stages": {k: list(v) for k, v in COST_STAGES.items()},
             "ask_cost_stages": list(ASK_COST_STAGES),

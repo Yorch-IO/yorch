@@ -249,6 +249,12 @@ class Gemini:
             "correction": 0,
             "semantics": 0,
             "profile": 0,
+            # Reading a title and an author off the opening pages is
+            # classification, like `planning`: the answer is on the page or it
+            # is not, and there is nothing to weigh. It runs once per document
+            # ever, so the saving is small; what it protects is latency at a
+            # gate somebody is waiting at.
+            "epub-metadata": 0,
             # Rewriting a follow-up into a standalone question is substitution:
             # "¿y su muerte?" plus the previous turn becomes "¿qué dice el
             # corpus sobre la muerte de Jesucristo?". It is the same kind of

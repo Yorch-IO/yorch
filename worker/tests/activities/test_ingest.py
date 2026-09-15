@@ -243,6 +243,20 @@ async def test_the_estimate_covers_exactly_the_stages_that_were_switched_on(
         StageOptions(correct=False, embed=True, extract_semantics=False, learn_profile=False),
     )
     assert [s.stage for s in embedding_only.stages] == ["embedding"]
+
+    # The book itself gets no line: it reads a file and writes one. What can
+    # spend is the single call that reads a title and an author off the opening
+    # pages, and a stage absent from `COST_STAGES` renders `cost: null` in the
+    # audit — which is what distinguishes "this was free" from "the charge was
+    # lost". A `$0.000000` row here would say the second.
+    book = await act.estimate_cost(
+        preview,
+        StageOptions(
+            correct=False, embed=False, extract_semantics=False,
+            learn_profile=False, build_epub=True,
+        ),
+    )
+    assert [s.stage for s in book.stages] == ["epub-metadata"]
     # Compared on tokens, not dollars: no price is configured for these models.
     assert sum(s.input_tokens + s.output_tokens for s in embedding_only.stages) < sum(
         s.input_tokens + s.output_tokens for s in everything.stages

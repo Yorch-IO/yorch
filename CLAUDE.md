@@ -144,6 +144,15 @@ cd infra && docker compose -f docker-compose.yaml -f docker-compose.dev.yaml \
   -f docker-compose.adc.yaml up -d --build api worker
 ```
 
+**The Angular suite cannot run on this machine.** `@angular/build:unit-test` is
+driven through the CLI, which requires Node >= 22.22.3; this box has v20.19.4, so
+`npx ng test --watch=false` and `npx ng build` both refuse before loading
+anything. What *does* work is the compiler directly — but note
+`tsc -p tsconfig.json` checks **nothing**, because that file is `"files": []`
+plus project references. Use `npx tsc --noEmit -p tsconfig.app.json` and
+`-p tsconfig.spec.json`, which is two commands and the only typecheck available
+here. Neither checks templates.
+
 **Verify with real exit codes.** `npm run typecheck | tail -6 && echo CLEAN`
 reports the exit status of `tail`, not `tsc`, and will print CLEAN over a
 failure. Redirect to a file and check `$?` instead.
@@ -1013,6 +1022,167 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
   Paid activities get two Temporal attempts and each one runs the whole stage, so
   without the cache the second attempt re-paid for every vector of the first.
 
+### EPUB export, and the rules that are not visible from any one file
+
+Added 2026-09-15. An optional `epub` stage between `projecting` and `embedding`
+on both the ingest and video workflows, a standalone `EpubWorkflow` for the
+versions indexed before it existed, a download route on both planes, and a
+title/author a model reads once and a person can overrule. `brainworker/epub.py`,
+`bookexport.py`, `bookmeta.py`, `booking.py`, `activities/exporting.py`,
+`workflows/epub.py`; `src/libraries/epub.service.ts` and `src/runs/download.ts`
+on the paid side; `LibraryScreen.tsx` and `RunAudit.tsx` in the app,
+`features/library/library.ts` in the web client.
+
+- **The book is built from `chunks.jsonl`, not from the text stream, and that is
+  what makes it one code path.** A chunk row carries `chapter` and `section`,
+  which is the outline the chunker detected and **the only place it survives** —
+  `build_chunks` *consumes* a heading paragraph rather than emitting it, so
+  re-walking `corrected.txt` would mean re-running heading detection with rules
+  this module would have to be handed. A DOCX, PPTX or XLSX has no text stream
+  at all, only `structured_chunks`. A video has neither and has cues. One reader
+  covers all three, through `indexing.StoredChunk.from_row` — the reader that
+  exists so two writers cannot drift.
+  The cost is honesty about what the index holds: a document whose chapters were
+  never detected becomes one untitled chapter, because that is exactly what was
+  indexed and what every breadcrumb on it says. The EPUB is the first surface on
+  which a reader can *see* that.
+- **`overlap` must never reach the page, and it is the field a rewrite reaches
+  for.** It is the previous chunk's tail, carried so retrieval can show a
+  fragment in context, and it is non-empty on about four rows in five — a
+  renderer that emitted it would duplicate a paragraph on nearly every page,
+  which reads as a corrupt book rather than as a bug. `embed_text` is worse: the
+  breadcrumb and the overlap concatenated ahead of the text. Both are pinned by
+  a test that plants a distinctive string and asserts it is absent from the
+  archive's bytes.
+- **The archive is byte-identical across builds, on purpose.** `dcterms:modified`
+  is required by EPUB 3 and reading the clock would change the sha256 on every
+  build — which the catalog records and `read_bytes` verifies on every download,
+  so "regenerate" would look like a different book each time. The date a book
+  was made is not a fact this product tracks; the version it was made from is,
+  and that is in `dc:identifier` (`uuid5` of the version id, so a reader's
+  library deduplicates rather than accumulating copies).
+- **Stdlib only.** `worker/pyproject.toml` keeps a "no compiler in the image"
+  property, so `ebooklib` and `lxml` are both out. The container, OPF and
+  navigation shapes are ported from `scripts/generate_reto_de_dios_epub.py`,
+  which has built a real book from a Notion export since 2026-08-24; its
+  Markdown parser is *not* ported, because the input here is already structured.
+  `mimetype` is written first and **uncompressed** — that is how a reader
+  identifies the container without unzipping, and the first thing every
+  validator checks.
+- **One stage name on all three paths, so no `ARTIFACT_STAGE_OVERRIDES` entry is
+  needed.** `ARTIFACT_STAGES` is keyed by artifact name alone and can therefore
+  name one writer; calling the stage `epub` in `INGEST_STAGES`, `VIDEO_STAGES`
+  and the new `EPUB_STAGES` makes that one answer right everywhere. `evidence`
+  is the recorded cost of getting this wrong — attributed to a stage no video
+  run has, it rendered under the trailing `stage: null` heading for months.
+- **The metadata call is the only thing that can spend, and usually does not.**
+  `document.author` is a column nothing has ever written and `document.title` is
+  the picked file's stem, so a library of 74 books renders as
+  `01_RetoDeDios_INT-S`. One bounded call over the first 6,000 characters fixes
+  both — **once per document ever**, and never at all for a video, because
+  `register_video` already fills the author from the channel. Estimated at
+  ~$0.0045; the packaging itself gets no `StageEstimate` at all, because a stage
+  absent from `COST_STAGES` renders `cost: null` in the audit and a `$0.000000`
+  row would say "the charge was lost" instead of "this was free".
+- **`None` is an answer, and the prompt says so.** A title page that names no
+  author must come back as no author rather than a guess: the value goes into
+  the catalog and the catalog is what a person then edits, so a plausible
+  invention is harder to notice and correct than a blank. `_clean` also refuses
+  the literal strings a model writes instead of nothing — `"null"`, `"none"`,
+  `"desconocido"` — because a book whose author is `null` would be printed on a
+  cover.
+- **What the model writes is never allowed to disagree with a person.**
+  `fill_document_metadata` moves the title only while it is still *exactly* the
+  filename stem the import derived (computed with the same
+  `PurePosixPath(source_key).stem` `stage_source` used, not guessed at with a
+  heuristic) and the author only from NULL. `PATCH /libraries/{id}/documents/{id}`
+  is the other half and is unconditional — and writing a value is also what
+  stops the model being paid to guess again.
+- **The download is allowlisted to one kind, and that is the decision.** Every
+  other artifact is a working file — the text streams, `semantics.json`, an eval
+  set carrying the corpus's own questions — and the free plane has **no
+  authentication**: it is safe only because nothing off the machine can route to
+  it. A generic `/artifacts/{name}` would make a misconfigured port the only
+  thing between a stranger and the whole corpus, for a feature that needs exactly
+  one file. `DOWNLOADABLE` is forked on both planes.
+- **The digest is checked before the bytes are served**, which is the one thing
+  distinguishing this from a static mount: `run_artifact` records what the run
+  wrote, and a file that no longer hashes to it is not the book the catalog is
+  describing. Serving it anyway is a well-formed answer about the wrong thing.
+  `artifact_changed` is a 409, not a 404.
+- **Tenancy comes from the `run_artifact` row, never from the path.** Run
+  artifacts are deliberately *not* tenant-scoped on disk — `Paths.for_tenant`
+  says so in its own docstring, and all twelve `ArtifactStore` call sites pass
+  the volume root — so every organisation's files share `<workspace>/runs/`. The
+  predicate on the paid plane's query is the whole boundary, exactly as
+  `status()` already does it.
+- **`Content-Disposition` carries both filename forms, always.** An HTTP header
+  is Latin-1 and «Teología» is not, so the accented name rides in RFC 5987's
+  `filename*` and the transliterated one is the `filename=` an older client
+  reads. Sending only the first renames the book; only the second loses the
+  accents for everybody. `download.parity.spec.ts` compares the two planes'
+  answers over eight real titles, because the desktop app can be pointed at
+  either and a book saved under two names is two files for one document.
+- **The standalone build goes through a workflow on *both* planes**, unlike
+  removal and activation where the FastAPI plane calls the module directly. It
+  writes an artifact and it can spend, and `record_artifact` and `record_cost`
+  both derive their tenant from the run row they hang off — so both belong in an
+  activity. `run.kind = 'epub'` needed `20260915120000_run_kind_epub` for the
+  same reason `ask` and `chat` needed theirs: **no run row means no bookkeeping
+  of any kind**.
+- **Both planes await the result rather than handing back a run to poll.** The
+  build is a file read, a render and a file write, and the caller's very next
+  act is to download it — a run id would make every client implement a wait for
+  something already done. Same shape as `activate`.
+- **A catalog that is merely down costs the book its title, not its existence.**
+  Every catalog read in `activities/exporting.py` is `pooled=False` and wrapped:
+  a pool retries a refused connection in the background, so a catalog that is
+  down turns one immediate error into a ten-second stall. Measured: the activity
+  suite went **50 s → 0.45 s** with the connection refused, and a test asserts
+  the bound rather than trusting the comment.
+- **The switch is appended and defaulted, so no `workflow.patched` is needed.**
+  A gate parked for seven days decodes a payload that never carried `build_epub`
+  as `False`, so neither command is issued and the replay's sequence is
+  unchanged. The one patch in this codebase guards an activity inserted at the
+  *head* of a workflow, which is the case a default cannot cover.
+
+**Measured against the real workspace on 2026-09-15, before anything was seen in
+a window.** All 54 runs that still hold a `chunks.jsonl` were rendered: **none
+raised and none leaked an overlap**, and the 686 XHTML and OPF documents they
+produced all parse as XML — which is the one class of error a reader shows as a
+broken page rather than as a message. The largest, a 598-chunk book of 1,156 KB
+of chunks, builds in **14 ms** to a 209 KB archive and is byte-identical on a
+rebuild; **396 of its 598 rows carry an overlap and not one reached the page**.
+The single timed run renders as one chapter with an `0:01` marker, which is the
+transcript shape.
+That corpus also demonstrates the honesty cost in the first entry above: a run
+predating the 2026-09-03 heading fixes produces chapters called `2. Ibídem.` and
+`6. Ibídem, p. 120.` — the recorded citation-as-heading defect, rendered exactly
+as the index holds it. The book is not wrong; the index is, and this is the
+first surface on which anybody can see it.
+`epubcheck` has **not** been run: there is no jar on this machine. Parsing as
+XML is a weaker check and is not a substitute.
+
+**Two defects were found by building this, both in clients, both live.**
+
+- **The Angular gate discarded every stage switch.** `gate-review.ts::decide()`
+  sent `profileOptions(choice)` alone, and `IngestWorkflow._run` reads
+  `approval.options` rather than the options the run was started with — so every
+  stage a person unticked before pressing Import was silently turned back on at
+  the gate, and every stage they ticked on was silently dropped. Nothing failed;
+  the run simply did something other than what was asked. The desktop client has
+  always merged them (`GateReview.tsx:65-66`), which is why this never showed up
+  as a difference between the two planes. Fixed, with a test that fails before
+  and passes after.
+- **There was no parity spec for `StageOptions`, and the drift is measurable.**
+  The desktop client's `StageOptions` has never carried `condense_descriptions`,
+  which Python and the paid plane both have. Neither direction fails loudly: an
+  *extra* property is refused by `forbidNonWhitelisted` with a 422, and a
+  *missing* one silently takes its default, so a stage a person ticked does not
+  run. `src/runs/ingest.parity.spec.ts` compares the DTO's declared properties
+  against the dataclass's fields live, in both directions, and was verified by
+  breaking it.
+
 ### Tenancy, and the rules it added here
 
 Two planes over one set of stores. Everything below is a constraint on code in
@@ -1434,6 +1604,19 @@ happen.** The turns that could have shown it either answered cleanly or refused
 *before* `compose` was reached, and the case needs a turn that streams fluent
 prose and then loses every citation to `_verify`. Covered by tests at three
 layers and by nothing in a window.
+
+**Nothing about the EPUB export has been seen in a window, and no real book has
+been opened in a reader.** Built 2026-09-15 and covered at every layer — 33
+tests on the writer alone, asserted against the archive rather than a return
+value, plus route tests on both planes and the two clients' own. What none of
+them can do is *look*: whether a 600-chunk book's table of contents matches the
+chapters the Library shows, whether the accents survive two layers of escaping
+into a real reader, whether `epubcheck` accepts the container, and whether the
+one-chapter shape a transcript produces is readable at all. The recipe is in the
+plan's verification section; the paid plane's half additionally needs the
+migration applied. **`AuthorEdit` and the download button have not been
+pressed** in the real window either, which is the same position every other
+Library verb was in until somebody pressed it.
 
 **Folder watching does not exist.** `source_folder` and its repository methods
 are there; there is no scan workflow, no add/change/delete detection, and
@@ -2360,6 +2543,27 @@ session's files.
   `doc_34e7d656ba111ba08c930de8` and holds `captions:ab:auto` — **Abkhazian** —
   from the run that preceded the `_choose_track` fix by twelve minutes. Nothing
   indexes it, nothing charged for it, and nothing cleans it up either.
+
+- **The desktop app forces a video's semantics off at the gate, so the stage
+  `_recommended` deliberately stopped forcing off is unreachable — and the gate
+  quotes it anyway.** `VideoGateReview.tsx:63` sends `extractSemantics: false`
+  in every approval, under a comment saying "a video run has no profile,
+  semantics, eval-set or tuning stage at all". That was true until
+  `598a9a0` added the stage, and `_recommended` was changed in the same commit
+  to pass the caller's choice through precisely so a person could tick it —
+  its docstring spells out why forcing it off would be "worse than useless".
+  Two consequences, and the second is the one that matters. A reader who wants
+  this video on the Graph screen **cannot** get it from the app: the stage runs
+  only if `approval.options.extract_semantics` is true and the client always
+  says false. And because `_recommended` keeps the ingest-time value, a user who
+  ticked semantics on the Import screen is shown an estimate that **quotes** it
+  — measured at **$0.6532 against $0.2258** on a 76-minute talk — for a run that
+  then does not do it. Over-reporting is the permitted direction for a *bill*,
+  but this is not a cautious estimate; it is a quote for work the client has
+  already decided to skip. Found 2026-09-15 while adding the EPUB switch, which
+  travels through the same spread and is unaffected. The fix is a third checkbox
+  in that component, or dropping the forced `false` and letting `...stages`
+  carry it as every other switch does.
 
 - **`DocumentGraph` shows a label where it means a count.** `DocumentGraph.tsx:671`
   renders `t("graph.shared", { count: item.sharedConcepts })` under every outer

@@ -125,3 +125,6 @@ docaget/libros/
 
 # Book exports by format (organized by book in libros repository)
 exports/
+
+# Scripts for book generation (maintained in libros repository)
+scripts/

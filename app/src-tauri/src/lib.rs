@@ -10,6 +10,7 @@ mod control;
 mod error;
 mod keychain;
 mod ports;
+mod secrets;
 mod stack;
 mod ytdlp;
 
@@ -24,7 +25,9 @@ use auth::{AuthConfig, Pkce, Session};
 use backend::{BackendMode, BackendSettings};
 use control::{
     AnswerStyleSaved, AnswerStyleUpdate, AnswerStyles,
-    Activation, Approval, Auth, AskProgress, AskStarted, BookBuilt, ChatEvent, ChunkContext,
+    Activation, Approval, Auth, AskProgress, AskStarted, BookBuilt,
+    ChannelDetail, ChannelList, ChannelReading, ChannelSummary, ChatEvent, ChunkContext,
+    DiscoveryQuote, SynthesisResult,
     ConceptClaims,
     Control, ConversationDetail, ConversationStarted, Conversations,
     DocumentDetail, DocumentMetadata, DocumentMetadataResult,
@@ -888,6 +891,178 @@ async fn set_provider_project(
     Ok(ProviderSettings::of(&stack))
 }
 
+// -- Channels --------------------------------------------------------------
+//
+// Reading a YouTube channel before paying to index any of it. Five commands,
+// and only two of them can spend — which is why the quote is a command of its
+// own rather than a field on the discovery: pressing the button is the
+// decision, so the figure has to be on screen before the call that starts it.
+
+/// Whether a provider credential is stored, and where. **Never what it is.**
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderSecret {
+    name: String,
+    /// The environment name the worker reads it under, so the Services screen
+    /// can name the thing a person would put in a `.env` by hand.
+    env: String,
+    stored: bool,
+    /// `"keychain"` or `"file"` — a token rather than prose, so the wording
+    /// lives in the two i18n bundles the way an error `kind` does. An install
+    /// that fell back to a file is less protected than one that did not, and
+    /// saying so is the difference between a documented trade-off and a quiet
+    /// downgrade.
+    store: &'static str,
+}
+
+#[tauri::command]
+async fn provider_secrets(state: State<'_, AppState>) -> Result<Vec<ProviderSecret>> {
+    Ok(secrets::PROVIDER_SECRETS
+        .iter()
+        .map(|(name, env)| {
+            let (stored, backend) = secrets::status(&state.data_dir, name);
+            ProviderSecret {
+                name: (*name).to_string(),
+                env: (*env).to_string(),
+                stored,
+                store: backend.tag(),
+            }
+        })
+        .collect())
+}
+
+/// Store a provider credential, or clear it with an empty value.
+///
+/// Written to the OS keychain and materialised into the `0600` file the worker
+/// mounts read-only. The worker reads that file once at startup, so a key set
+/// while the stack is up reaches it on the next `up` — the screen says so, for
+/// the reason `set_provider_project` says it about `.env`.
+#[tauri::command]
+async fn set_provider_secret(
+    state: State<'_, AppState>,
+    name: String,
+    value: String,
+) -> Result<Vec<ProviderSecret>> {
+    let stack = state.local_stack().await?;
+    secrets::set(&state.data_dir, &stack.secrets_file, &name, &value)?;
+    provider_secrets(state).await
+}
+
+#[tauri::command]
+async fn channel_sync(
+    state: State<'_, AppState>,
+    url: String,
+    limit: Option<u32>,
+) -> Result<ChannelSummary> {
+    let control = state.control().await?;
+    control.channel_sync(&url, limit.unwrap_or(100)).await
+}
+
+#[tauri::command]
+async fn channels(state: State<'_, AppState>) -> Result<ChannelList> {
+    let control = state.control().await?;
+    control.channels().await
+}
+
+#[tauri::command]
+async fn channel_detail(
+    state: State<'_, AppState>,
+    channel_id: String,
+) -> Result<ChannelDetail> {
+    let control = state.control().await?;
+    control.channel_detail(&channel_id).await
+}
+
+/// What reading this channel would cost. Free, and it reaches no provider.
+#[tauri::command]
+async fn channel_quote(
+    state: State<'_, AppState>,
+    channel_id: String,
+    topic: String,
+    limit: Option<u32>,
+    deep_limit: Option<u32>,
+) -> Result<DiscoveryQuote> {
+    let control = state.control().await?;
+    control
+        .channel_quote(
+            &channel_id,
+            &topic,
+            limit.unwrap_or(100),
+            deep_limit.unwrap_or(10),
+        )
+        .await
+}
+
+#[tauri::command]
+async fn channel_discover(
+    state: State<'_, AppState>,
+    channel_id: String,
+    topic: String,
+    limit: Option<u32>,
+    deep_limit: Option<u32>,
+) -> Result<StartedRun> {
+    let control = state.control().await?;
+    control
+        .channel_discover(
+            &channel_id,
+            &topic,
+            limit.unwrap_or(100),
+            deep_limit.unwrap_or(10),
+        )
+        .await
+}
+
+#[tauri::command]
+async fn channel_topics(
+    state: State<'_, AppState>,
+    channel_id: String,
+    topic: String,
+    video_runs: Vec<String>,
+) -> Result<StartedRun> {
+    let control = state.control().await?;
+    control
+        .channel_topics(&channel_id, &topic, &video_runs)
+        .await
+}
+
+/// Ask this channel's indexed sermons. **This spends.**
+///
+/// Two calls, like `ask`: the second collects. A real question once outran the
+/// app's own 180 s timeout — was computed, was billed, and was discarded under
+/// a message blaming an unreachable API.
+#[tauri::command]
+async fn channel_ask(
+    state: State<'_, AppState>,
+    channel_id: String,
+    topic: String,
+    effort: Option<String>,
+) -> Result<AskStarted> {
+    let control = state.control().await?;
+    control
+        .channel_ask(&channel_id, &topic, effort.as_deref().unwrap_or("thorough"))
+        .await
+}
+
+#[tauri::command]
+async fn channel_ask_result(
+    state: State<'_, AppState>,
+    channel_id: String,
+    question_id: String,
+) -> Result<SynthesisResult> {
+    let control = state.control().await?;
+    control.channel_ask_result(&channel_id, &question_id).await
+}
+
+#[tauri::command]
+async fn channel_reading(
+    state: State<'_, AppState>,
+    channel_id: String,
+    workflow_id: String,
+) -> Result<ChannelReading> {
+    let control = state.control().await?;
+    control.channel_reading(&channel_id, &workflow_id).await
+}
+
 // -- Library verbs ---------------------------------------------------------
 //
 // Three verbs, and they cost three different things. `document_remove` is free
@@ -1042,6 +1217,46 @@ async fn artifact_save(
     let control = state.control().await?;
     let bytes = control.download_artifact(&workflow_id, &name).await?;
     std::fs::write(&path, &bytes).map_err(|e| AppError::io(path.display().to_string(), e))?;
+    Ok(Some(path.display().to_string()))
+}
+
+/// Write text the webview already holds wherever the person says.
+///
+/// The dialog is opened *here* for the reason `artifact_save` records: a
+/// capability grants the **webview** the right to invoke a plugin command, and
+/// the webview invokes only this. So no entry appears in
+/// `capabilities/default.json` and the page keeps its `default-src 'self'` CSP.
+///
+/// Unlike `artifact_save` there is nothing to fetch — the synthesis is already
+/// on screen — so this writes what it is given. Cancelling is `Ok(None)`, not
+/// an error: it is the ordinary way to leave a file dialog.
+#[tauri::command]
+async fn save_text(
+    app: tauri::AppHandle,
+    suggested_name: String,
+    contents: String,
+) -> Result<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+    app.dialog()
+        .file()
+        .set_file_name(&suggested_name)
+        .add_filter("JSON", &["json"])
+        .add_filter("CSV", &["csv"])
+        .save_file(move |chosen| {
+            let _ = tx.try_send(chosen);
+        });
+
+    let chosen = match rx.recv().await {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let Some(path) = chosen.and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+    std::fs::write(&path, contents.as_bytes())
+        .map_err(|e| AppError::io(path.display().to_string(), e))?;
     Ok(Some(path.display().to_string()))
 }
 
@@ -1356,6 +1571,18 @@ pub fn run() {
             runs_list,
             run_audit,
             run_events,
+            provider_secrets,
+            set_provider_secret,
+            channel_sync,
+            channels,
+            channel_detail,
+            channel_quote,
+            channel_discover,
+            channel_topics,
+            channel_reading,
+            channel_ask,
+            channel_ask_result,
+            save_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Company Brain");

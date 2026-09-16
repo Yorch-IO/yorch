@@ -15,6 +15,7 @@ import {
   type ProviderSettings,
   type PingResult,
   type StackStatus,
+  type ProviderSecret,
 } from "../lib/api";
 
 type Busy = "idle" | "up" | "down" | "ping";
@@ -76,6 +77,10 @@ export function StackScreen() {
    *  old value until they are recreated, and silently accepting a setting that
    *  has not taken effect is how a user concludes the feature is broken. */
   const [savedProject, setSavedProject] = useState(false);
+  /** Provider credentials as *facts about storage*, never values. */
+  const [secrets, setSecrets] = useState<ProviderSecret[]>([]);
+  const [secretDraft, setSecretDraft] = useState("");
+  const [savedSecret, setSavedSecret] = useState(false);
   const [ping, setPing] = useState<PingResult | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   // Held as the raw thrown value, not a string: ErrorPanel needs the `kind` tag
@@ -142,6 +147,13 @@ export function StackScreen() {
       } catch {
         setProvider(null);
       }
+      // Whether a key is stored, and where — never the key. A value the UI
+      // could read back is a value a screenshot can leak.
+      try {
+        setSecrets(await api.providerSecrets());
+      } catch {
+        setSecrets([]);
+      }
     } else {
       setStatus(null);
       setProvider(null);
@@ -206,6 +218,17 @@ export function StackScreen() {
       setError(e);
     }
   }, [backendDraft, refresh]);
+
+  const saveSecret = useCallback(async (name: string, value: string) => {
+    setError(null);
+    try {
+      setSecrets(await api.setProviderSecret(name, value));
+      setSecretDraft("");
+      setSavedSecret(true);
+    } catch (e) {
+      setError(e);
+    }
+  }, []);
 
   const saveProject = useCallback(async () => {
     setError(null);
@@ -592,6 +615,66 @@ export function StackScreen() {
           {savedProject && <p className="warn">{t("provider.needsRestart")}</p>}
         </>
       )}
+
+      {/* The other half of the keychain, and until this screen existed it was
+          documented and empty: `secrets.env` was created `0600`, mounted
+          read-only, and written to by nothing, because the only provider was
+          Vertex — which refuses API keys outright and uses ADC. The YouTube
+          Data API is the first one with a key.
+
+          The field is write-only on purpose. What comes back is whether a key
+          is stored and which store holds it, never the key: an install that
+          fell back to a file is less protected than one that did not, and
+          saying so is the difference between a documented trade-off and a quiet
+          downgrade. */}
+      {secrets.map((secret) => (
+        <div key={secret.name}>
+          <h3>{t(`provider.secretTitle.${secret.name}`, { defaultValue: secret.env })}</h3>
+          <p>{t(`provider.secretIntro.${secret.name}`, { defaultValue: "" })}</p>
+          <label className="field">
+            <span>{secret.env}</span>
+            <input
+              type="password"
+              value={secretDraft}
+              placeholder={t(
+                secret.stored ? "provider.secretStored" : "provider.secretUnset",
+              )}
+              onChange={(e) => setSecretDraft(e.target.value)}
+            />
+          </label>
+          <div className="actions">
+            <button
+              type="button"
+              onClick={() => void saveSecret(secret.name, secretDraft)}
+              disabled={busy !== "idle" || secretDraft.trim() === ""}
+            >
+              {t("provider.save")}
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveSecret(secret.name, "")}
+              disabled={busy !== "idle" || !secret.stored}
+            >
+              {t("provider.secretClear")}
+            </button>
+          </div>
+          <ul className="probes">
+            <li>
+              <span className={secret.stored ? "ok" : "bad"}>
+                {secret.stored ? "✓" : "✕"}
+              </span>{" "}
+              {secret.stored
+                ? t("provider.secretIn", {
+                    store: t(`provider.store.${secret.store}`, {
+                      defaultValue: secret.store,
+                    }),
+                  })
+                : t("provider.secretMissing")}
+            </li>
+          </ul>
+          {savedSecret && <p className="warn">{t("provider.secretNeedsRestart")}</p>}
+        </div>
+      ))}
 
       <AnswerStyles />
 

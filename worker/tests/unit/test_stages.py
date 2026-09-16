@@ -128,6 +128,7 @@ def _every_stage() -> set[str]:
         | set(stages.REMOVAL_STAGES)
         | set(stages.ACTIVATION_STAGES)
         | set(stages.EPUB_STAGES)
+        | set(stages.CHANNEL_STAGES)
     )
 
 
@@ -168,6 +169,7 @@ def test_an_override_names_a_stage_the_path_it_overrides_actually_has() -> None:
         "index": stages.INGEST_STAGES,
         "preview": stages.INGEST_STAGES,
         "reindex": stages.INGEST_STAGES,
+        "channel": stages.CHANNEL_STAGES,
     }
     for kind, overrides in stages.ARTIFACT_STAGE_OVERRIDES.items():
         assert kind in lists, f"no stage list known for run kind {kind!r}"
@@ -188,6 +190,15 @@ def test_the_artifacts_a_video_writes_all_land_on_stages_a_video_has() -> None:
     for name in written_by_the_video_path:
         stage = stages.stage_of_artifact(name, "video")
         assert stage in stages.VIDEO_STAGES, f"{name} -> {stage}"
+
+
+def test_the_artifacts_a_channel_writes_all_land_on_stages_a_channel_has() -> None:
+    """The same property `evidence` broke on the video path, checked before it
+    can break here: `estimate` defaults to `previewing`, which a channel run
+    does not have, so it needs the override and the override needs asserting."""
+    for name in ("estimate", "preselection", "topics"):
+        stage = stages.stage_of_artifact(name, "channel")
+        assert stage in stages.CHANNEL_STAGES, f"{name} -> {stage}"
 
 
 def test_an_override_does_not_leak_into_the_path_it_was_not_written_for() -> None:

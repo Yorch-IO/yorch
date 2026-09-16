@@ -12,7 +12,8 @@
     "ask": "Ask",
     "explore": "Explore",
     "graph": "Graph",
-    "chat": "Conversation"
+    "chat": "Conversation",
+    "channel": "Channel"
   },
   "home": {
     "title": "Home",
@@ -170,7 +171,14 @@
     "audioFormatUnsupported": "The audio came back in a container Amazon Transcribe cannot read, and this product does not re-encode it.",
     "artifactNotFound": "That file is not there to download. Only a book can be fetched this way, and only from a run that produced one.",
     "artifactChanged": "The file on disk no longer matches what the catalog recorded for it, so it is not the book this run produced. Build it again.",
-    "epubSourceMissing": "No run still holds this version's chunks, so there is nothing to compose a book from. Reindexing restores them, but pays for correction again."
+    "epubSourceMissing": "No run still holds this version's chunks, so there is nothing to compose a book from. Reindexing restores them, but pays for correction again.",
+    "notAChannelUrl": "That link is not a YouTube channel. A link to a video is imported from the Import screen.",
+    "youtubeKeyMissing": "No YouTube Data API key. Set one on the Services screen; it is kept in the OS keychain.",
+    "youtubeQuotaExceeded": "The day's YouTube API quota is gone. It resets at midnight Pacific; the key is fine.",
+    "youtubeRefused": "The YouTube API refused the key or the request. Check the key exists and that YouTube Data API v3 is enabled on that project.",
+    "youtubeUnreachable": "Could not reach the YouTube API. Check the connection.",
+    "channelNotSynced": "That channel has not been synced yet. Paste its link and press Sync.",
+    "libraryOwnedByAnother": "That library belongs to another organisation."
   },
   "library": {
     "title": "Library",
@@ -571,7 +579,23 @@
     "adcFound": "Credentials found at {{path}}",
     "adcMissing": "No Application Default Credentials found.",
     "adcHow": "Gemini Enterprise refuses API keys, so these are the only authentication that works. Run `gcloud auth application-default login` and reload.",
-    "needsRestart": "Saved. The running containers keep the previous project until you bring the stack down and up again."
+    "needsRestart": "Saved. The running containers keep the previous project until you bring the stack down and up again.",
+    "secretStored": "stored — type a new one to replace it",
+    "secretUnset": "AIzaSy…",
+    "secretClear": "Clear",
+    "secretIn": "Stored in {{store}}",
+    "secretMissing": "No key is stored",
+    "secretNeedsRestart": "The worker reads this file at startup, so the services have to be recreated for the key to reach it.",
+    "store": {
+      "keychain": "the OS keychain",
+      "file": "a 0600 file"
+    },
+    "secretTitle": {
+      "youtube": "YouTube Data API key"
+    },
+    "secretIntro": {
+      "youtube": "Needed to read a channel's catalogue. Kept in the OS keychain and written into the secrets file the worker mounts read-only; it is never shown back."
+    }
   },
   "libraries": {
     "label": "Library",
@@ -798,5 +822,93 @@
     },
     "noRuns": "No run recorded for this version.",
     "whichRun": "Run"
+  },
+  "channel": {
+    "title": "YouTube channel",
+    "intro": "Read a whole channel, work out which videos discuss a topic, and decide which are worth indexing. Every claim can then be checked at the minute of the video.",
+    "sync": "1. Sync the channel",
+    "syncCaveat": "Free: it costs YouTube Data API quota, never money. The channel's catalogue is stored and its library is created.",
+    "urlPlaceholder": "https://www.youtube.com/@channel",
+    "syncStart": "Sync",
+    "syncing": "Syncing…",
+    "pick": "Channel",
+    "videoCount": "{{count}} videos",
+    "topic": "2. Choose the topic",
+    "topicCaveat": "A title and a description are a hypothesis about relevance, never proof that the video discusses the topic. That is why the transcript is read afterwards.",
+    "topicLabel": "Topic",
+    "topicPlaceholder": "social justice and poverty",
+    "limit": "Videos to review",
+    "deepLimit": "Transcripts to read",
+    "deepLimitCaveat": "The transcript cap is not about price: captions are free, but YouTube's caption endpoint throttles consecutive downloads, and a download that gives up is the branch that ends up paying for Amazon transcription.",
+    "quote": "Work out the cost",
+    "quoteFor": "{{evaluated}} videos will be judged on their metadata and {{read}} transcripts will be read.",
+    "quoteCaveat": "This figure is shown before anything is spent and stored inside the run, so that afterwards somebody can check whether it under- or over-reported.",
+    "discover": "Analyse metadata",
+    "discovering": "Analysing…",
+    "invented": "The model returned {{count}} verdict(s) about videos it was never sent. They were dropped.",
+    "unevaluated": "{{count}} video(s) came back with no usable verdict. They show as \"unevaluated\", not as discarded.",
+    "probe": "3. Probe and read",
+    "probeCaveat": "Probing is free: it resolves the video, downloads the captions, builds the transcript, previews the chunks and works out the cost. Nothing is paid for until approval.",
+    "probeStart": "Probe {{count}} video(s)",
+    "probing": "Probing…",
+    "readStart": "Read transcripts",
+    "reading_": "Reading…",
+    "stages": "Stages",
+    "stageSemantics": "Extract concepts (graph)",
+    "stageSemanticsCaveat": "Ticked before probing, never after: each gate quotes the options its run was started with. Without concepts the video is indexed and citable but invisible on the graph.",
+    "video": "Video",
+    "verdict": "Verdict",
+    "reading": "Transcript reading",
+    "cost": "Cost",
+    "pickAll": "Select {{count}}",
+    "pickNone": "Clear selection",
+    "selected": "Selected",
+    "totalCost": "Total cost",
+    "transcriptionCost": "Transcription (Amazon)",
+    "pickedWithoutCaptions": "{{count}} of those selected have no captions: they must be transcribed, which costs on the order of twelve times more, and their transcript could not be read — so their only evidence is a title.",
+    "unpriced": "{{count}} selected have no price: their probe has not reached its gate yet.",
+    "sourceCaptions": "captions",
+    "sourceTranscribe": "no captions: paid transcription",
+    "alreadyIndexed": "already indexed",
+    "answers": "Discusses the topic",
+    "doesNotAnswer": "Does not discuss the topic",
+    "readingFailed": "Could not be read",
+    "unverifiedTopics": "{{count}} topic(s) with no quotation checkable against the transcript",
+    "approve": "Index {{count}} selected",
+    "approving": "Approving…",
+    "approveCaveat": "Every video is a run with its own gate: approving the batch answers them one by one, anything unticked is rejected and costs nothing, and doing it again does not charge twice.",
+    "notChosen": "not selected in the batch",
+    "relevance": {
+      "relevante": "relevant",
+      "dudoso": "doubtful",
+      "descartado": "discarded",
+      "sin_evaluar": "unevaluated"
+    },
+    "ask": "4. Ask the channel",
+    "askCaveat": "Only over what is already indexed of this channel. The answer separates what the sermons say — every finding with its minute — from what the model infers, and says so when there is no material.",
+    "effort": "How hard to search",
+    "askStart": "Ask",
+    "asking": "Reading the corpus…",
+    "saveJson": "Save JSON",
+    "saveCsv": "Save CSV",
+    "saved": "Saved to {{path}}",
+    "synthesis": "Comparative synthesis",
+    "findings": "Findings",
+    "comparison": "Comparison",
+    "comparison_": {
+      "convergencias": "Convergences",
+      "diferencias": "Differences",
+      "matices": "Nuances"
+    },
+    "interpretation": "Theological interpretation",
+    "interpretationCaveat": "This is the model's inference over the findings above, not something the sermons say. Each one states what it rests on and what it does not allow you to conclude.",
+    "scope": "Scope: {{scope}}",
+    "limits": "Limits: {{limits}}",
+    "limits_": "Limitations",
+    "demoted": "{{count}} finding(s) were moved to limitations for having no checkable citation.",
+    "state": {
+      "insufficient_evidence": "Insufficient evidence",
+      "off_corpus": "The topic does not seem to be about this channel"
+    }
   }
 }

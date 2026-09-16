@@ -2533,3 +2533,179 @@ button.link.active {
     justify-self: start;
   }
 }
+
+/* -- the channel screen ----------------------------------------------------
+ *
+ * One table, and the whole design problem is that four different kinds of fact
+ * share a row: what YouTube says about a video, what a model guessed from its
+ * title, what a model read in its transcript with a quotation the code
+ * verified, and what the gate will charge. They are given different weights on
+ * purpose — the quotation is the only text here that the video actually
+ * contains, so it is the one set in a quote mark, and a guess about a title is
+ * muted beside it. */
+
+table.candidates {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-variant-numeric: tabular-nums;
+}
+
+table.candidates th,
+table.candidates td {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+table.candidates th {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+table.candidates tr.muted td {
+  opacity: 0.6;
+}
+
+.candidate-title {
+  display: block;
+  max-width: 34ch;
+}
+
+.candidate-meta,
+.candidate-state {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85em;
+  margin-top: 0.15rem;
+}
+
+/* A verdict is a word, not a number, so it is set as a word. The discarded one
+   is muted rather than coloured: it is the ordinary answer for most of a
+   channel, and painting eighty rows red would make the six that matter harder
+   to find, not easier. */
+.verdict {
+  font-weight: 600;
+}
+
+.verdict-relevante {
+  color: var(--ok);
+}
+
+.verdict-dudoso {
+  color: var(--warn);
+}
+
+.verdict-descartado,
+.verdict-sin_evaluar {
+  color: var(--muted);
+}
+
+.candidate-topics {
+  margin: 0.35rem 0 0;
+  padding-left: 1rem;
+  max-width: 48ch;
+}
+
+.candidate-topics li {
+  margin-bottom: 0.35rem;
+}
+
+.candidate-topic {
+  display: block;
+  font-weight: 600;
+}
+
+/* The quotation the code found in the transcript. Set apart from the topic
+   above it because it is the only text in this table the video really
+   contains — everything else is somebody's reading of it. */
+.candidate-topics q {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+/* Inline rather than a `.warn` block: it sits inside a cell, beside other
+   facts about the same video, and a bordered panel there would break the row. */
+.warn-inline {
+  color: var(--warn);
+}
+
+.channel-bulk {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.channel-total dd {
+  font-variant-numeric: tabular-nums;
+}
+
+.channel-limits {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(10rem, 14rem));
+  gap: 1rem;
+  align-items: end;
+}
+
+/* Declared below the shared query, so it repeats it. A media query is not a
+   stronger rule; it is only a conditional one, and at equal specificity the
+   later declaration wins whether or not the query matches. */
+@media (max-width: 76rem) {
+  .channel-limits {
+    grid-template-columns: 1fr;
+  }
+
+  /* The reading column is the widest and the least essential to a decision
+     already made, so it is what goes when there is no room. The verdict and
+     the cost are what the checkbox is answered from. */
+  table.candidates th:nth-child(4),
+  table.candidates td:nth-child(4) {
+    display: none;
+  }
+}
+
+/* The synthesis. Findings first and set as prose, each with its citations under
+   it; inferences under their own heading with their scope and limits muted
+   beside them — the part a reader may not rely on must not be set like the
+   part they may. */
+.synthesis h4 {
+  margin-top: 1.25rem;
+}
+
+.synthesis h5 {
+  margin: 0.75rem 0 0.25rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+ol.findings > li {
+  margin-bottom: 1rem;
+}
+
+ol.findings > li > p {
+  margin: 0 0 0.25rem;
+}
+
+ol.findings ul.citations {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.9em;
+  color: var(--muted);
+}
+
+ol.findings ul.citations q {
+  display: block;
+  margin-top: 0.1rem;
+}
+
+ul.inferences > li {
+  margin-bottom: 0.75rem;
+}
+
+ul.inferences > li > p {
+  margin: 0;
+}

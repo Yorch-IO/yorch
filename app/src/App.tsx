@@ -6,6 +6,7 @@ import { BackendProvider, useBackend } from "./lib/backend";
 import { LibrariesProvider, LibraryPicker } from "./lib/libraries";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { AskScreen } from "./screens/AskScreen";
+import { ChannelScreen } from "./screens/ChannelScreen";
 import { ChatScreen } from "./screens/ChatScreen";
 import { ImportScreen } from "./screens/ImportScreen";
 import { ExploreScreen } from "./screens/ExploreScreen";
@@ -26,6 +27,7 @@ const TABS = [
   "explore",
   "graph",
   "import",
+  "channel",
   "ask",
   "chat",
 ] as const;
@@ -50,6 +52,7 @@ const SCREENS: Record<
   explore: ExploreScreen,
   graph: GraphScreen,
   import: ImportScreen,
+  channel: ChannelScreen,
   ask: AskScreen,
   chat: ChatScreen,
 };
@@ -58,7 +61,12 @@ const SCREENS: Record<
  *  you use before there is anything to pick; Home's figures are project-wide, so
  *  a picker there would offer a choice that changes nothing on the screen. The
  *  bar itself still renders on both, so switching does not shift everything
- *  below by the height of a form field. */
+ *  below by the height of a form field.
+ *
+ *  Channel is the third, and for a different reason: a channel **is** a library
+ *  — its id is `lib_yt_<channelId>` — so that screen picks a *channel* and the
+ *  library follows. Two pickers over one choice could disagree, and the one
+ *  that would lose is the one showing an id nobody can read. */
 const NEEDS_LIBRARY: ReadonlySet<Tab> = new Set<Tab>([
   "library",
   "explore",

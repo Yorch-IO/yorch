@@ -23,7 +23,7 @@ from dataclasses import asdict
 
 from temporalio import activity
 
-from .. import config
+from .. import config, quoting
 from ..artifacts import ArtifactStore
 from ..catalog import Catalog
 from ..graph import Graph
@@ -1364,12 +1364,10 @@ def _locate_quote(quote: str, text: str, offset: int) -> tuple[str, int, int] | 
     the same hole this function exists to close — a claim nobody can check
     against the source still looks exactly like evidence.
 
-    Matching tolerates differences in whitespace and nothing else. A model asked
-    for a verbatim span reliably reproduces the words and unreliably reproduces
-    the line breaks the extractor put between them, so a literal `in` test fails
-    on quotes that are in fact present. Anything beyond whitespace — a fixed
-    accent, a normalised quotation mark, a dropped clause — is a quote the
-    document does not contain, and it has to fail.
+    Matching is `quoting.find`, which is shared with the topic pass rather than
+    written twice: it tolerates differences in whitespace and nothing else, and
+    a second copy that tolerated one more thing would let one of the two
+    features accept quotes the other refuses without either of them failing.
 
     The span indexes the *corrected* byte stream, like every other offset this
     pipeline stores (see `char_span` in `index_chunks`), not the original file.
@@ -1388,11 +1386,7 @@ def _locate_quote(quote: str, text: str, offset: int) -> tuple[str, int, int] | 
     `docagent.chunk._sentence_spans` makes the same conversion for the same
     reason and says so.
     """
-    tokens = quote.split()
-    if not tokens:
-        return None
-    pattern = r"\s+".join(re.escape(t) for t in tokens)
-    match = re.search(pattern, text)
+    match = quoting.find(quote, text)
     if match is None:
         return None
     verbatim = match.group(0)

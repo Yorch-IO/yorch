@@ -117,6 +117,21 @@ VIDEO_STAGES: tuple[str, ...] = (
     "done",
 )
 
+#: Reading a channel: what its videos are about, before any of them is indexed.
+#:
+#: **A display order, not a schedule**, and here the two halves never run in one
+#: execution: `ChannelDiscoverWorkflow` quotes and preselects, and
+#: `ChannelTopicsWorkflow` quotes and reads. They are one `run.kind` and one
+#: vocabulary because they are one act from the reader's side — "work out which
+#: of these are worth paying for" — and because splitting the kind would mean a
+#: second migration to say the same thing.
+#:
+#: `quoting` writes the `estimate` artifact, which is why this path needs an
+#: entry in `ARTIFACT_STAGE_OVERRIDES`: that artifact is mapped to `previewing`
+#: by default, and `previewing` is not a stage a channel run has. It is the same
+#: mismatch `rebuild` records there, found the same way — by writing the file.
+CHANNEL_STAGES: tuple[str, ...] = ("quoting", "preselecting", "reading", "done")
+
 #: The two stages :mod:`brainworker.removal` walks, in the order it walks them.
 #:
 #: That order is not cosmetic — ``removal.py`` owns it precisely so no caller can
@@ -177,6 +192,12 @@ COST_STAGES: dict[str, tuple[str, ...]] = {
     # which is why the estimate over-reports rather than skipping the line —
     # over-reporting is the direction the gate's rule permits.
     "epub": ("epub-metadata",),
+    # Reading a channel. Both are classification over text that was handed to
+    # them, both have reasoning off in `stage_thinking`, and neither has an
+    # entry in `THINKING_OUTPUT_MULTIPLIER` for the same reason `embedding` does
+    # not: there is nothing measured to put there.
+    "preselecting": ("channel-preselect",),
+    "reading": ("channel-topics",),
 }
 
 #: ``cost_entry.stage`` -> the workflow stage that charged it.
@@ -192,7 +213,16 @@ STAGE_FOR_COST: dict[str, str] = {
 }
 
 #: The cost stages a question charges, which belong to no pipeline stage.
-ASK_COST_STAGES: tuple[str, ...] = ("planning", "ask-embedding", "answering")
+#:
+#: `channel-synthesis` is here rather than in `COST_STAGES` because a channel
+#: *question* is an `ask` run and not a pipeline: it has no gate, so it has no
+#: stage vocabulary to belong to, exactly like the three above it.
+ASK_COST_STAGES: tuple[str, ...] = (
+    "planning",
+    "ask-embedding",
+    "answering",
+    "channel-synthesis",
+)
 
 #: ``run_artifact.name`` -> the workflow stage that wrote it.
 #:
@@ -237,6 +267,9 @@ ARTIFACT_STAGES: dict[str, str] = {
     "transcript_text": "grouping",
     # Written by a stage of the same name on all three paths. See EPUB_STAGES.
     "epub": "epub",
+    # Reading a channel.
+    "preselection": "preselecting",
+    "topics": "reading",
 }
 
 
@@ -270,6 +303,9 @@ ARTIFACT_STAGE_OVERRIDES: dict[str, dict[str, str]] = {
     # by adding the writer: the artifact had never been written, so the
     # mismatch could not have shown up before there was a file to misplace.
     "rebuild": {"estimate": "estimating"},
+    # And `quoting` on a channel run, for the same reason: one artifact, three
+    # writers, and this map holds one.
+    "channel": {"estimate": "quoting"},
 }
 
 
@@ -317,6 +353,7 @@ def as_json() -> str:
             "removal_stages": list(REMOVAL_STAGES),
             "activation_stages": list(ACTIVATION_STAGES),
             "epub_stages": list(EPUB_STAGES),
+            "channel_stages": list(CHANNEL_STAGES),
             "terminal_outcomes": sorted(TERMINAL_OUTCOMES),
             "cost_stages": {k: list(v) for k, v in COST_STAGES.items()},
             "ask_cost_stages": list(ASK_COST_STAGES),

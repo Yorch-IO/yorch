@@ -38,7 +38,10 @@ _ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 _PATH_PREFIXES = ("/shorts/", "/embed/", "/live/", "/v/")
 
-_HOSTS = frozenset(
+#: Hosts a link to a single video may name. Public because `youtube.py` checks
+#: a *channel* URL against the same set, and two copies of an allowlist drifting
+#: apart is how one of them ends up accepting a host the other refuses.
+HOSTS = frozenset(
     {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com",
      "youtu.be", "www.youtu.be"}
 )
@@ -84,7 +87,7 @@ def video_id(url: str) -> str:
         raw = "https://" + raw
     parsed = urlparse(raw)
     host = parsed.netloc.lower().split(":")[0]
-    if host not in _HOSTS:
+    if host not in HOSTS:
         raise NotAVideoUrl(f"not a YouTube host: {parsed.netloc!r}")
 
     candidate = ""

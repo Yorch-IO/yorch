@@ -48,6 +48,15 @@ const EXPLORE_TIMEOUT: Duration = Duration::from_secs(15);
 /// must not be reported as unreachable while it is still working.
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Cataloguing a channel is one Data API round trip per fifty videos, and a
+/// 2,000-video channel is eighty of them. Generous because the failure it
+/// guards against is Google not answering rather than a channel being long —
+/// and because a sync somebody is watching is better slow than restarted.
+const CHANNEL_SYNC_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Reading a catalogue off the volume and pricing it. No network at all.
+const CHANNEL_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Listing the queue is one indexed, keyset-paged read of the catalog.
 const RUNS_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -662,6 +671,209 @@ pub struct Estimate {
     pub price_source: String,
     #[serde(default)]
     pub unpriced_stages: Vec<String>,
+}
+
+// -- channels ---------------------------------------------------------------
+//
+// Responses, so the rename is on the **serialize** side: these decode from the
+// Python API's snake_case and re-encode as the camelCase the webview reads.
+// Getting that direction backwards is not subtle — it made every request the
+// Import screen sent fail with "missing field `library_id`", and nothing caught
+// it because nobody had opened the window.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ChannelRef {
+    pub channel_id: String,
+    pub title: String,
+    pub handle: String,
+    pub description: String,
+    pub uploads_playlist_id: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ChannelSummary {
+    pub channel: ChannelRef,
+    /// A channel *is* a library: retrieval narrows by equality on `library_id`,
+    /// so "ask only this channel" is "ask this library".
+    pub library_id: String,
+    pub synced_at: String,
+    pub video_count: u32,
+    /// Quota units the last sync spent. The Data API's daily allowance is the
+    /// one resource here that runs out, and saying what a sync cost beats
+    /// discovering it at the end of the day.
+    #[serde(default)]
+    pub units_spent: u32,
+    #[serde(default)]
+    pub fetched: u32,
+    /// Filled by the listing only; a sync has no figures from the catalog yet.
+    #[serde(default)]
+    pub documents: u32,
+    #[serde(default)]
+    pub indexed_versions: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ChannelList {
+    pub channels: Vec<ChannelSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ChannelVideoRow {
+    pub video_id: String,
+    pub title: String,
+    pub description: String,
+    #[serde(default)]
+    pub description_truncated: bool,
+    pub published_at: String,
+    pub duration_s: u32,
+    pub live_state: String,
+    pub thumbnail: String,
+    pub url: String,
+    /// `None` means this channel's library holds no document for the video.
+    pub document_id: Option<String>,
+    /// `None` on a document that exists is a real state and not a gap: a run
+    /// that was cancelled, or an activation withheld over a structural
+    /// mismatch. The screen has to tell the two apart.
+    pub active_version_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ChannelDetail {
+    pub channel: ChannelRef,
+    pub library_id: String,
+    pub synced_at: String,
+    pub video_count: u32,
+    #[serde(default)]
+    pub units_spent: u32,
+    pub videos: Vec<ChannelVideoRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct DiscoveryQuote {
+    pub channel_id: String,
+    pub library_id: String,
+    pub topic: String,
+    pub evaluated: u32,
+    pub read: u32,
+    /// Videos in the read set with no duration, which therefore cannot be
+    /// quoted. Reported rather than priced at nothing: a zero in a bill is a
+    /// claim about the work, not an absence of one.
+    #[serde(default)]
+    pub unmeasured: u32,
+    pub estimate: Estimate,
+}
+
+/// What a discovery or a topic run concluded, read back from its artifacts.
+///
+/// The three payloads are untyped on purpose. They are the run's own records —
+/// a quote, a table of verdicts, a table of readings — and every field of them
+/// is rendered rather than acted on, so modelling them here would be a fourth
+/// copy of a shape that already exists in Python, in the artifact and in
+/// TypeScript. `None` is a state: a run still preselecting has no topics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ChannelReading {
+    pub channel_id: String,
+    pub workflow_id: String,
+    pub state: Option<String>,
+    pub stage: Option<String>,
+    pub usd_so_far: Option<f64>,
+    pub estimate: Option<serde_json::Value>,
+    pub preselection: Option<serde_json::Value>,
+    pub topics: Option<serde_json::Value>,
+}
+
+/// One descriptive statement about what was preached, and the citations that
+/// survived checking. A finding that named none was **moved to `limitaciones`**
+/// before this crossed the wire, never deleted: an answer that quietly lost a
+/// claim looks complete and is shorter, and the reader would never know.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Finding {
+    pub afirmacion: String,
+    pub chunk_ids: Vec<String>,
+}
+
+/// One reading, labelled as a reading. Never merged with a finding: the thing a
+/// reader must treat sceptically may not share a paragraph with the thing they
+/// may rely on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Inference {
+    pub inferencia: String,
+    #[serde(default)]
+    pub alcance: String,
+    #[serde(default)]
+    pub limites: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Comparison {
+    #[serde(default)]
+    pub convergencias: Vec<String>,
+    #[serde(default)]
+    pub diferencias: Vec<String>,
+    #[serde(default)]
+    pub matices: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Synthesis {
+    /// `answered`, `insufficient_evidence` or `off_corpus`. The last two are
+    /// different states because their remedies differ: one means the corpus was
+    /// searched and came up short, the other that the topic belongs elsewhere.
+    pub state: String,
+    pub topic: String,
+    pub model: String,
+    #[serde(default)]
+    pub prompt_version: String,
+    #[serde(default)]
+    pub hallazgos: Vec<Finding>,
+    #[serde(default)]
+    pub comparacion: Comparison,
+    #[serde(default)]
+    pub interpretacion_teologica: Vec<Inference>,
+    #[serde(default)]
+    pub citas: Vec<Citation>,
+    #[serde(default)]
+    pub limitaciones: Vec<String>,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceItem>,
+    /// Findings moved to `limitaciones` for naming no citation that survived.
+    /// A synthesis where half of them were demoted is one to distrust, and a
+    /// count is the only thing that says so.
+    #[serde(default)]
+    pub demoted: u32,
+    #[serde(default)]
+    pub invented: u32,
+    /// Why, when `state` is not `answered`. The only thing that says *which*
+    /// refusal this was — four facts with four remedies used to render as one
+    /// line reading "not enough evidence".
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub spend: Vec<Spend>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct SynthesisResult {
+    pub question_id: String,
+    /// `running` until it is not. Two calls, for the recorded reason: a real
+    /// question outran a 180 s client timeout, was computed, was billed, and
+    /// was discarded under a message blaming an unreachable API.
+    pub state: String,
+    pub synthesis: Option<Synthesis>,
+    pub error: Option<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2803,6 +3015,117 @@ impl Control {
             "/libraries/{library_id}/graph?confidence_floor={confidence_floor}&min_documents={min_documents}"
         );
         self.get(&path, EXPLORE_TIMEOUT).await
+    }
+
+    // -- channels ----------------------------------------------------------
+    //
+    // Everything here is free except the last two, and those two are the only
+    // reason the quote above them exists as a route of its own: pressing the
+    // button is the decision, so the figure has to be on screen before the
+    // request that starts the run rather than inside it.
+
+    pub async fn channel_sync(&self, url: &str, limit: u32) -> Result<ChannelSummary> {
+        self.post_json(
+            "/channels/sync",
+            &serde_json::json!({ "url": url, "limit": limit }),
+            CHANNEL_SYNC_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn channels(&self) -> Result<ChannelList> {
+        self.get("/channels", CHANNEL_TIMEOUT).await
+    }
+
+    pub async fn channel_detail(&self, channel_id: &str) -> Result<ChannelDetail> {
+        self.get(&format!("/channels/{channel_id}"), CHANNEL_TIMEOUT)
+            .await
+    }
+
+    pub async fn channel_quote(
+        &self,
+        channel_id: &str,
+        topic: &str,
+        limit: u32,
+        deep_limit: u32,
+    ) -> Result<DiscoveryQuote> {
+        self.post_json(
+            &format!("/channels/{channel_id}/discovery-estimate"),
+            &serde_json::json!({
+                "topic": topic, "limit": limit, "deep_limit": deep_limit
+            }),
+            CHANNEL_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn channel_discover(
+        &self,
+        channel_id: &str,
+        topic: &str,
+        limit: u32,
+        deep_limit: u32,
+    ) -> Result<StartedRun> {
+        self.post_json(
+            &format!("/channels/{channel_id}/discover"),
+            &serde_json::json!({
+                "topic": topic, "limit": limit, "deep_limit": deep_limit
+            }),
+            START_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn channel_topics(
+        &self,
+        channel_id: &str,
+        topic: &str,
+        video_runs: &[String],
+    ) -> Result<StartedRun> {
+        self.post_json(
+            &format!("/channels/{channel_id}/topics"),
+            &serde_json::json!({ "topic": topic, "video_runs": video_runs }),
+            START_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn channel_ask(
+        &self,
+        channel_id: &str,
+        topic: &str,
+        effort: &str,
+    ) -> Result<AskStarted> {
+        self.post_json(
+            &format!("/channels/{channel_id}/ask"),
+            &serde_json::json!({ "topic": topic, "effort": effort }),
+            ASK_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn channel_ask_result(
+        &self,
+        channel_id: &str,
+        question_id: &str,
+    ) -> Result<SynthesisResult> {
+        self.get(
+            &format!("/channels/{channel_id}/ask/{question_id}"),
+            ASK_POLL_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn channel_reading(
+        &self,
+        channel_id: &str,
+        workflow_id: &str,
+    ) -> Result<ChannelReading> {
+        self.get(
+            &format!("/channels/{channel_id}/readings/{workflow_id}"),
+            CHANNEL_TIMEOUT,
+        )
+        .await
     }
 }
 

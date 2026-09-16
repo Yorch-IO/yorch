@@ -12,10 +12,16 @@ from . import config
 from .activities import (
     activating, asking, chatting, exporting, ingest, paid, rebuild, removing,
 )
+from .activities import channel as channelacts
 from .activities import video as videoacts
 from .activities.health import probe_provider, probe_services
 from .workflows.activation import ActivationWorkflow
 from .workflows.ask import AskWorkflow
+from .workflows.channel import (
+    ChannelAskWorkflow,
+    ChannelDiscoverWorkflow,
+    ChannelTopicsWorkflow,
+)
 from .workflows.chat import ChatWorkflow
 from .workflows.epub import EpubWorkflow
 from .workflows.ingest import IngestWorkflow
@@ -38,6 +44,9 @@ WORKFLOWS = [
     EpubWorkflow,
     ProviderProbeWorkflow,
     VideoIngestWorkflow,
+    ChannelDiscoverWorkflow,
+    ChannelTopicsWorkflow,
+    ChannelAskWorkflow,
 ]
 
 # Every activity the workflows reference must be registered here or the worker
@@ -97,6 +106,10 @@ ACTIVITIES = [
     videoacts.collect_transcript,
     videoacts.abandon_transcription,
     videoacts.chunk_transcript,
+    channelacts.quote_channel_discovery,
+    channelacts.preselect_channel_videos,
+    channelacts.read_channel_topics,
+    channelacts.synthesise_channel,
     rebuild.load_rebuild_inputs,
     rebuild.replay_semantics,
 ]

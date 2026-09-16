@@ -137,6 +137,23 @@ class Paths:
         return self.cache / "embed"
 
     @property
+    def channels(self) -> pathlib.Path:
+        """A YouTube channel's catalogue: what the channel holds, not what is indexed.
+
+        Under `for_tenant` from the first day, unlike `runs/` — whose blindness
+        to the tenant this class documents above as a known crossing. There is
+        nothing here to migrate, so scoping it correctly costs nothing, and a
+        channel's catalogue is exactly the kind of thing one organisation should
+        not be able to read out of another's workspace.
+
+        What is *indexed* is deliberately not stored here. That is Postgres, by
+        `document.source_key = youtube/<id>` inside the channel's library. A
+        second record of the same fact is a second record that can disagree with
+        the first in silence.
+        """
+        return self.root / "channels"
+
+    @property
     def snapshots(self) -> pathlib.Path:
         return self.root / "snapshots"
 
@@ -153,7 +170,7 @@ class Paths:
         return self.runs / workflow_id
 
     def ensure(self) -> None:
-        for d in (self.inbox, self.runs, self.profiles, self.cache, self.snapshots):
+        for d in (self.inbox, self.runs, self.profiles, self.cache, self.snapshots, self.channels):
             d.mkdir(parents=True, exist_ok=True)
 
 
@@ -266,6 +283,14 @@ class Gemini:
             # Naming a conversation from its first exchange, once. Same
             # reasoning, and the output is a handful of words.
             "chat-title": 0,
+            # Judging a title against a topic, and reading a transcript for what
+            # it is about. Both are classification over text that was handed to
+            # them — the answer is in the string or it is not — which is the
+            # same argument `planning` and `epub-metadata` record. And both sit
+            # between a person pressing a button and a table appearing, so
+            # reasoning there is paid for in waiting as well as in tokens.
+            "channel-preselect": 0,
+            "channel-topics": 0,
         }
     )
 
@@ -375,6 +400,11 @@ class Settings:
     #: the workflow — never read inside the workflow, which may only decide on
     #: what its own history holds.
     fetch_task_queue: str = ""
+    #: The YouTube Data API key as an *environment* variable, which is the
+    #: development fallback. :meth:`youtube_key` prefers the keychain file,
+    #: because that is where a credential belongs and this one is the first this
+    #: product has ever had — Vertex uses ADC and has no key at all.
+    youtube_api_key: str = ""
     api_host: str = "127.0.0.1"
     api_port: int = 8000
     secrets: dict[str, str] = field(default_factory=dict, repr=False)
@@ -382,6 +412,23 @@ class Settings:
     @property
     def paths(self) -> Paths:
         return Paths(self.workspace)
+
+    def youtube_key(self) -> str:
+        """The Data API key, from the keychain file first and the environment second.
+
+        The file is what the app writes `0600` from the OS keychain and mounts
+        read-only, and it is the mechanism this codebase already documents for
+        exactly this case: *"the day a provider with a key exists, it is two
+        `keychain::Entry` calls and the file is materialised from the entry at
+        launch."* This is that day. The environment variable stays as the
+        development fallback, so a stack brought up by hand can be given a key
+        without a window.
+
+        Empty means "this deployment cannot read a channel", which the route
+        answers as a 503 rather than as an empty catalogue — a channel with no
+        videos and a channel nobody could ask about must not look the same.
+        """
+        return (self.secret("YOUTUBE_API_KEY") or self.youtube_api_key or "").strip()
 
     def secret(self, name: str) -> str | None:
         """A provider credential, or None when it was never configured.
@@ -489,6 +536,7 @@ def load() -> Settings:
         # maps 127.0.0.1 on the host to the container's own interface; running
         # the same code directly on the host with that value would put an
         # unauthenticated control plane on the network.
+        youtube_api_key=_env("BRAIN_YOUTUBE_API_KEY", ""),
         api_host=_env("BRAIN_API_HOST", "127.0.0.1"),
         api_port=int(_env("BRAIN_API_PORT", "8000")),
         secrets=_read_secrets(secrets_file),

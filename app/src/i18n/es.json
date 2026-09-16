@@ -12,7 +12,8 @@
     "ask": "Preguntar",
     "explore": "Explorar",
     "graph": "Grafo",
-    "chat": "Conversación"
+    "chat": "Conversación",
+    "channel": "Canal"
   },
   "home": {
     "title": "Inicio",
@@ -170,7 +171,14 @@
     "audioFormatUnsupported": "El audio ha llegado en un contenedor que Amazon Transcribe no sabe leer, y este producto no lo reconvierte.",
     "artifactNotFound": "Ese archivo no está para descargar. Solo se puede bajar un libro, y solo de una ejecución que lo haya producido.",
     "artifactChanged": "El archivo en disco ya no coincide con lo que el catálogo registró, así que no es el libro que produjo esta ejecución. Vuelve a generarlo.",
-    "epubSourceMissing": "No queda ninguna ejecución con los fragmentos de esta versión, así que no hay con qué componer el libro. Reindexar los restaura, pero vuelve a pagar la corrección."
+    "epubSourceMissing": "No queda ninguna ejecución con los fragmentos de esta versión, así que no hay con qué componer el libro. Reindexar los restaura, pero vuelve a pagar la corrección.",
+    "notAChannelUrl": "Ese enlace no es de un canal de YouTube. Un enlace a un vídeo se importa desde la pantalla de Importar.",
+    "youtubeKeyMissing": "Falta la clave de la YouTube Data API. Se configura en Servicios y se guarda en el llavero del sistema.",
+    "youtubeQuotaExceeded": "Se agotó la cuota diaria de la API de YouTube. Se restablece a medianoche, hora del Pacífico; la clave está bien.",
+    "youtubeRefused": "La API de YouTube rechazó la clave o la petición. Revisa que la clave exista y que la YouTube Data API v3 esté habilitada en ese proyecto.",
+    "youtubeUnreachable": "No se pudo llegar a la API de YouTube. Revisa la conexión.",
+    "channelNotSynced": "Ese canal todavía no se ha sincronizado. Pega su enlace y pulsa Sincronizar.",
+    "libraryOwnedByAnother": "Esa biblioteca pertenece a otra organización."
   },
   "library": {
     "title": "Biblioteca",
@@ -571,7 +579,23 @@
     "adcFound": "Credenciales encontradas en {{path}}",
     "adcMissing": "No se han encontrado credenciales predeterminadas de aplicación (ADC).",
     "adcHow": "Gemini Enterprise rechaza las claves de API, así que estas son la única autenticación que funciona. Ejecuta `gcloud auth application-default login` y recarga.",
-    "needsRestart": "Guardado. Los contenedores en marcha conservan el proyecto anterior hasta que bajes y vuelvas a levantar la pila."
+    "needsRestart": "Guardado. Los contenedores en marcha conservan el proyecto anterior hasta que bajes y vuelvas a levantar la pila.",
+    "secretStored": "guardada — escribe una nueva para reemplazarla",
+    "secretUnset": "AIzaSy…",
+    "secretClear": "Borrar",
+    "secretIn": "Guardada en {{store}}",
+    "secretMissing": "No hay ninguna clave guardada",
+    "secretNeedsRestart": "El worker lee este archivo al arrancar, así que hay que recrear los servicios para que la clave llegue.",
+    "store": {
+      "keychain": "el llavero del sistema",
+      "file": "un archivo con permisos 0600"
+    },
+    "secretTitle": {
+      "youtube": "Clave de la YouTube Data API"
+    },
+    "secretIntro": {
+      "youtube": "Hace falta para leer el catálogo de un canal. Se guarda en el llavero del sistema y se escribe en el archivo de secretos que el worker monta de solo lectura; nunca se muestra de vuelta."
+    }
   },
   "libraries": {
     "label": "Biblioteca",
@@ -798,5 +822,93 @@
     },
     "noRuns": "No consta ninguna ejecución para esta versión.",
     "whichRun": "Ejecución"
+  },
+  "channel": {
+    "title": "Canal de YouTube",
+    "intro": "Lee un canal entero, averigua qué vídeos hablan de un tema y decide cuáles vale la pena indexar. Cada afirmación se comprueba después en el minuto del vídeo.",
+    "sync": "1. Sincronizar el canal",
+    "syncCaveat": "Gratis: consume cuota de la API de datos de YouTube, nunca dinero. Se guarda el catálogo del canal y se crea su biblioteca.",
+    "urlPlaceholder": "https://www.youtube.com/@canal",
+    "syncStart": "Sincronizar",
+    "syncing": "Sincronizando…",
+    "pick": "Canal",
+    "videoCount": "{{count}} vídeos",
+    "topic": "2. Elegir el tema",
+    "topicCaveat": "El título y la descripción son una hipótesis de relevancia, nunca prueba de que el vídeo trate el tema. Por eso después se lee la transcripción.",
+    "topicLabel": "Tema",
+    "topicPlaceholder": "justicia social y pobreza",
+    "limit": "Vídeos a revisar",
+    "deepLimit": "Transcripciones a leer",
+    "deepLimitCaveat": "El tope de transcripciones no es por el precio: los subtítulos son gratis, pero el servidor de subtítulos de YouTube limita las descargas seguidas, y una descarga que se rinde es la rama que acaba pagando la transcripción de Amazon.",
+    "quote": "Calcular coste",
+    "quoteFor": "Se juzgarán {{evaluated}} vídeos por sus metadatos y se leerán {{read}} transcripciones.",
+    "quoteCaveat": "Esta cifra se muestra antes de gastar y se guarda dentro de la ejecución, para que después se pueda comprobar si se quedó corta o se pasó.",
+    "discover": "Analizar metadatos",
+    "discovering": "Analizando…",
+    "invented": "El modelo devolvió {{count}} veredicto(s) sobre vídeos que no se le enviaron. Se descartaron.",
+    "unevaluated": "{{count}} vídeo(s) volvieron sin veredicto utilizable. Aparecen como «sin evaluar», no como descartados.",
+    "probe": "3. Sondear y leer",
+    "probeCaveat": "El sondeo es gratis: resuelve el vídeo, baja los subtítulos, arma la transcripción, previsualiza los fragmentos y calcula el coste. Nada se paga hasta la aprobación.",
+    "probeStart": "Sondear {{count}} vídeo(s)",
+    "probing": "Sondeando…",
+    "readStart": "Leer transcripciones",
+    "reading_": "Leyendo…",
+    "stages": "Etapas",
+    "stageSemantics": "Extraer conceptos (grafo)",
+    "stageSemanticsCaveat": "Se marca antes de sondear, nunca después: cada compuerta cotiza las opciones con las que arrancó su ejecución. Sin conceptos el vídeo queda indexado y citable, pero invisible en el grafo.",
+    "video": "Vídeo",
+    "verdict": "Veredicto",
+    "reading": "Lectura de la transcripción",
+    "cost": "Coste",
+    "pickAll": "Marcar {{count}}",
+    "pickNone": "Desmarcar todo",
+    "selected": "Seleccionados",
+    "totalCost": "Coste total",
+    "transcriptionCost": "De transcripción (Amazon)",
+    "pickedWithoutCaptions": "{{count}} de los marcados no tienen subtítulos: hay que transcribirlos, cuesta del orden de doce veces más y no se pudo leer su transcripción, así que la única evidencia es su título.",
+    "unpriced": "{{count}} seleccionado(s) sin precio: su sondeo todavía no ha llegado a la compuerta.",
+    "sourceCaptions": "subtítulos",
+    "sourceTranscribe": "sin subtítulos: transcripción de pago",
+    "alreadyIndexed": "ya indexado",
+    "answers": "Trata el tema",
+    "doesNotAnswer": "No trata el tema",
+    "readingFailed": "No se pudo leer",
+    "unverifiedTopics": "{{count}} tema(s) sin cita comprobable en la transcripción",
+    "approve": "Indexar {{count}} seleccionado(s)",
+    "approving": "Aprobando…",
+    "approveCaveat": "Cada vídeo es una ejecución con su propia compuerta: aprobar el lote responde una por una, lo no marcado se rechaza y no cuesta nada, y volver a hacerlo no cobra dos veces.",
+    "notChosen": "no seleccionado en el lote",
+    "relevance": {
+      "relevante": "relevante",
+      "dudoso": "dudoso",
+      "descartado": "descartado",
+      "sin_evaluar": "sin evaluar"
+    },
+    "ask": "4. Preguntar al canal",
+    "askCaveat": "Solo sobre lo que ya está indexado de este canal. La respuesta separa lo que las prédicas dicen —cada hallazgo con su minuto— de lo que el modelo interpreta, y si no hay material lo dice.",
+    "effort": "Cuánto buscar",
+    "askStart": "Preguntar",
+    "asking": "Leyendo el corpus…",
+    "saveJson": "Guardar JSON",
+    "saveCsv": "Guardar CSV",
+    "saved": "Guardado en {{path}}",
+    "synthesis": "Síntesis comparativa",
+    "findings": "Hallazgos",
+    "comparison": "Comparación",
+    "comparison_": {
+      "convergencias": "Convergencias",
+      "diferencias": "Diferencias",
+      "matices": "Matices"
+    },
+    "interpretation": "Interpretación teológica",
+    "interpretationCaveat": "Esto es inferencia del modelo sobre los hallazgos de arriba, no algo que las prédicas digan. Cada una declara sobre qué se sostiene y qué no permite concluir.",
+    "scope": "Alcance: {{scope}}",
+    "limits": "Límites: {{limits}}",
+    "limits_": "Limitaciones",
+    "demoted": "{{count}} hallazgo(s) pasaron a limitaciones por no tener ninguna cita comprobable.",
+    "state": {
+      "insufficient_evidence": "Evidencia insuficiente",
+      "off_corpus": "El tema no parece ser de este canal"
+    }
   }
 }

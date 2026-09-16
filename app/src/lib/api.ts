@@ -93,7 +93,26 @@ export type ControlErrorKind =
   | "artifact_changed"
   /** A version whose chunks are gone, so there is nothing to compose a book
    *  from. The remedy is a re-index, not a retry. */
-  | "epub_source_missing";
+  | "epub_source_missing"
+  /** A link that is not a YouTube channel — including a link to one of its
+   *  *videos*, which is a different request with a different screen. */
+  | "not_a_channel_url"
+  /** No YouTube Data API key on this installation. A 503 rather than an empty
+   *  catalogue, because "this channel has no videos" and "nobody here can ask
+   *  about this channel" are different facts. */
+  | "youtube_key_missing"
+  /** The day's Data API allowance is gone. Distinct from `youtube_refused`
+   *  because the remedies are opposite: this one is fixed by waiting, that one
+   *  by looking at the key. */
+  | "youtube_quota_exceeded"
+  | "youtube_refused"
+  | "youtube_unreachable"
+  /** A channel this installation has not catalogued yet. */
+  | "channel_not_synced"
+  /** A library id that belongs to another organisation. */
+  | "library_owned_by_another"
+  /** A topic pass asked for with no probed videos to read. */
+  | "no_videos_to_read";
 
 export interface AppError {
   kind: AppErrorKind;
@@ -176,6 +195,13 @@ const CONTROL_GUIDANCE: Partial<Record<ControlErrorKind, string>> = {
   artifact_not_found: "error.artifactNotFound",
   artifact_changed: "error.artifactChanged",
   epub_source_missing: "error.epubSourceMissing",
+  not_a_channel_url: "error.notAChannelUrl",
+  youtube_key_missing: "error.youtubeKeyMissing",
+  youtube_quota_exceeded: "error.youtubeQuotaExceeded",
+  youtube_refused: "error.youtubeRefused",
+  youtube_unreachable: "error.youtubeUnreachable",
+  channel_not_synced: "error.channelNotSynced",
+  library_owned_by_another: "error.libraryOwnedByAnother",
 };
 
 /**
@@ -1644,6 +1670,230 @@ export interface RebuildReport {
   estimate: Estimate | null;
 }
 
+/* -- channels --------------------------------------------------------------
+ *
+ * A YouTube channel, catalogued so a person can decide which of its videos are
+ * worth paying to index. A channel **is** a library: retrieval narrows by
+ * equality on `libraryId`, so "ask only this channel" is "ask this library",
+ * and every other arrangement breaks that.
+ */
+
+export interface ChannelRef {
+  channelId: string;
+  title: string;
+  handle: string;
+  description: string;
+  uploadsPlaylistId: string;
+  url: string;
+}
+
+export interface ChannelSummary {
+  channel: ChannelRef;
+  libraryId: string;
+  syncedAt: string;
+  videoCount: number;
+  /** Data API quota units the last sync spent. The daily allowance is the one
+   *  resource here that runs out, so saying what a sync cost beats discovering
+   *  it at the end of the day. */
+  unitsSpent: number;
+  /** Only on a sync's own answer. */
+  fetched?: number;
+  /** Only on the listing, and from the *catalog* — not from the channel file.
+   *  What a channel holds and what is indexed are different questions with
+   *  different owners. */
+  documents?: number;
+  indexedVersions?: number;
+}
+
+export interface ChannelList {
+  channels: ChannelSummary[];
+}
+
+export interface ChannelVideoRow {
+  videoId: string;
+  title: string;
+  description: string;
+  descriptionTruncated: boolean;
+  publishedAt: string;
+  durationS: number;
+  /** `none`, `live` or `upcoming`. An upcoming premiere is refused by the video
+   *  path anyway, so it is never offered. */
+  liveState: string;
+  thumbnail: string;
+  url: string;
+  /** null means this channel's library holds no document for the video. */
+  documentId: string | null;
+  /** null on a document that exists is a real state, not a gap: a run that was
+   *  cancelled, or an activation withheld over a structural mismatch. */
+  activeVersionId: string | null;
+}
+
+export interface ChannelDetail {
+  channel: ChannelRef;
+  libraryId: string;
+  syncedAt: string;
+  videoCount: number;
+  unitsSpent: number;
+  videos: ChannelVideoRow[];
+}
+
+export interface DiscoveryQuote {
+  channelId: string;
+  libraryId: string;
+  topic: string;
+  evaluated: number;
+  read: number;
+  /** Videos in the read set with no duration, which cannot be quoted. Reported
+   *  rather than priced at nothing: a zero in a bill is a claim. */
+  unmeasured: number;
+  estimate: Estimate;
+}
+
+/** One video's verdict from the metadata pass.
+ *
+ *  `relevancia` is Spanish on the wire like the chunk kinds and a claim's
+ *  status, and for the same reason: these strings are in artifacts already.
+ *  `sin_evaluar` is the code's, not the model's — a video whose verdict did not
+ *  come back or did not survive checking. Treating it as `descartado` would
+ *  hide a model quietly answering about fewer videos than it was asked about. */
+export interface Candidate {
+  video_id: string;
+  relevancia: "relevante" | "dudoso" | "descartado" | "sin_evaluar";
+  puntaje: number;
+  razon: string;
+  incertidumbre: string;
+}
+
+export interface Preselection {
+  topic: string;
+  model: string;
+  prompt_version: string;
+  evaluated: string[];
+  candidates: Candidate[];
+  /** Verdicts naming a video that was never sent. Non-zero means the model
+   *  invented identifiers, which is worth knowing before trusting its verdicts. */
+  invented: number;
+  malformed: number;
+  unevaluated: number;
+}
+
+/** One topic the transcript pass found, with the sentence that says so.
+ *
+ *  `evidencia` is empty when the quotation the model gave is **not** in the
+ *  transcript. That is a reading to treat as the model's impression rather than
+ *  as something the talk says, and the two must not look the same on screen. */
+export interface Topic {
+  tema: string;
+  evidencia: string;
+  confianza: string;
+}
+
+export interface VideoTopics {
+  video_id: string;
+  topic: string;
+  model: string;
+  prompt_version: string;
+  temas: Topic[];
+  responde: boolean;
+  motivo: string;
+  characters: number;
+  truncated: boolean;
+  /** Of `temas.length`. A reading nobody can check must not look like one that
+   *  can, so the count travels rather than being inferred. */
+  verified: number;
+  /** A call that failed: the video was never read, which is different from a
+   *  video that was read and found irrelevant. */
+  failed: boolean;
+}
+
+export interface TopicsRecord {
+  topic: string;
+  channel_id: string;
+  prompt_version: string;
+  videos: VideoTopics[];
+}
+
+/** What a discovery or a topic run concluded, read back from its artifacts.
+ *
+ *  `null` in any of the three is a state, not a gap: a run still preselecting
+ *  has no topics, and one that failed before quoting has no estimate. */
+export interface ChannelReading {
+  channelId: string;
+  workflowId: string;
+  state: string | null;
+  stage: string | null;
+  usdSoFar: number | null;
+  estimate: Estimate | null;
+  preselection: Preselection | null;
+  topics: TopicsRecord | null;
+}
+
+/** One descriptive statement about what was preached, and the citations that
+ *  survived checking. A finding that named none was **moved to `limitaciones`**
+ *  before this crossed the wire, never deleted. */
+export interface Finding {
+  afirmacion: string;
+  chunkIds: string[];
+}
+
+/** One reading, labelled as a reading. Never merged with a finding: the thing a
+ *  reader must treat sceptically may not share a paragraph with the thing they
+ *  may rely on. */
+export interface Inference {
+  inferencia: string;
+  alcance: string;
+  limites: string;
+}
+
+export interface Comparison {
+  convergencias: string[];
+  diferencias: string[];
+  matices: string[];
+}
+
+export interface Synthesis {
+  /** `answered`, `insufficient_evidence` or `off_corpus`. The last two differ
+   *  because their remedies do: one means the corpus was searched and came up
+   *  short, the other that the topic belongs elsewhere. */
+  state: string;
+  topic: string;
+  model: string;
+  promptVersion: string;
+  hallazgos: Finding[];
+  comparacion: Comparison;
+  interpretacionTeologica: Inference[];
+  citas: Citation[];
+  limitaciones: string[];
+  evidence: EvidenceItem[];
+  /** Findings moved to `limitaciones` for naming no citation that survived. A
+   *  synthesis where half of them were demoted is one to distrust. */
+  demoted: number;
+  invented: number;
+  /** Why, when `state` is not `answered`. The only thing that says *which*
+   *  refusal this was. */
+  reason: string;
+  spend: Spend[];
+}
+
+export interface SynthesisResult {
+  questionId: string;
+  state: string;
+  synthesis: Synthesis | null;
+  error: Record<string, string> | null;
+}
+
+/** Whether a provider credential is stored, and where. **Never what it is.**
+ *
+ *  A value the UI could read back is a value a screenshot can leak, and nothing
+ *  above Rust has a reason to hold a key. `store` is a token rather than prose
+ *  so the wording lives in the two bundles, the way an error `kind` does. */
+export interface ProviderSecret {
+  name: string;
+  env: string;
+  stored: boolean;
+  store: string;
+}
+
 export const api = {
   dockerProbe: () => invoke<DockerInfo>("docker_probe"),
   stackStatus: () => invoke<StackStatus>("stack_status"),
@@ -1707,6 +1957,52 @@ export const api = {
    *  which is what lets the Import screen show a queue rather than an error
    *  panel while the worker restarts. */
   runsList: (query: RunsQuery = {}) => invoke<RunListPage>("runs_list", query),
+
+  /* -- channels ---------------------------------------------------------- */
+
+  /** Catalogue a channel. Free: it costs Data API quota, never money. */
+  channelSync: (url: string, limit = 100) =>
+    invoke<ChannelSummary>("channel_sync", { url, limit }),
+  channels: () => invoke<ChannelList>("channels"),
+  channelDetail: (channelId: string) =>
+    invoke<ChannelDetail>("channel_detail", { channelId }),
+  /** What reading this channel would cost. **Free, and it reaches no model.**
+   *  Its own call rather than a field on the discovery, because pressing the
+   *  button is the decision: the figure has to be on screen before the call
+   *  that starts the run, not inside it. */
+  channelQuote: (channelId: string, topic: string, limit = 100, deepLimit = 10) =>
+    invoke<DiscoveryQuote>("channel_quote", { channelId, topic, limit, deepLimit }),
+  /** **This spends.** Judges the channel's metadata against the topic. */
+  channelDiscover: (
+    channelId: string,
+    topic: string,
+    limit = 100,
+    deepLimit = 10,
+  ) =>
+    invoke<StartedRun>("channel_discover", { channelId, topic, limit, deepLimit }),
+  /** **This spends.** Reads the uncorrected transcripts of probed video runs. */
+  channelTopics: (channelId: string, topic: string, videoRuns: string[]) =>
+    invoke<StartedRun>("channel_topics", { channelId, topic, videoRuns }),
+  channelReading: (channelId: string, workflowId: string) =>
+    invoke<ChannelReading>("channel_reading", { channelId, workflowId }),
+
+  /** **This spends.** Two calls, like `ask`: the second collects. */
+  channelAsk: (channelId: string, topic: string, effort = "thorough") =>
+    invoke<AskStarted>("channel_ask", { channelId, topic, effort }),
+  channelAskResult: (channelId: string, questionId: string) =>
+    invoke<SynthesisResult>("channel_ask_result", { channelId, questionId }),
+  /** Write text the page already holds wherever the person says. `null` means
+   *  they dismissed the dialog, which is not a failure. */
+  saveText: (suggestedName: string, contents: string) =>
+    invoke<string | null>("save_text", { suggestedName, contents }),
+
+  providerSecrets: () => invoke<ProviderSecret[]>("provider_secrets"),
+  /** Store a provider credential, or clear it with an empty value.
+   *
+   *  The worker reads the file this writes once at startup, so a key set while
+   *  the stack is up reaches it on the next `up`. The screen says so. */
+  setProviderSecret: (name: string, value: string) =>
+    invoke<ProviderSecret[]>("set_provider_secret", { name, value }),
   /** What a run did, stage by stage. Answers for a run Temporal has forgotten,
    *  which is every run past the retention period — and which is exactly when
    *  somebody goes looking. */

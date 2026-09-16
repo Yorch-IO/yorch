@@ -105,6 +105,14 @@ KINDS: dict[str, str] = {
     #: `ARTIFACT_STAGES` is keyed by artifact name alone and can hold one
     #: writer, and `evidence` is the recorded cost of discovering that twice.
     "epub": "book.epub",
+    #: Reading a channel. `preselection` is the whole record of one metadata
+    #: pass — the topic, the exact ids evaluated, every verdict, and the model
+    #: and prompt version that produced them — because a preselection is a
+    #: measurement and a measurement whose instrument is unrecorded cannot be
+    #: compared with the next one. `topics` is the same for the transcript pass,
+    #: and it carries the quotations the code verified rather than only a count.
+    "preselection": "preselection.json",
+    "topics": "topics.json",
 }
 
 TEXT_ENCODING = "utf-8"

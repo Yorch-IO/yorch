@@ -61,6 +61,19 @@ byte offset, why the locator drops the video's title, why a Temporal retry must
 not charge Amazon a second time, and why waiting for a transcription job is a
 workflow timer and never a polling activity.
 
+**Reading a YouTube channel has its own document: `doc/CHANNEL.md`.** Read it
+before touching `youtube.py`, `channelstore.py`, anything under
+`brainworker/channel/`, `workflows/channel.py`, or `ChannelScreen.tsx`. It
+holds the rules that are not visible from any one file — why a channel *is* a
+library, why the catalogue is a file and the indexed state is Postgres, why the
+batch is a sum on a screen and not a gate, why the transcript pass reads the
+*uncorrected* stream, and why the quote widens its input where every other
+quote in this product widens only its output. **Built 2026-09-16 for the free
+plane and the desktop app only**; the paid plane holds the migration and the
+stage-vocabulary fork and serves no route, and the Angular client has nothing.
+That is a decision on the record, made with the count at the top of this file
+in view, not an omission.
+
 ## Commands
 
 Prerequisites live in `~/.local/bin` (`uv`) and `~/.cargo/bin` (Rust); add both
@@ -83,8 +96,12 @@ uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # stack up: 988 passed
-# Measured 2026-09-06 with the stack **up**. With it down, graph/ and catalog/
+cd worker && uv sync && uv run pytest -q           # stack up: 1301 passed
+# Measured 2026-09-16 with the stack **up** and BRAIN_MEMGRAPH_URL pointed at
+# the port `docker` publishes (below). Without that variable 92 graph and
+# retrieval tests skip against the default 7788 — a skip, not a failure, and
+# the stack-down figures below have not been re-measured since.
+# Before that: 988 on 2026-09-06. With it down, graph/ and catalog/
 # skip instead — 637 passed / 150 skipped the last time that was actually run
 # (2026-09-05, before conversations added 20 more catalog tests). The
 # stack-down figure has not been re-measured since; do not trust it to the digit.
@@ -117,7 +134,7 @@ cd app && npm install
 # monthly. Fetch it before `tauri build`, which fails at the bundler without
 # it, or `tauri dev`, which starts and then answers `ytdlp_missing`.
 ./src-tauri/binaries/fetch.sh                      # this machine's triple
-npm run typecheck && npx vitest run && npm run build   # 487 passed
+npm run typecheck && npx vitest run && npm run build   # 547 passed
 npx vitest run -t "define no key"                  # single test by name
 COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch npm run tauri dev
 
@@ -131,7 +148,7 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch \
 # and PKG_CONFIG_PATH set, or the `soup3-sys` build script fails first. No
 # `--release`: the tuned dev profile runs this gate in 60s at 412% CPU.
 export PKG_CONFIG_PATH=~/.local/tauri-sysroot/prefix/usr/lib/x86_64-linux-gnu/pkgconfig
-cd app/src-tauri && cargo test                     # 132 passed, 1 ignored
+cd app/src-tauri && cargo test                     # 146 passed, 1 ignored
 # One test is `#[ignore]`d because it talks to YouTube; it is the only thing
 # that can say the bundled binary works at all. Run it on purpose:
 #   COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch cargo test -- --ignored
@@ -1604,6 +1621,30 @@ happen.** The turns that could have shown it either answered cleanly or refused
 *before* `compose` was reached, and the case needs a turn that streams fluent
 prose and then loses every citation to `_verify`. Covered by tests at three
 layers and by nothing in a window.
+
+**Reading a channel is built and nothing about it has touched YouTube, Vertex
+or a window.** Built 2026-09-16 — `doc/CHANNEL.md` — and covered at every layer:
+161 worker tests, 7 in Rust, 44 in TypeScript, each verified by reverting the
+fix it stands on, plus the paid plane's parity spec verified by breaking the
+fork. What none of that can do is sync a channel, because **no YouTube Data API
+key exists on this machine** — checked in the environment and in both
+`secrets.env` files, which hold only `SERPER_API_KEY`. One has to be created in
+Google Cloud with YouTube Data API v3 enabled and entered on the Services
+screen, which stores it in the OS keychain and writes it into the `secrets.env`
+the worker mounts: the first provider credential this product has ever held,
+and the pipe root `CLAUDE.md` described as empty is empty no longer. Until then
+`POST /channels/sync` answers 503 `youtube_key_missing`, and that is the
+correct answer. The first real sync is also the first measurement of whether
+the topic pass reads a real auto-caption transcript well enough to be worth its
+~$0.026 a video; the $0.42–$0.53 quoted for a hundred titles and ten
+transcripts is from a synthetic channel of 76-minute talks. Videos without
+captions are listed, quoted at Amazon's published rate and **start unticked**,
+because they are both the worst informed row and about twelve times the most
+expensive; `BRAIN_AWS_REGION` and `BRAIN_TRANSCRIBE_BUCKET` are unset here and
+the audio half has still never run. And the first thing to measure once a
+channel is indexed is the dense floor: a library made only of transcripts is
+the worst case for `MIN_SCORE`, measured at 0.6001–0.614 against 0.60 on the
+first real video.
 
 **Nothing about the EPUB export has been seen in a window, and no real book has
 been opened in a reader.** Built 2026-09-15 and covered at every layer — 33
@@ -3437,6 +3478,16 @@ working, because they are the cheapest regression test available.
 Two conventions worth matching: every claim carries its measurement, and "no
 measured baseline" is stated rather than hidden.
 
+### A verification trap: cargo can skip the file you just restored
+
+Found 2026-09-16, the Rust twin of the CPython trap below and from the other
+direction. Restoring a source file by `mv`-ing its backup back gives it the
+backup's mtime — which is *older* than the last build — so cargo judges the
+crate up to date and runs the tests against the reverted code. The restored
+fix reported as still failing, which reads as "the fix does not work" and is
+the wrong conclusion. `touch` the restored file before re-running. The Python
+trap is the same mtime arithmetic with the inequality the other way round.
+
 ### A verification trap: CPython can serve you the code you just reverted
 
 Found on 2026-09-03 while checking that each fix in this session was
@@ -3546,13 +3597,18 @@ maps them to localised labels.
 - Both `en` and `es` bundles are shipped, and tests enforce key parity, matching
   interpolation placeholders, and that no key goes unused. UI language is a
   separate setting from a collection's *content* language.
-- **The seven screens are all mounted at once and only one is shown**, and the
+- **The nine screens are all mounted at once and only one is shown**, and the
   tab order is the order of the work: `home`, `stack`, `library`, `explore`,
-  `graph`, `import`, `ask`. Home is the default because "what is in here?" is the
-  question a person arrives with — Services was the landing screen only for want
-  of anything else. Home and Services are the two that own no library, so the
-  picker is off both; Home's figures are project-wide, so a picker there would
-  offer a choice that changes nothing.
+  `graph`, `import`, `channel`, `ask`, `chat`. Home is the default because
+  "what is in here?" is the question a person arrives with — Services was the
+  landing screen only for want of anything else. Home and Services own no
+  library, so the picker is off both; Home's figures are project-wide, so a
+  picker there would offer a choice that changes nothing. Channel is the third
+  without one, for a different reason: a channel **is** a library
+  (`lib_yt_<channelId>`), so that screen picks a channel and the library
+  follows — two pickers over one choice could disagree. A tab id has to be
+  lowercase letters only: `i18n.test.ts` reads `TABS` with `"([a-z]+)"` and
+  would silently skip anything else.
 - **Every screen may take a `go`, and only Home reads it.** A component declaring
   no parameters is assignable to `(props: { go: (tab: Tab) => void }) => JSX`, so
   the other six are unchanged by its existence. Home needs it because a stopped

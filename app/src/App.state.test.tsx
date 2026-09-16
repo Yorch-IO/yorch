@@ -29,6 +29,7 @@ vi.mock("./screens/LibraryScreen", () => ({ LibraryScreen: () => <p>screen:libra
 vi.mock("./screens/ExploreScreen", () => ({ ExploreScreen: () => <p>screen:explore</p> }));
 vi.mock("./screens/GraphScreen", () => ({ GraphScreen: () => <p>screen:graph</p> }));
 vi.mock("./screens/ImportScreen", () => ({ ImportScreen: () => <p>screen:import</p> }));
+vi.mock("./screens/ChannelScreen", () => ({ ChannelScreen: () => <p>screen:channel</p> }));
 
 const t = (key: string): string => i18n.t(key);
 

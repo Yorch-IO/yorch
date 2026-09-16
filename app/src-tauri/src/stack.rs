@@ -159,7 +159,17 @@ impl Stack {
             .map_err(|e| AppError::io(workspace.display(), e))?;
 
         let secrets_file = app_data.join("secrets.env");
-        ensure_secrets_file(&secrets_file)?;
+        // Written from the OS keychain rather than merely created, which is
+        // what `ensure_secrets_file` used to do. That helper made the file
+        // `0600`, the compose file mounted it read-only, and **nothing in the
+        // codebase ever wrote to it** — the pipe its comment described had
+        // nothing in it, because the only provider was Vertex, which refuses
+        // API keys outright and uses ADC. The YouTube Data API is the first one
+        // with a key. Reading the keychain cannot fail here (`Entry::get`
+        // degrades to the fallback file), so what is left to fail is writing,
+        // which is the same class of failure the workspace directories above
+        // already refuse to start over.
+        crate::secrets::materialise(app_data, &secrets_file)?;
 
         let env_path = compose_dir.join(".env");
         let pg_password = existing_value(&env_path, "BRAIN_PG_PASSWORD").unwrap_or_else(new_password);
@@ -422,31 +432,6 @@ fn check_native_filesystem(workspace: &Path) -> Result<()> {
             path: workspace.display().to_string(),
         });
     }
-    Ok(())
-}
-
-fn ensure_secrets_file(path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| AppError::io(parent.display(), e))?;
-    }
-    if !path.exists() {
-        std::fs::write(path, "# Provider credentials, written from the OS keychain.\n")
-            .map_err(|e| AppError::io(path.display(), e))?;
-    }
-    restrict_permissions(path)
-}
-
-#[cfg(unix)]
-fn restrict_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| AppError::io(path.display(), e))
-}
-
-#[cfg(not(unix))]
-fn restrict_permissions(_path: &Path) -> Result<()> {
-    // Windows inherits the ACL of the per-user app data directory, which is
-    // already owner-only. There is no mode bit to set.
     Ok(())
 }
 

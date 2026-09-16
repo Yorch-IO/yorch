@@ -29,9 +29,17 @@ from fastapi.responses import FileResponse, StreamingResponse
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client
 
-from .. import auditlog, auditversion as av, bookexport, config
+from .. import auditlog, auditversion as av, bookexport, channelstore, config, youtube
+from ..channel import estimate as channelest
+from ..channel.types import DiscoverRequest, TopicsRequest
+from ..workflows.channel import (
+    ChannelAskWorkflow,
+    ChannelDiscoverWorkflow,
+    ChannelTopicsWorkflow,
+)
 from ..artifacts import ArtifactRef, ArtifactStore
 from ..catalog import Catalog, MigrationError, current_version, require_schema
+from ..catalog.repo import LibraryOwnedByAnother
 from ..graph import DEFAULT_CONFIDENCE_FLOOR, Graph, GraphError
 from ..graph.queries import TemplateError, bind, get
 from ..answering.effort import DEFAULT_EFFORT, MAX_STYLE_CHARS
@@ -3158,4 +3166,522 @@ def concept_claims(
             "claims_about_concept",
             {"concept_id": concept_id, "confidence_floor": confidence_floor, "limit": limit},
         ),
+    }
+
+
+# --- channels ----------------------------------------------------------------
+#
+# A YouTube channel, catalogued so a person can decide which of its videos are
+# worth paying to index. Everything here is **free**: the Data API costs quota
+# and not money, and nothing in this section starts a run or calls a model.
+#
+# A channel is a library. `retrieve.search` narrows by equality on `library_id`,
+# `document_id` or `version_id`, and the graph expansion narrows by library
+# alone — so "ask only this channel" *is* "ask this channel's library", and
+# `channelstore.library_id_for` is where that mapping lives.
+
+#: How much of a video's description the listing carries.
+#:
+#: The preselection pass reads the *file*, not this payload, so truncating here
+#: costs nothing it needs. A channel of 100 videos with 5,000-character
+#: descriptions is half a megabyte of JSON for a table that shows two lines of
+#: each, and this response is fetched on every visit to the screen.
+DESCRIPTION_PREVIEW = 400
+
+#: Data API kind -> the status that says what a caller should do about it.
+#:
+#: The two 403s are the reason this is a table rather than a blanket 502: a key
+#: that is not authorised is fixed once in the Cloud console, and a quota that
+#: ran out is fixed by waiting until midnight Pacific. One status for both would
+#: send every reader to the wrong remedy half the time.
+_YOUTUBE_STATUS: dict[str, int] = {
+    "youtube_key_missing": 503,
+    "channel_not_found": 404,
+    "youtube_quota_exceeded": 429,
+    "youtube_refused": 502,
+    "youtube_unreachable": 502,
+    "youtube_unreadable": 502,
+}
+
+
+def _channel_store() -> channelstore.ChannelStore:
+    s = settings()
+    return channelstore.ChannelStore(
+        s.paths.for_tenant(LEGACY_TENANT_ID).channels
+    )
+
+
+def _youtube_client() -> youtube.Client:
+    """A Data API client, or a 503 naming the thing that is missing.
+
+    503 rather than an empty catalogue, because "this channel has no videos" and
+    "nobody here can ask about this channel" are different facts and only one of
+    them is about the channel.
+    """
+    try:
+        return youtube.Client(settings().youtube_key())
+    except youtube.YouTubeError as e:
+        raise _youtube_http(e) from e
+
+
+def _youtube_http(e: youtube.YouTubeError) -> HTTPException:
+    return HTTPException(
+        status_code=_YOUTUBE_STATUS.get(e.kind, 502),
+        detail={"kind": e.kind, "message": str(e)},
+    )
+
+
+@dataclass
+class ChannelSync:
+    """Which channel to catalogue, and how deep.
+
+    `limit` is a field constraint rather than a hand-raised error so FastAPI
+    answers an out-of-range one in its own 422-with-a-list shape — the same
+    decision as `Question.effort`'s `Literal`.
+
+    The ceiling is 500 rather than the 100 the screen offers, because the
+    catalogue is a free artefact worth having in full while the *preselection*
+    is what costs money and is capped separately. Reading more of a channel than
+    you will ever analyse is a quota decision, not a spending one.
+    """
+
+    url: str
+    limit: Annotated[int, Field(ge=1, le=500)] = 100
+    #: Fill in durations with `videos.list`. On by default because a video with
+    #: no duration cannot be quoted, and a quote is the point.
+    hydrate: bool = True
+
+
+@app.post("/channels/sync")
+def channel_sync(request: ChannelSync) -> dict[str, Any]:
+    """Catalogue a channel. Free: quota, never money.
+
+    Creates the channel's library as well, so the shelf exists before anything
+    is on it — a library that appears only once a video is indexed would make
+    the picker change underneath somebody mid-import.
+    """
+    try:
+        lookup = youtube.channel_lookup(request.url)
+    except youtube.NotAChannelUrl as e:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "kind": "not_a_channel_url",
+                "message": f"{request.url!r} no es el enlace de un canal de YouTube",
+                "detail": str(e),
+            },
+        ) from e
+
+    client = _youtube_client()
+    try:
+        ref = client.resolve_channel(lookup)
+        videos = client.list_uploads(ref.uploads_playlist_id, request.limit)
+        if request.hydrate:
+            videos = client.hydrate(videos)
+    except youtube.YouTubeError as e:
+        raise _youtube_http(e) from e
+
+    stored = _channel_store().save(ref, videos, units_spent=client.units)
+
+    s = settings()
+    with Catalog(s.database_url) as catalog:
+        try:
+            catalog.ensure_library(
+                stored.library_id, ref.title, tenant_id=LEGACY_TENANT_ID
+            )
+        except LibraryOwnedByAnother as e:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "kind": "library_owned_by_another",
+                    "message": "esa biblioteca pertenece a otra organización",
+                },
+            ) from e
+
+    return {
+        **_channel_summary(stored),
+        "fetched": len(videos),
+        "units_spent": client.units,
+    }
+
+
+@app.get("/channels")
+def channels() -> dict[str, Any]:
+    """Every channel this installation has catalogued, most recently synced first."""
+    stored = _channel_store().list()
+    s = settings()
+    with Catalog(s.database_url) as catalog:
+        counts = {
+            r["id"]: (r["documents"], r["indexed_versions"])
+            for r in catalog.libraries(tenant_id=LEGACY_TENANT_ID)
+        }
+    return {
+        "channels": [
+            {
+                **_channel_summary(c),
+                "documents": counts.get(c.library_id, (0, 0))[0],
+                "indexed_versions": counts.get(c.library_id, (0, 0))[1],
+            }
+            for c in stored
+        ]
+    }
+
+
+@app.get("/channels/{channel_id}")
+def channel_detail(channel_id: str, full: bool = False) -> dict[str, Any]:
+    """One channel's videos, each saying whether it is already indexed.
+
+    **Indexed is Postgres' answer, not the catalogue's.** `document.source_key`
+    is `youtube/<id>` and the document's active version is what makes it
+    answerable, so both come from the catalog every time rather than being
+    mirrored into the file beside the metadata. A second record of one fact is a
+    second record that can disagree with the first in silence.
+
+    `active_version_id` of `null` on a document that exists is a real state and
+    not a gap: it is a video whose run was cancelled, or whose activation was
+    withheld over a structural mismatch.
+    """
+    try:
+        stored = _channel_store().read(channel_id)
+    except channelstore.UnusableChannelId as e:
+        raise HTTPException(
+            status_code=422,
+            detail={"kind": "not_a_channel_url", "message": str(e)},
+        ) from e
+    if stored is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "kind": "channel_not_synced",
+                "message": "este canal no se ha sincronizado todavía",
+            },
+        )
+
+    videos = _channel_store().videos(channel_id)
+    s = settings()
+    with Catalog(s.database_url) as catalog:
+        rows = catalog.documents(stored.library_id, include_absent=True)
+        by_key = {d.source_key: d for d in rows}
+        active = {d.id: catalog.active_version(d.id) for d in rows}
+
+    out = []
+    for v in videos:
+        document = by_key.get(videosource.source_key(v.video_id))
+        description = v.description
+        if not full and len(description) > DESCRIPTION_PREVIEW:
+            description = description[:DESCRIPTION_PREVIEW]
+        out.append(
+            {
+                "video_id": v.video_id,
+                "title": v.title,
+                "description": description,
+                "description_truncated": not full
+                and len(v.description) > DESCRIPTION_PREVIEW,
+                "published_at": v.published_at,
+                "duration_s": v.duration_s,
+                "live_state": v.live_state,
+                "thumbnail": v.thumbnail,
+                "url": v.url,
+                "document_id": document.id if document else None,
+                "active_version_id": active.get(document.id) if document else None,
+            }
+        )
+    return {**_channel_summary(stored), "videos": out}
+
+
+def _channel_summary(stored: channelstore.StoredChannel) -> dict[str, Any]:
+    return {
+        "channel": asdict(stored.channel),
+        "library_id": stored.library_id,
+        "synced_at": stored.synced_at,
+        "video_count": stored.video_count,
+        "units_spent": stored.units_spent,
+    }
+
+
+@dataclass
+class ChannelQuery:
+    """A topic to look for, and how wide to look.
+
+    Both limits are field constraints rather than hand-raised errors so FastAPI
+    answers an out-of-range one in its own 422-with-a-list shape.
+
+    `deep_limit` is capped at 25 and not at 100, and that cap is the caption
+    throttle rather than the bill. The transcripts are free, but YouTube's
+    `timedtext` endpoint was measured refusing this address six times across 25
+    minutes — and when a caption download gives up, `chosen` becomes `None`,
+    which is the branch that pays Amazon. A batch wide enough to meet the
+    throttle would turn a free pass into a transcription bill nobody asked for.
+    """
+
+    topic: Annotated[str, Field(min_length=3, max_length=500)]
+    limit: Annotated[int, Field(ge=1, le=500)] = 100
+    deep_limit: Annotated[int, Field(ge=0, le=25)] = 10
+
+
+@dataclass
+class ChannelTopicsBody:
+    """Which probed video runs to read. Ids only — see `TopicsRequest`."""
+
+    topic: Annotated[str, Field(min_length=3, max_length=500)]
+    video_runs: list[str]
+
+
+def _synced(channel_id: str) -> channelstore.StoredChannel:
+    try:
+        stored = _channel_store().read(channel_id)
+    except channelstore.UnusableChannelId as e:
+        raise HTTPException(
+            status_code=422, detail={"kind": "not_a_channel_url", "message": str(e)}
+        ) from e
+    if stored is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "kind": "channel_not_synced",
+                "message": "este canal no se ha sincronizado todavía",
+            },
+        )
+    return stored
+
+
+@app.post("/channels/{channel_id}/discovery-estimate")
+def channel_discovery_estimate(channel_id: str, query: ChannelQuery) -> dict[str, Any]:
+    """What reading this channel would cost. Free, and exact on the cheap half.
+
+    Exact rather than projected for the metadata pass, because
+    `channel.preselect.payload_for` builds the literal string the call will
+    send and this prices that same string. The transcript pass is projected from
+    each video's duration through the measured speech rate, which is why it
+    carries a range where the other does not — the constant has a measured
+    spread and reporting one number would claim a precision it does not have.
+
+    Shown before the button; the run persists the same figures as its `estimate`
+    artifact once it starts, which is what makes "did it over-report?" a
+    question somebody can answer afterwards.
+    """
+    stored = _synced(channel_id)
+    s = settings()
+    plan = channelest.plan_for(
+        query.topic,
+        _channel_store().videos(channel_id),
+        limit=query.limit,
+        deep_limit=query.deep_limit,
+    )
+    estimate = channelest.discovery_estimate(s, plan)
+    return {
+        "channel_id": channel_id,
+        "library_id": stored.library_id,
+        "topic": query.topic,
+        "evaluated": len(plan.evaluated),
+        "read": plan.deep_limit,
+        # Videos with no duration cannot be quoted, so say how many rather than
+        # quoting them at nothing. A zero in a bill is a claim.
+        "unmeasured": sum(1 for v in plan.read if v.duration_s <= 0),
+        "estimate": asdict(estimate),
+    }
+
+
+@app.post("/channels/{channel_id}/discover")
+async def channel_discover(channel_id: str, query: ChannelQuery) -> dict[str, Any]:
+    """Judge this channel's metadata against a topic. **This spends.**
+
+    The quote is a separate, free route deliberately: pressing this is the
+    decision, so the figure has to be on screen before the request that starts
+    the run rather than inside it.
+    """
+    stored = _synced(channel_id)
+    s = settings()
+    if not s.gemini.configured:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "kind": "provider_unconfigured",
+                "message": "Falta BRAIN_GEMINI_PROJECT_ID: no se puede analizar.",
+            },
+        )
+    client = await temporal()
+    handle = await client.start_workflow(
+        ChannelDiscoverWorkflow.run,
+        DiscoverRequest(
+            channel_id=channel_id,
+            topic=query.topic,
+            library_id=stored.library_id,
+            limit=query.limit,
+            deep_limit=query.deep_limit,
+            tenant_id=LEGACY_TENANT_ID,
+        ),
+        id=f"channel-{_ulid()}",
+        task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
+    )
+    return {"workflow_id": handle.id, "state": "running"}
+
+
+@app.post("/channels/{channel_id}/topics")
+async def channel_topics(channel_id: str, body: ChannelTopicsBody) -> dict[str, Any]:
+    """Read the transcripts of video runs that have already probed. **This spends.**"""
+    stored = _synced(channel_id)
+    s = settings()
+    # The request is checked before the deployment, the same order `POST
+    # /videos` uses: a body naming no videos is a client defect that would still
+    # be there after somebody configured a provider, and the request that asked
+    # is where an answer about it is useful.
+    if not body.video_runs:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "kind": "no_videos_to_read",
+                "message": "no se indicó ningún vídeo sondeado que leer",
+            },
+        )
+    if not s.gemini.configured:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "kind": "provider_unconfigured",
+                "message": "Falta BRAIN_GEMINI_PROJECT_ID: no se puede analizar.",
+            },
+        )
+    client = await temporal()
+    handle = await client.start_workflow(
+        ChannelTopicsWorkflow.run,
+        TopicsRequest(
+            channel_id=channel_id,
+            topic=body.topic,
+            library_id=stored.library_id,
+            video_runs=list(body.video_runs),
+            tenant_id=LEGACY_TENANT_ID,
+        ),
+        id=f"channel-{_ulid()}",
+        task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
+    )
+    return {"workflow_id": handle.id, "state": "running"}
+
+
+@app.get("/channels/{channel_id}/readings/{workflow_id}")
+def channel_reading(channel_id: str, workflow_id: str) -> dict[str, Any]:
+    """What a discovery or a topic run concluded, read from its own artifacts.
+
+    From the artifacts rather than from the workflow's return value, because
+    Temporal forgets a run when its retention expires and this is the record a
+    person comes back to. `run_artifact` names the file and
+    `ArtifactStore.read_json` verifies the digest — so what comes back is what
+    the run wrote, or an honest refusal that it is not.
+    """
+    _synced(channel_id)
+    s = settings()
+    with Catalog(s.database_url) as catalog:
+        run = catalog.run(workflow_id, tenant_id=LEGACY_TENANT_ID)
+        if run is None or run.kind != "channel":
+            raise HTTPException(
+                status_code=404,
+                detail={"kind": "run_not_found", "message": "no existe ese análisis"},
+            )
+        rows = {r["name"]: r for r in catalog.artifacts(run.id)}
+
+    store = ArtifactStore(s.workspace, run.id)
+    out: dict[str, Any] = {
+        "channel_id": channel_id,
+        "workflow_id": workflow_id,
+        "state": run.state,
+        "stage": run.stage,
+        "usd_so_far": run.usd_so_far,
+    }
+    for name in ("estimate", "preselection", "topics"):
+        row = rows.get(name)
+        # Absent is a state, not a gap: a run still preselecting has no topics
+        # and a run that failed before quoting has no estimate. `null` says so;
+        # an empty object would read as a pass that found nothing.
+        out[name] = None
+        if row is None:
+            continue
+        try:
+            out[name] = store.read_json(
+                ArtifactRef(
+                    kind=name,
+                    path=row["rel_path"],
+                    sha256=row["sha256"],
+                    bytes=int(row["size_bytes"]),
+                )
+            )
+        except ArtifactError as e:
+            out[name] = {"unavailable": str(e)}
+    return out
+
+
+@dataclass
+class ChannelAsk:
+    """A topic to read the channel's indexed sermons for.
+
+    `effort` defaults to `thorough` here and to `standard` on `/ask`, and the
+    difference is the shape of the answer rather than a preference: a synthesis
+    compares sermons, so it needs evidence from several of them, and the
+    measured curve says 48 chunks is where citations peak. It is still a level
+    name on the wire and never a set of numbers, so a client cannot ask for two
+    hundred chunks on a paid call.
+    """
+
+    topic: Annotated[str, Field(min_length=3, max_length=2000)]
+    effort: Literal["brief", "standard", "thorough"] = "thorough"
+
+
+@app.post("/channels/{channel_id}/ask")
+async def channel_ask(channel_id: str, body: ChannelAsk) -> dict[str, Any]:
+    """Ask this channel's indexed sermons. Two calls, like `/ask`.
+
+    The second call is what collects it, and that is the `ASK_TIMEOUT` lesson:
+    a real question outran a 180 s client timeout, was computed, was billed, and
+    was discarded under a message blaming an unreachable API.
+    """
+    stored = _synced(channel_id)
+    s = settings()
+    if not s.gemini.configured:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "kind": "provider_unconfigured",
+                "message": "Falta BRAIN_GEMINI_PROJECT_ID: no se puede preguntar.",
+            },
+        )
+    client = await temporal()
+    handle = await client.start_workflow(
+        ChannelAskWorkflow.run,
+        Question(
+            library_id=stored.library_id,
+            text=body.topic,
+            tenant_id=LEGACY_TENANT_ID,
+            effort=body.effort,
+        ),
+        id=f"ask-{_ulid()}",
+        task_queue=s.task_queue,
+        memo=_OWNED_BY_LEGACY,
+    )
+    return {"question_id": handle.id, "state": "running"}
+
+
+@app.get("/channels/{channel_id}/ask/{question_id}")
+async def channel_ask_result(channel_id: str, question_id: str) -> dict[str, Any]:
+    """Collect a synthesis. `state` is `running` until it is not."""
+    _synced(channel_id)
+    client = await temporal()
+    handle = client.get_workflow_handle(question_id)
+    try:
+        outcome = await handle.query(ChannelAskWorkflow.result)
+    except Exception as e:  # noqa: BLE001
+        # Temporal forgets a question when its retention expires, and a 404 with
+        # a kind is what lets the screen say so rather than blaming the network.
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "kind": "question_not_found",
+                "message": f"no existe esa síntesis: {e}",
+            },
+        ) from e
+    return {
+        "question_id": question_id,
+        "state": outcome.state,
+        "synthesis": asdict(outcome.synthesis) if outcome.synthesis else None,
+        "error": outcome.error,
     }

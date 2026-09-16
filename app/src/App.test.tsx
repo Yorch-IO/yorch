@@ -25,6 +25,7 @@ vi.mock("./screens/ExploreScreen", () => ({ ExploreScreen: () => <p>screen:explo
 vi.mock("./screens/GraphScreen", () => ({ GraphScreen: () => <p>screen:graph</p> }));
 vi.mock("./screens/ImportScreen", () => ({ ImportScreen: () => <p>screen:import</p> }));
 vi.mock("./screens/AskScreen", () => ({ AskScreen: () => <p>screen:ask</p> }));
+vi.mock("./screens/ChannelScreen", () => ({ ChannelScreen: () => <p>screen:channel</p> }));
 
 const t = (key: string): string => i18n.t(key);
 
@@ -64,6 +65,7 @@ describe("the shell", () => {
       "explore",
       "graph",
       "import",
+      "channel",
       "ask",
     ]) {
       expect(screen.getByText(`screen:${name}`), name).toBeTruthy();
@@ -97,10 +99,11 @@ describe("the shell", () => {
     expect(await screen.findAllByLabelText(t("libraries.label"))).toHaveLength(1);
   });
 
-  it("leaves the picker off the two screens that own no library", async () => {
+  it("leaves the picker off the screens that own no library", async () => {
     // Home's figures are project-wide, so a picker there would offer a choice
     // that changes nothing on the screen; Services is what you use before there
-    // is anything to pick.
+    // is anything to pick; and Channel picks a *channel*, which is what its
+    // library is derived from — two pickers over one choice could disagree.
     render(<App />);
     await waitFor(() => expect(libraries).toHaveBeenCalled());
 
@@ -111,6 +114,9 @@ describe("the shell", () => {
     fireEvent.click(screen.getByRole("button", { name: t("nav.stack") }));
     expect(screen.queryByLabelText(t("libraries.label"))).toBeNull();
     expect(screen.getByLabelText(t("nav.language"))).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: t("nav.channel") }));
+    expect(screen.queryByLabelText(t("libraries.label"))).toBeNull();
 
     // …and it comes back on a screen that does own one.
     fireEvent.click(screen.getByRole("button", { name: t("nav.ask") }));

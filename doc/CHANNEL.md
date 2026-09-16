@@ -148,12 +148,13 @@ channel.
 
 ```
 Sync        Data API → catalogue on the workspace          quota, never money
-Discover    one call per 25 titles                         PAID — quoted first
-   └─▶      probe: POST /videos per candidate              free
+Filter      title keywords, computed on the client         free — narrows Discover too
+Discover    one call per 25 titles (of the filtered set)   PAID — quoted first
+   └─▶      probe: POST /videos per TICKED row             free
             resolves, downloads captions, groups, previews,
             quotes, and PARKS AT ITS OWN GATE
 Read        one call per probed transcript, UNCORRECTED    PAID — quoted with Discover
-Index       one checkbox a row, one total                  PAID — each run's own gate
+Index       the same tick, one total                       PAID — each run's own gate
 Ask         retrieval + five sections                      PAID — two calls
 ```
 
@@ -178,6 +179,80 @@ refuses outright. The screen sends its own options and does not copy
 `VideoGateReview.tsx:63`'s forced `extractSemantics: false` — the recorded
 defect that made the first real video indexed, citable and invisible on the
 Graph screen.
+
+## Filtering by title, and what the tick means
+
+Added 2026-09-16, the same day, after a person sat in front of the screen and
+found that the checkbox at the start of every video row did nothing. It was the
+*approval* tick — `disabled` until that row's probe had parked at a gate — and
+nothing on screen said so. Three changes, one decision.
+
+- **One tick per video for the whole flow.** `selectable` (`lib/channel.ts`) is
+  "not indexed and not an unaired premiere", before *and* after the probe. What
+  is ticked is what *Sondear* probes (`toProbe`), and once the gates land the
+  same tick is what *Indexar* approves. Discover's verdicts do not decide any
+  more; they **seed** the tick once per discovery (`seedFromDiscovery`,
+  relevante + dudoso in score order, up to the budget) and the person edits
+  from there. A verdict is a hypothesis about a title, and a person may overrule
+  it in either direction.
+  The one judgement that survives is the no-captions one, inverted: a landed
+  gate that reports no captions **takes the tick away** (`unpickOnGate`), once,
+  the moment that row's own gate arrives. The row stays enabled — re-ticking it
+  is a choice, and the totals print its price beside it.
+- **The probe cap is a budget across rounds.** `deepLimit` is the number of
+  transcripts the quote priced, the probes are what the transcript pass reads,
+  and `probeBudget` is what is left of it after the runs already started. Two
+  rounds of ten against a cap of ten would read twenty transcripts quoted as
+  ten, which is spending beyond the figure somebody approved. Ticks beyond the
+  budget are counted (`overCap`) and said out loud beside the button, never
+  silently dropped.
+- **The words a channel's titles repeat are offered as chips, free.**
+  `lib/keywords.ts` ports `bm25.tokenize` — accent fold, ñ kept, stopwords,
+  three-letter floor — and drops bare numbers on top, because a year is not a
+  topic. Counted as *document frequency*: one title repeating a word three
+  times is one video. A word on more than half the titles is not offered once
+  there are ten or more of them: that is the channel's own name or its series
+  label, and it joins nothing. The chip is labelled with the spelling the
+  channel uses most, so it reads `Espíritu` and never `espiritu`. Forty at
+  most, twenty shown, a fold for the rest. All of it unmeasured against a real
+  channel — the first real sync will say whether 50% is the right ceiling.
+- **A chip is a filter and a starting point at once.** Pressing one narrows the
+  table to titles carrying any pressed word *and* writes the selection into the
+  topic field; typing in the field afterwards is free and leaves the chips
+  alone, because the chips decide what is on the table and the topic decides
+  what the model is asked. A row that carries a run is shown whatever the
+  filter says, labelled "fuera del filtro": a parked gate is a pending decision,
+  and a filter that hid one would leave a person approving a batch with a row
+  they could not see.
+- **Discover judges the filtered set, and that is the one server change.**
+  `ChannelQuery.video_ids` on both `/discovery-estimate` and `/discover`,
+  `DiscoverRequest.video_ids` appended and defaulted so no `workflow.patched`
+  is needed, and `estimate.plan_for` intersects before applying `limit` — after
+  would let a filter over an old series judge nothing. An id the catalogue does
+  not hold is ignored rather than refused: the catalogue can change between
+  syncs, and the `preselection` artifact records the exact ids evaluated anyway.
+  The Rust side builds both bodies through one `channel_query_body`, so the
+  quote and the run cannot carry different sets. The paid plane serves no
+  channel route, so nothing is forked.
+- **The quote is dropped when the filter, the topic or either limit changes**,
+  and both *Analizar* and *Leer* stay disabled until it is asked for again.
+  Read gained that guard with this change: on the manual path — tick, probe,
+  read, no Discover — nothing else has ever priced the transcript pass before
+  it runs. Re-quoting is free.
+- **The sync moved to the app's top bar.** `lib/channels.tsx` is
+  `lib/libraries.tsx` with a channel in place of a library: a provider the
+  shell mounts, a remembered choice scoped by plane, and a picker with the URL
+  field beside it, in the slot the library picker uses on every other tab. A
+  sync also reloads the libraries, because it creates one. The screen is two
+  columns now — the chips and the table on the left, everything that decides
+  on the right — collapsing at the same 76rem as the other split screens.
+
+Verified the way everything above was: 47 TypeScript tests on the screen and
+its arithmetic, 14 on the keywords, 5 on the provider, one on the Rust body and
+five on the worker, each checked by reverting the fix it stands on; plus a
+static-HTML screenshot pass at 1440 and 900 in both themes against a 40-title
+synthetic catalogue with two landed gates and one reading. Nothing has touched
+a real channel, for the reason recorded under *Verified, and not*.
 
 ## The quote widens the input, and every other quote widens only the output
 
@@ -313,10 +388,16 @@ row of it.
   park one at a time and the poll records each gate as it lands, so ticking the
   defaults when the *first* gate arrived left every subsequent row clear — with
   no way to tell that from a row somebody had deliberately unticked. A row is
-  seeded exactly once, the moment its own gate arrives, and after that the
+  read exactly once, the moment its own gate arrives, and after that the
   selection is the person's. Found by
   `ChannelScreen.test.tsx::approves what is ticked and rejects what is not`,
-  which is the one test in that file that waits for both gates.
+  which is the one test in that file that waits for both gates. (Since the
+  tick became one choice for the whole flow, what a gate does once is *untick*
+  a row with no captions; the once-per-row rule is the same.)
+- **The first checkbox in the document is no longer the semantics switch.**
+  With the table ahead of the controls in the DOM, a test that reached for
+  `input[type="checkbox"]` toggled a video's tick instead. The switch has an
+  id now and the test asks for it by name.
 - **`activity.heartbeat` raises outside an activity**, so every test in
   `tests/activities/` that calls an activity as a plain function needs the
   `activity.in_activity()` guard the existing paid stages already carry.

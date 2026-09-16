@@ -3,9 +3,9 @@
  *
  * jsdom lays out nothing, so a rendered test could assert that a checkbox
  * exists and nothing about what the total beside it says. These are the
- * assertions worth having, and the one that matters most is the last group: a
- * video with no captions starts unticked, because it is both the worst informed
- * and the most expensive row in the table.
+ * assertions worth having, and the one that matters most is `unpickOnGate`: a
+ * video with no captions loses its tick the moment its gate says so, because it
+ * is both the worst informed and the most expensive row in the table.
  */
 import { describe, expect, it } from "vitest";
 
@@ -23,12 +23,18 @@ import {
   buildRows,
   cost,
   duration,
+  filterRows,
   hasCaptions,
   indexed,
-  initialPicked,
+  outsideFilter,
+  overCap,
+  probeBudget,
+  seedFromDiscovery,
+  selectable,
   toProbe,
   toggle,
   totals,
+  unpickOnGate,
   type Row,
 } from "./channel";
 
@@ -218,35 +224,73 @@ describe("cost", () => {
 
 // --- the judgement this file makes -------------------------------------------
 
-describe("initialPicked", () => {
-  it("ticks a probed video with captions", () => {
-    const rows = [row({ video: video("a"), runId: "r", gate: gate(true) })];
-    expect([...initialPicked(rows)]).toEqual(["a"]);
-  });
-
-  it("leaves a video with no captions unticked", () => {
+describe("unpickOnGate", () => {
+  it("takes the tick from a probed video with no captions", () => {
     // Two measured facts point the same way: there is no transcript, so the
     // topic pass could not read it and its only evidence is a title; and at
     // the published rate a 76-minute talk is ~$1.82 against the $0.1545 that
     // same talk cost with captions.
     const rows = [row({ video: video("a"), runId: "r", gate: gate(false) })];
-    expect([...initialPicked(rows)]).toEqual([]);
+    expect([...unpickOnGate(rows)]).toEqual(["a"]);
   });
 
-  it("leaves an already-indexed video unticked", () => {
-    const rows = [
-      row({
-        video: video("a", { documentId: "doc", activeVersionId: "ver" }),
-        runId: "r",
-        gate: gate(true),
-      }),
-    ];
-    expect([...initialPicked(rows)]).toEqual([]);
+  it("leaves a probed video with captions as the person ticked it", () => {
+    const rows = [row({ video: video("a"), runId: "r", gate: gate(true) })];
+    expect([...unpickOnGate(rows)]).toEqual([]);
   });
 
-  it("leaves a video that has not reached a gate unticked", () => {
+  it("says nothing about a video whose gate has not landed", () => {
+    // Nothing is known yet, so nothing is taken away; the caller applies this
+    // once per row, the moment its own gate arrives.
     const rows = [row({ video: video("a"), runId: "r", gate: null })];
-    expect([...initialPicked(rows)]).toEqual([]);
+    expect([...unpickOnGate(rows)]).toEqual([]);
+  });
+});
+
+describe("seedFromDiscovery", () => {
+  const rows = (ids: string[]) => ids.map((id) => row({ video: video(id) }));
+
+  it("ticks the relevant and the doubtful, and never the discarded", () => {
+    // `dudoso` is exactly what the transcript pass exists to settle, and
+    // `sin_evaluar` is the code's word for "no usable verdict", which is not
+    // a reason to tick anything.
+    const pre = preselection([
+      candidate("a", { relevancia: "relevante" }),
+      candidate("b", { relevancia: "dudoso" }),
+      candidate("c", { relevancia: "descartado" }),
+      candidate("d", { relevancia: "sin_evaluar" }),
+    ]);
+    expect([...seedFromDiscovery(rows(["a", "b", "c", "d"]), pre, 10)]).toEqual(["a", "b"]);
+  });
+
+  it("stops at the budget, in table order", () => {
+    // Table order is the score order `buildRows` produced, so the budget
+    // takes the best-scored first — the reason the batch exists is at the top.
+    const pre = preselection(["a", "b", "c"].map((id) => candidate(id)));
+    expect([...seedFromDiscovery(rows(["a", "b", "c"]), pre, 2)]).toEqual(["a", "b"]);
+  });
+
+  it("skips what is indexed, probed or not yet aired", () => {
+    const pre = preselection(["a", "b", "c"].map((id) => candidate(id)));
+    const list = [
+      row({ video: video("a", { documentId: "doc", activeVersionId: "ver" }) }),
+      row({ video: video("b"), runId: "video-1" }),
+      row({ video: video("c", { liveState: "upcoming" }) }),
+    ];
+    expect([...seedFromDiscovery(list, pre, 10)]).toEqual([]);
+  });
+});
+
+describe("selectable", () => {
+  it("is live before the probe, which is the fix for a tick that read as broken", () => {
+    expect(selectable(row({ video: video("a") }))).toBe(true);
+    expect(selectable(row({ video: video("a"), runId: "r", gate: gate(true) }))).toBe(true);
+  });
+
+  it("is not offered for a video already on the shelf or one that has not aired", () => {
+    expect(selectable(row({ video: video("a", { documentId: "d", activeVersionId: "v" }) })))
+      .toBe(false);
+    expect(selectable(row({ video: video("a", { liveState: "upcoming" }) }))).toBe(false);
   });
 });
 
@@ -315,41 +359,94 @@ describe("toProbe", () => {
   const rows = (ids: string[], over: Partial<ChannelVideoRow> = {}) =>
     ids.map((id) => row({ video: video(id, over) }));
 
-  it("probes nothing before anything has been judged", () => {
-    expect(toProbe(rows(["a"]), null, 10)).toEqual([]);
+  it("probes nothing when nothing is ticked", () => {
+    expect(toProbe(rows(["a"]), new Set(), 10)).toEqual([]);
   });
 
-  it("probes the relevant and the doubtful, and not the discarded", () => {
-    // `dudoso` is exactly what the transcript pass exists to settle.
-    const pre = preselection([
-      candidate("a", { relevancia: "relevante" }),
-      candidate("b", { relevancia: "dudoso" }),
-      candidate("c", { relevancia: "descartado" }),
-      candidate("d", { relevancia: "sin_evaluar" }),
-    ]);
-    expect(toProbe(rows(["a", "b", "c", "d"]), pre, 10).map((r) => r.video.videoId))
-      .toEqual(["a", "b"]);
+  it("probes what is ticked, whoever ticked it", () => {
+    // A video chosen by hand from a keyword filter is probed on the same
+    // footing as one a model called `relevante`: the verdict seeds the tick,
+    // and the tick is what decides.
+    expect(
+      toProbe(rows(["a", "b", "c"]), new Set(["a", "c"]), 10).map((r) => r.video.videoId),
+    ).toEqual(["a", "c"]);
   });
 
-  it("stops at the limit the quote was computed from", () => {
+  it("stops at the budget the quote was computed from", () => {
     // Probing more than was quoted would spend beyond the figure somebody
     // approved, which is the one direction this product refuses.
-    const pre = preselection(["a", "b", "c"].map((id) => candidate(id)));
-    expect(toProbe(rows(["a", "b", "c"]), pre, 2)).toHaveLength(2);
+    expect(toProbe(rows(["a", "b", "c"]), new Set(["a", "b", "c"]), 2)).toHaveLength(2);
   });
 
   it("skips what is already probed or already indexed", () => {
-    const pre = preselection([candidate("a"), candidate("b")]);
     const list = [
       row({ video: video("a"), runId: "video-1" }),
       row({ video: video("b", { activeVersionId: "ver" }) }),
     ];
-    expect(toProbe(list, pre, 10)).toEqual([]);
+    expect(toProbe(list, new Set(["a", "b"]), 10)).toEqual([]);
   });
 
   it("skips a premiere that has not aired", () => {
-    const pre = preselection([candidate("a")]);
-    expect(toProbe(rows(["a"], { liveState: "upcoming" }), pre, 10)).toEqual([]);
+    expect(toProbe(rows(["a"], { liveState: "upcoming" }), new Set(["a"]), 10)).toEqual([]);
+  });
+});
+
+describe("probeBudget", () => {
+  it("is what is left of the cap after the runs already started, across rounds", () => {
+    // Two rounds of ten against a cap of ten would read twenty transcripts
+    // quoted as ten.
+    expect(probeBudget(10, {})).toBe(10);
+    expect(probeBudget(10, { a: "r1", b: "r2", c: "r3" })).toBe(7);
+    expect(probeBudget(2, { a: "r1", b: "r2", c: "r3" })).toBe(0);
+  });
+});
+
+describe("overCap", () => {
+  it("counts the ticked rows the budget leaves unprobed", () => {
+    const list = [
+      row({ video: video("a") }),
+      row({ video: video("b") }),
+      row({ video: video("c") }),
+      row({ video: video("d"), runId: "r" }),                    // already probed: not waiting
+      row({ video: video("e", { activeVersionId: "v" }) }),      // indexed: not probable
+    ];
+    expect(overCap(list, new Set(["a", "b", "c", "d", "e"]), 2)).toBe(1);
+    expect(overCap(list, new Set(["a", "b", "c"]), 10)).toBe(0);
+  });
+});
+
+// --- the keyword filter --------------------------------------------------------
+
+describe("filterRows", () => {
+  const list = [
+    row({ video: video("a", { title: "La justicia de Dios" }) }),
+    row({ video: video("b", { title: "El perdón" }) }),
+    row({ video: video("c", { title: "Sobre la oración" }), runId: "video-1" }),
+  ];
+
+  it("shows everything when no key is pressed", () => {
+    expect(filterRows(list, new Set())).toHaveLength(3);
+  });
+
+  it("narrows to titles carrying any selected key", () => {
+    expect(filterRows(list, new Set(["justicia"])).map((r) => r.video.videoId)).toEqual([
+      "a",
+      "c",
+    ]);
+    expect(
+      filterRows(list, new Set(["justicia", "perdon"])).map((r) => r.video.videoId),
+    ).toEqual(["a", "b", "c"]);
+  });
+
+  it("keeps a row with a run whatever the filter says, and labels it", () => {
+    // A parked gate is a pending decision, and a filter that hid one would
+    // leave a person approving a batch with a row they could not see.
+    const shown = filterRows(list, new Set(["perdon"]));
+    expect(shown.map((r) => r.video.videoId)).toEqual(["b", "c"]);
+    expect(outsideFilter(list[2]!, new Set(["perdon"]))).toBe(true);
+    expect(outsideFilter(list[1]!, new Set(["perdon"]))).toBe(false);
+    // Under no filter, nothing is "outside" it.
+    expect(outsideFilter(list[2]!, new Set())).toBe(false);
   });
 });
 

@@ -61,15 +61,33 @@ class DiscoveryPlan:
 
 
 def plan_for(
-    topic: str, videos: list[ChannelVideo], *, limit: int, deep_limit: int
+    topic: str,
+    videos: list[ChannelVideo],
+    *,
+    limit: int,
+    deep_limit: int,
+    video_ids: list[str] | None = None,
 ) -> DiscoveryPlan:
     """Which videos a discovery would judge and which it would read.
 
     `videos` arrives newest-first from the store, so `limit` means "the most
     recent N", which is what the screen offers and what a person means by
     "revisa los últimos cien".
+
+    `video_ids` narrows the judged set to those videos before the limit is
+    applied — the screen's title-keyword filter, which costs nothing and is what
+    lets a person read a channel without paying for the metadata pass. `None`
+    means the whole catalogue; an id the catalogue does not hold is ignored by
+    intersection rather than refused, because the catalogue can change between
+    syncs and the `preselection` artifact records the exact ids evaluated
+    anyway, so the filter's effect is on the record either way.
     """
-    evaluated = [v for v in videos if v.live_state != "upcoming"][: max(0, limit)]
+    wanted = None if video_ids is None else set(video_ids)
+    evaluated = [
+        v
+        for v in videos
+        if v.live_state != "upcoming" and (wanted is None or v.video_id in wanted)
+    ][: max(0, limit)]
     longest = sorted(evaluated, key=lambda v: v.duration_s, reverse=True)
     return DiscoveryPlan(
         topic=topic, evaluated=evaluated, read=longest[: max(0, deep_limit)]

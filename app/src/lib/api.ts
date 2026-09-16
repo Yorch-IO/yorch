@@ -1970,16 +1970,27 @@ export const api = {
    *  Its own call rather than a field on the discovery, because pressing the
    *  button is the decision: the figure has to be on screen before the call
    *  that starts the run, not inside it. */
-  channelQuote: (channelId: string, topic: string, limit = 100, deepLimit = 10) =>
-    invoke<DiscoveryQuote>("channel_quote", { channelId, topic, limit, deepLimit }),
-  /** **This spends.** Judges the channel's metadata against the topic. */
+  channelQuote: (
+    channelId: string,
+    topic: string,
+    limit = 100,
+    deepLimit = 10,
+    videoIds?: string[],
+  ) =>
+    invoke<DiscoveryQuote>("channel_quote", { channelId, topic, limit, deepLimit, videoIds }),
+  /** **This spends.** Judges the channel's metadata against the topic.
+   *
+   *  `videoIds` is the screen's title-keyword filter: judge only these. Absent
+   *  means the whole catalogue. The quote above takes the same argument, so the
+   *  figure shown is the figure approved. */
   channelDiscover: (
     channelId: string,
     topic: string,
     limit = 100,
     deepLimit = 10,
+    videoIds?: string[],
   ) =>
-    invoke<StartedRun>("channel_discover", { channelId, topic, limit, deepLimit }),
+    invoke<StartedRun>("channel_discover", { channelId, topic, limit, deepLimit, videoIds }),
   /** **This spends.** Reads the uncorrected transcripts of probed video runs. */
   channelTopics: (channelId: string, topic: string, videoRuns: string[]) =>
     invoke<StartedRun>("channel_topics", { channelId, topic, videoRuns }),

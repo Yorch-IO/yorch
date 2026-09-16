@@ -17,6 +17,7 @@ import type {
   VideoGateReport,
   VideoTopics,
 } from "./api";
+import { titleMatches } from "./keywords";
 
 /** How often the probes are re-read. The same figure as the import queue's,
  *  because it is the same catalog answering. */
@@ -67,13 +68,78 @@ export function cost(row: Row): { usd: number | null; high: number | null } {
 /** A row's gate is answerable: it exists and nobody has answered it yet. */
 export const awaiting = (row: Row): boolean => row.gate !== null;
 
-/**
- * Which rows start ticked.
+/** Whether this row's tick is answerable at all: not on the shelf already, and
+ *  not a premiere that has not aired — `resolve_video` refuses those anyway, so
+ *  offering the tick would offer a probe that cannot run. Before *and* after
+ *  the probe: the tick is one choice for the whole flow, what to probe and then
+ *  what to approve. It used to be enabled only once a gate had landed, which
+ *  read as a checkbox that did not work. */
+export const selectable = (row: Row): boolean =>
+  !indexed(row) && row.video.liveState !== "upcoming";
+
+/** The rows the table shows under a keyword filter.
  *
- * **A video with no captions starts unticked**, and that is the one judgement
- * in this file. Two measured facts make it, and they point the same way: there
- * is no transcript, so the topic pass could not read it and its only evidence
- * is a title; and at the published batch rate a 76-minute talk is about $1.82
+ *  No keys means everything. Otherwise a row is shown when its title carries
+ *  any selected key — **or when it has a run**. A parked gate is a pending
+ *  decision, and a filter that hid one would leave a person approving a batch
+ *  with a row they could not see. Such a row is labelled as outside the filter
+ *  rather than silently kept. */
+export function filterRows(rows: Row[], keys: ReadonlySet<string>): Row[] {
+  if (keys.size === 0) return rows;
+  return rows.filter((r) => r.runId !== null || titleMatches(r.video.title, keys));
+}
+
+/** Whether a row is on screen only because it carries a run. */
+export const outsideFilter = (row: Row, keys: ReadonlySet<string>): boolean =>
+  keys.size > 0 && row.runId !== null && !titleMatches(row.video.title, keys);
+
+/** How many more probes the quote allows.
+ *
+ *  `deepLimit` is the number of transcripts the quote priced, and the probes are
+ *  what the transcript pass reads, so the budget is what is left of it after the
+ *  runs already started — across rounds, not per press. Two rounds of ten
+ *  against a cap of ten would read twenty transcripts quoted as ten, which is
+ *  spending beyond the figure somebody approved: the one direction this product
+ *  refuses. */
+export function probeBudget(deepLimit: number, runs: Record<string, string>): number {
+  return Math.max(0, deepLimit - Object.keys(runs).length);
+}
+
+/**
+ * Which rows Discover's verdicts tick, once, when a discovery lands.
+ *
+ * The relevant and the doubtful — `dudoso` is included because that is the
+ * whole point of the transcript pass that comes after — in the table's own
+ * score order, minus anything not selectable, up to the budget. The same set
+ * the probe used to compute for itself; it is a *seed* now, because the tick
+ * belongs to the person and a verdict is a hypothesis about a title that they
+ * may overrule in either direction.
+ */
+export function seedFromDiscovery(
+  rows: Row[],
+  preselection: Preselection,
+  budget: number,
+): Set<string> {
+  const considered = new Set(
+    preselection.candidates
+      .filter((c) => c.relevancia === "relevante" || c.relevancia === "dudoso")
+      .map((c) => c.video_id),
+  );
+  return new Set(
+    rows
+      .filter((r) => considered.has(r.video.videoId) && selectable(r) && r.runId === null)
+      .slice(0, Math.max(0, budget))
+      .map((r) => r.video.videoId),
+  );
+}
+
+/**
+ * Which ticks a landed gate takes away.
+ *
+ * **A video with no captions is unticked**, and that is the one judgement in
+ * this file. Two measured facts make it, and they point the same way: there is
+ * no transcript, so the topic pass could not read it and its only evidence is a
+ * title; and at the published batch rate a 76-minute talk is about $1.82
  * against the $0.1545 that same talk cost with captions — roughly twelve times.
  * Twenty ticked boxes of which three cost twelve times the rest, in a list
  * nobody has read, is exactly the shape of thing that gets approved: the
@@ -81,15 +147,26 @@ export const awaiting = (row: Row): boolean => row.gate !== null;
  * Abkhazian, named in small print, under a heading saying nothing had been paid
  * for yet.
  *
- * A row already indexed starts unticked too, for the plainer reason that
- * re-indexing it buys nothing.
+ * A tick a gate *with* captions finds is left alone: the person put it there to
+ * probe the video, and probing it is what made it approvable. The caller
+ * applies this once per row, the moment its own gate arrives, and after that
+ * the selection is the person's — re-ticking a transcribed video is a choice
+ * the totals then print the price of.
  */
-export function initialPicked(rows: Row[]): Set<string> {
+export function unpickOnGate(rows: Row[]): Set<string> {
   return new Set(
-    rows
-      .filter((r) => r.gate !== null && !indexed(r) && hasCaptions(r))
-      .map((r) => r.video.videoId),
+    rows.filter((r) => r.gate !== null && !hasCaptions(r)).map((r) => r.video.videoId),
   );
+}
+
+/** Ticked rows that would not be probed because the budget ran out — the
+ *  figure the caveat beside the probe button prints, so a person who ticked
+ *  thirty against a cap of ten is told rather than left counting. */
+export function overCap(rows: Row[], picked: ReadonlySet<string>, budget: number): number {
+  const waiting = rows.filter(
+    (r) => picked.has(r.video.videoId) && r.runId === null && selectable(r),
+  ).length;
+  return Math.max(0, waiting - Math.max(0, budget));
 }
 
 export function toggle(picked: Set<string>, videoId: string): Set<string> {
@@ -193,30 +270,16 @@ export function buildRows(
 
 /** Which videos a probe would be started for.
  *
- *  The shortlist, minus anything already indexed and anything already probed.
- *  Capped at `deepLimit` because that is the number the quote was computed
- *  from — probing more than was quoted would spend beyond the figure somebody
- *  approved, which is the one direction this product refuses. */
-export function toProbe(
-  rows: Row[],
-  preselection: Preselection | null,
-  deepLimit: number,
-): Row[] {
-  if (!preselection) return [];
-  const considered = new Set(
-    preselection.candidates
-      .filter((c) => c.relevancia === "relevante" || c.relevancia === "dudoso")
-      .map((c) => c.video_id),
-  );
+ *  The ticked rows that have no run yet, in table order, up to the budget. The
+ *  preselection no longer decides this — it seeds the ticks and the person
+ *  edits them — so a video chosen by hand from a keyword filter is probed on
+ *  exactly the same footing as one a model called `relevante`. Capped because
+ *  the budget is what the quote was computed from: probing more would spend
+ *  beyond the figure somebody approved. */
+export function toProbe(rows: Row[], picked: ReadonlySet<string>, budget: number): Row[] {
   return rows
-    .filter(
-      (r) =>
-        considered.has(r.video.videoId) &&
-        r.runId === null &&
-        !indexed(r) &&
-        r.video.liveState !== "upcoming",
-    )
-    .slice(0, Math.max(0, deepLimit));
+    .filter((r) => picked.has(r.video.videoId) && r.runId === null && selectable(r))
+    .slice(0, Math.max(0, budget));
 }
 
 /** `12:34` under an hour, `1:02:34` over it. Mirrors `videosource.hhmmss`. */

@@ -3417,6 +3417,11 @@ class ChannelQuery:
     topic: Annotated[str, Field(min_length=3, max_length=500)]
     limit: Annotated[int, Field(ge=1, le=500)] = 100
     deep_limit: Annotated[int, Field(ge=0, le=25)] = 10
+    #: Judge only these videos — the screen's title-keyword filter, which is
+    #: free and narrows the catalogue before the model reads a title. `None`
+    #: is the whole catalogue. Capped at the sync ceiling, because a list
+    #: longer than the catalogue can be is a client defect.
+    video_ids: Annotated[list[str], Field(max_length=500)] | None = None
 
 
 @dataclass
@@ -3467,6 +3472,7 @@ def channel_discovery_estimate(channel_id: str, query: ChannelQuery) -> dict[str
         _channel_store().videos(channel_id),
         limit=query.limit,
         deep_limit=query.deep_limit,
+        video_ids=query.video_ids,
     )
     estimate = channelest.discovery_estimate(s, plan)
     return {
@@ -3510,6 +3516,7 @@ async def channel_discover(channel_id: str, query: ChannelQuery) -> dict[str, An
             limit=query.limit,
             deep_limit=query.deep_limit,
             tenant_id=LEGACY_TENANT_ID,
+            video_ids=query.video_ids,
         ),
         id=f"channel-{_ulid()}",
         task_queue=s.task_queue,

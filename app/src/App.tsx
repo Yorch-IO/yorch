@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { LANGUAGES, setLanguage, type Language } from "./i18n";
 import { BackendProvider, useBackend } from "./lib/backend";
+import { ChannelPicker, ChannelsProvider } from "./lib/channels";
 import { LibrariesProvider, LibraryPicker } from "./lib/libraries";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { AskScreen } from "./screens/AskScreen";
@@ -66,7 +67,9 @@ const SCREENS: Record<
  *  Channel is the third, and for a different reason: a channel **is** a library
  *  — its id is `lib_yt_<channelId>` — so that screen picks a *channel* and the
  *  library follows. Two pickers over one choice could disagree, and the one
- *  that would lose is the one showing an id nobody can read. */
+ *  that would lose is the one showing an id nobody can read. Its picker takes
+ *  the same slot in the bar, with the sync field beside it: the thing you do
+ *  once per channel belongs in the bar, not in the first screenful. */
 const NEEDS_LIBRARY: ReadonlySet<Tab> = new Set<Tab>([
   "library",
   "explore",
@@ -105,6 +108,7 @@ function Shell() {
 
   return (
     <LibrariesProvider>
+      <ChannelsProvider>
       <div className="app">
         <aside className="sidebar">
           <div className="brand">
@@ -139,7 +143,11 @@ function Shell() {
                 state — so Ask would have shown it twice once its own left
                 column arrived. */}
             <div className="topbar-library">
-              {NEEDS_LIBRARY.has(tab) && <LibraryPicker compact />}
+              {tab === "channel" ? (
+                <ChannelPicker />
+              ) : (
+                NEEDS_LIBRARY.has(tab) && <LibraryPicker compact />
+              )}
             </div>
 
             <label className="language">
@@ -204,6 +212,7 @@ function Shell() {
           </main>
         </div>
       </div>
+      </ChannelsProvider>
     </LibrariesProvider>
   );
 }

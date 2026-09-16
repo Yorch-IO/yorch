@@ -77,6 +77,40 @@ def test_an_upcoming_premiere_is_not_judged():
     assert [v.video_id for v in plan.evaluated] == [videos[1].video_id]
 
 
+def test_a_title_filter_narrows_the_judged_set_before_the_limit():
+    # The screen's keyword chips are free and narrow the catalogue before the
+    # model reads a title. The filter is applied *before* `limit`, so "the most
+    # recent N *of these*" is what gets judged — filtering after the limit would
+    # let a filter over an old series evaluate nothing at all.
+    videos = _videos(6, 600)
+    wanted = [videos[1].video_id, videos[4].video_id, videos[5].video_id]
+    plan = est.plan_for("t", videos, limit=2, deep_limit=1, video_ids=wanted)
+    assert [v.video_id for v in plan.evaluated] == wanted[:2]
+    # Newest-first is preserved: the catalogue's order, not the filter's.
+    shuffled = list(reversed(wanted))
+    plan = est.plan_for("t", videos, limit=10, deep_limit=1, video_ids=shuffled)
+    assert [v.video_id for v in plan.evaluated] == wanted
+
+
+def test_an_id_the_catalogue_does_not_hold_is_ignored_not_refused():
+    # The catalogue can change between syncs, and the `preselection` artifact
+    # records the exact ids evaluated, so the filter's effect is on the record
+    # either way.
+    videos = _videos(3)
+    plan = est.plan_for(
+        "t", videos, limit=10, deep_limit=1, video_ids=["zzzzzzzzzzz", videos[2].video_id]
+    )
+    assert [v.video_id for v in plan.evaluated] == [videos[2].video_id]
+
+
+def test_no_filter_means_the_whole_catalogue():
+    videos = _videos(3)
+    assert est.plan_for("t", videos, limit=10, deep_limit=1).evaluated == videos
+    assert est.plan_for("t", videos, limit=10, deep_limit=1, video_ids=None).evaluated == videos
+    # An *empty* filter is a filter: nothing matched, nothing is judged.
+    assert est.plan_for("t", videos, limit=10, deep_limit=1, video_ids=[]).evaluated == []
+
+
 def test_reading_nothing_is_allowed_and_quotes_nothing():
     plan = est.plan_for("t", _videos(3), limit=3, deep_limit=0)
     estimate = est.discovery_estimate(_settings(), plan)

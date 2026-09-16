@@ -11,11 +11,14 @@ import i18n from "./i18n";
  * mounting the real ones would drag in five screens' worth of API calls to
  * prove none of it.
  */
-const { libraries } = vi.hoisted(() => ({ libraries: vi.fn() }));
+const { libraries, channels } = vi.hoisted(() => ({
+  libraries: vi.fn(),
+  channels: vi.fn(),
+}));
 
 vi.mock("./lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./lib/api")>();
-  return { ...actual, api: { ...actual.api, libraries } };
+  return { ...actual, api: { ...actual.api, libraries, channels } };
 });
 
 vi.mock("./screens/HomeScreen", () => ({ HomeScreen: () => <p>screen:home</p> }));
@@ -43,6 +46,7 @@ beforeEach(() => {
       { id: "lib_a", name: "Biblioteca A", language: "es", documents: 2, indexedVersions: 2 },
     ],
   });
+  channels.mockResolvedValue({ channels: [] });
 });
 
 afterEach(() => {
@@ -120,6 +124,25 @@ describe("the shell", () => {
 
     // …and it comes back on a screen that does own one.
     fireEvent.click(screen.getByRole("button", { name: t("nav.ask") }));
+    expect(await screen.findByLabelText(t("libraries.label"))).toBeTruthy();
+  });
+
+  it("puts the channel picker and the sync field in the same slot on the Channel tab", async () => {
+    // A channel *is* a library, so on that tab the slot the library picker
+    // uses holds the channel picker instead — with the sync field beside it,
+    // because the thing you do once per channel belongs in the bar and not in
+    // the first screenful. Nowhere else: the field must not appear on Ask.
+    render(<App />);
+    await waitFor(() => expect(libraries).toHaveBeenCalled());
+    expect(screen.queryByPlaceholderText(t("channel.urlPlaceholder"))).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: t("nav.channel") }));
+    expect(screen.getByPlaceholderText(t("channel.urlPlaceholder"))).toBeTruthy();
+    expect(screen.getByText(t("channel.syncStart"))).toBeTruthy();
+    expect(screen.queryByLabelText(t("libraries.label"))).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: t("nav.ask") }));
+    expect(screen.queryByPlaceholderText(t("channel.urlPlaceholder"))).toBeNull();
     expect(await screen.findByLabelText(t("libraries.label"))).toBeTruthy();
   });
 });

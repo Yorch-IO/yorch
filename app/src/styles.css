@@ -2571,7 +2571,6 @@ table.candidates tr.muted td {
 
 .candidate-title {
   display: block;
-  max-width: 34ch;
 }
 
 .candidate-meta,
@@ -2638,6 +2637,118 @@ table.candidates tr.muted td {
   margin-bottom: 0.5rem;
 }
 
+/* The videos on the left, everything that decides on the right. The table is
+   the wider side because a title, a verdict and a price share a row; the
+   controls are a column of fields and buttons and read fine at 22rem. Both
+   children need `min-width: 0` or the table refuses to shrink and the grid
+   overflows the scroller instead of wrapping. */
+.channel-columns {
+  display: grid;
+  grid-template-columns: minmax(30rem, 3fr) minmax(22rem, 2fr);
+  gap: 1.25rem;
+  margin-top: 1rem;
+  align-items: start;
+}
+
+.channel-videos,
+.channel-controls {
+  min-width: 0;
+}
+
+/* The first panel on either side sits at the top of its column; `.panel`'s
+   own top margin is for panels that follow another. */
+.channel-videos > .panel:first-child,
+.channel-controls > .panel:first-child {
+  margin-top: 0;
+}
+
+.channel-filtered {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+}
+
+/* The picker and the sync field, on one line in the top bar. Wraps rather
+   than overflowing, so a narrow window puts the field under the picker and
+   nothing is lost. */
+.channel-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  min-width: 0;
+}
+
+.channel-bar form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.channel-bar input[type="text"] {
+  width: 18rem;
+  max-width: 100%;
+}
+
+.channel-bar > p {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+/* Keyword chips. Pills, because a pill reads as a thing you press and a
+   checkbox reads as a thing you tick — and the tick in this screen already
+   means something else. The pressed state is the accent on the border and the
+   text and nothing else, so it survives both themes through the tokens. */
+.keyword-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0;
+}
+
+button.keyword-chip {
+  padding: 0.15rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+button.keyword-chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.keyword-count {
+  color: var(--muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+button.keyword-chip[aria-pressed="true"] .keyword-count {
+  color: inherit;
+}
+
+/* The reading sits on a row of its own under its video, indented past the
+   tick. It shares the video's muted state when the video is already indexed,
+   and its top padding is dropped so it reads as the same entry continued. */
+table.candidates tr.candidate-reading td {
+  padding-top: 0;
+}
+
+/* No rule between a video and its own reading: they are one entry. `:has()`
+   is a convenience here, not a dependency — an engine without it draws the
+   line and loses nothing else. */
+table.candidates tr:has(+ tr.candidate-reading) td {
+  border-bottom: none;
+}
+
+table.candidates tr.candidate-reading td > .candidate-meta:first-child {
+  margin: 0 0 0.15rem;
+}
+
 .channel-total dd {
   font-variant-numeric: tabular-nums;
 }
@@ -2657,12 +2768,10 @@ table.candidates tr.muted td {
     grid-template-columns: 1fr;
   }
 
-  /* The reading column is the widest and the least essential to a decision
-     already made, so it is what goes when there is no room. The verdict and
-     the cost are what the checkbox is answered from. */
-  table.candidates th:nth-child(4),
-  table.candidates td:nth-child(4) {
-    display: none;
+  /* One column: the videos first, because they come first in the DOM and a
+     stacked layout keeps document order. */
+  .channel-columns {
+    grid-template-columns: 1fr;
   }
 }
 

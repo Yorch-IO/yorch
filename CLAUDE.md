@@ -63,12 +63,15 @@ workflow timer and never a polling activity.
 
 **Reading a YouTube channel has its own document: `doc/CHANNEL.md`.** Read it
 before touching `youtube.py`, `channelstore.py`, anything under
-`brainworker/channel/`, `workflows/channel.py`, or `ChannelScreen.tsx`. It
-holds the rules that are not visible from any one file — why a channel *is* a
-library, why the catalogue is a file and the indexed state is Postgres, why the
-batch is a sum on a screen and not a gate, why the transcript pass reads the
-*uncorrected* stream, and why the quote widens its input where every other
-quote in this product widens only its output. **Built 2026-09-16 for the free
+`brainworker/channel/`, `workflows/channel.py`, `ChannelScreen.tsx`,
+`lib/channel.ts`, `lib/channels.tsx` or `lib/keywords.ts`. It holds the rules
+that are not visible from any one file — why a channel *is* a library, why the
+catalogue is a file and the indexed state is Postgres, why the batch is a sum
+on a screen and not a gate, why the transcript pass reads the *uncorrected*
+stream, why the quote widens its input where every other quote in this product
+widens only its output, and — since later the same day — why one tick drives
+both the probe and the approval, why the probe cap is a budget across rounds,
+and why the title-keyword filter reaches Discover but nothing else. **Built 2026-09-16 for the free
 plane and the desktop app only**; the paid plane holds the migration and the
 stage-vocabulary fork and serves no route, and the Angular client has nothing.
 That is a decision on the record, made with the count at the top of this file
@@ -3606,8 +3609,11 @@ maps them to localised labels.
   picker there would offer a choice that changes nothing. Channel is the third
   without one, for a different reason: a channel **is** a library
   (`lib_yt_<channelId>`), so that screen picks a channel and the library
-  follows — two pickers over one choice could disagree. A tab id has to be
-  lowercase letters only: `i18n.test.ts` reads `TABS` with `"([a-z]+)"` and
+  follows — two pickers over one choice could disagree. Its channel picker
+  takes the *same slot* in the top bar, with the sync field beside it
+  (`lib/channels.tsx`, the `LibrariesProvider` pattern with a channel in it),
+  because the thing you do once per channel belongs in the bar and not in the
+  first screenful. A tab id has to be lowercase letters only: `i18n.test.ts` reads `TABS` with `"([a-z]+)"` and
   would silently skip anything else.
 - **Every screen may take a `go`, and only Home reads it.** A component declaring
   no parameters is assignable to `(props: { go: (tab: Tab) => void }) => JSX`, so

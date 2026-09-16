@@ -144,6 +144,7 @@ def plan_for(settings: config.Settings, request: DiscoverRequest) -> est.Discove
         store.videos(request.channel_id),
         limit=request.limit,
         deep_limit=request.deep_limit,
+        video_ids=request.video_ids,
     )
 
 

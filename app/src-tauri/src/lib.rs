@@ -974,6 +974,10 @@ async fn channel_detail(
 }
 
 /// What reading this channel would cost. Free, and it reaches no provider.
+///
+/// `video_ids` is the screen's title-keyword filter: judge only these. Absent
+/// means the whole catalogue, and the quote and the run below take the same
+/// argument so the figure shown is the figure approved.
 #[tauri::command]
 async fn channel_quote(
     state: State<'_, AppState>,
@@ -981,6 +985,7 @@ async fn channel_quote(
     topic: String,
     limit: Option<u32>,
     deep_limit: Option<u32>,
+    video_ids: Option<Vec<String>>,
 ) -> Result<DiscoveryQuote> {
     let control = state.control().await?;
     control
@@ -989,6 +994,7 @@ async fn channel_quote(
             &topic,
             limit.unwrap_or(100),
             deep_limit.unwrap_or(10),
+            video_ids.as_deref(),
         )
         .await
 }
@@ -1000,6 +1006,7 @@ async fn channel_discover(
     topic: String,
     limit: Option<u32>,
     deep_limit: Option<u32>,
+    video_ids: Option<Vec<String>>,
 ) -> Result<StartedRun> {
     let control = state.control().await?;
     control
@@ -1008,6 +1015,7 @@ async fn channel_discover(
             &topic,
             limit.unwrap_or(100),
             deep_limit.unwrap_or(10),
+            video_ids.as_deref(),
         )
         .await
 }

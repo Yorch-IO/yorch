@@ -31,6 +31,11 @@ class DiscoverRequest:
     limit: int = 100
     deep_limit: int = 10
     tenant_id: str = LEGACY_TENANT_ID
+    #: The screen's title-keyword filter: judge only these videos. `None` is the
+    #: whole catalogue. **Appended and defaulted**, so a payload that never
+    #: carried it decodes as `None` and the replay's sequence is unchanged —
+    #: the same shape as `build_epub`, and why no `workflow.patched` is needed.
+    video_ids: list[str] | None = None
 
 
 @dataclass

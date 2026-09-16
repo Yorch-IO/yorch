@@ -359,6 +359,34 @@ def test_the_quote_is_free_and_reaches_no_provider(client, synced, monkeypatch):
     assert body["estimate"]["price_source"]
 
 
+def test_the_quote_judges_only_the_filtered_videos(client, synced):
+    # The screen's title-keyword filter. `evaluated` is what the screen prints
+    # as "se juzgarán N vídeos", so it has to be the filtered count and not the
+    # catalogue's — otherwise the quote prices a run that judges videos the
+    # person filtered out.
+    r = client.post(
+        f"/channels/{CHANNEL}/discovery-estimate",
+        json={
+            "topic": "un tema",
+            "limit": 3,
+            "deep_limit": 3,
+            "video_ids": [synced[0], synced[2], "zzzzzzzzzzz"],
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["evaluated"] == 2
+    assert r.json()["read"] == 2
+
+
+def test_a_filter_longer_than_a_catalogue_can_be_is_fastapis_own_422(client, synced):
+    r = client.post(
+        f"/channels/{CHANNEL}/discovery-estimate",
+        json={"topic": "un tema", "video_ids": ["a" * 11] * 501},
+    )
+    assert r.status_code == 422
+    assert isinstance(r.json()["detail"], list)
+
+
 def test_the_quote_says_how_many_videos_it_could_not_measure(client, synced):
     # A video with no duration cannot be quoted. Saying how many beats quoting
     # them at nothing, because a zero in a bill is a claim.

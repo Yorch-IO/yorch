@@ -754,6 +754,29 @@ pub struct ChannelDetail {
     pub videos: Vec<ChannelVideoRow>,
 }
 
+/// The body both channel query routes take.
+///
+/// One function for the quote and the run, because the quote is the figure the
+/// person was shown and the run is what they approved: a body built twice could
+/// price one set of videos and judge another. `video_ids` is the screen's
+/// title-keyword filter and is **omitted** when there is none — the Python
+/// dataclass reads an absent key as `None`, the whole catalogue, and sending
+/// `null` would say the same thing less clearly.
+fn channel_query_body(
+    topic: &str,
+    limit: u32,
+    deep_limit: u32,
+    video_ids: Option<&[String]>,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "topic": topic, "limit": limit, "deep_limit": deep_limit
+    });
+    if let Some(ids) = video_ids {
+        body["video_ids"] = serde_json::json!(ids);
+    }
+    body
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase"))]
 pub struct DiscoveryQuote {
@@ -3048,12 +3071,11 @@ impl Control {
         topic: &str,
         limit: u32,
         deep_limit: u32,
+        video_ids: Option<&[String]>,
     ) -> Result<DiscoveryQuote> {
         self.post_json(
             &format!("/channels/{channel_id}/discovery-estimate"),
-            &serde_json::json!({
-                "topic": topic, "limit": limit, "deep_limit": deep_limit
-            }),
+            &channel_query_body(topic, limit, deep_limit, video_ids),
             CHANNEL_TIMEOUT,
         )
         .await
@@ -3065,12 +3087,11 @@ impl Control {
         topic: &str,
         limit: u32,
         deep_limit: u32,
+        video_ids: Option<&[String]>,
     ) -> Result<StartedRun> {
         self.post_json(
             &format!("/channels/{channel_id}/discover"),
-            &serde_json::json!({
-                "topic": topic, "limit": limit, "deep_limit": deep_limit
-            }),
+            &channel_query_body(topic, limit, deep_limit, video_ids),
             START_TIMEOUT,
         )
         .await
@@ -3159,6 +3180,27 @@ mod tests {
             "section_title": "1.1 De la regla dada por Dios"
         }
     }"#;
+
+    #[test]
+    fn a_channel_query_carries_the_filter_only_when_there_is_one() {
+        // The Python side reads an absent `video_ids` as the whole catalogue.
+        // An empty list is *not* absent: it is a filter that matched nothing,
+        // and the quote for it has to say "0 vídeos" rather than quote the
+        // whole channel.
+        let none = channel_query_body("justicia", 100, 10, None);
+        assert_eq!(none["topic"], "justicia");
+        assert_eq!(none["limit"], 100);
+        assert_eq!(none["deep_limit"], 10);
+        assert!(none.get("video_ids").is_none());
+
+        let ids = vec!["aaaaaaaaaaa".to_string(), "bbbbbbbbbbb".to_string()];
+        let some = channel_query_body("justicia", 100, 10, Some(&ids));
+        assert_eq!(some["video_ids"], serde_json::json!(["aaaaaaaaaaa", "bbbbbbbbbbb"]));
+
+        let empty: Vec<String> = vec![];
+        let filtered_to_nothing = channel_query_body("justicia", 100, 10, Some(&empty));
+        assert_eq!(filtered_to_nothing["video_ids"], serde_json::json!([]));
+    }
 
     #[test]
     fn chunk_context_survives_the_round_trip_to_the_webview() {

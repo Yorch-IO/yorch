@@ -28,6 +28,8 @@ import {
   indexed,
   outsideFilter,
   overCap,
+  pageRows,
+  parkedRuns,
   probeBudget,
   seedFromDiscovery,
   selectable,
@@ -35,6 +37,7 @@ import {
   toggle,
   totals,
   unpickOnGate,
+  videoText,
   type Row,
 } from "./channel";
 
@@ -50,6 +53,7 @@ const video = (id: string, over: Partial<ChannelVideoRow> = {}): ChannelVideoRow
   url: `https://youtu.be/${id}`,
   documentId: null,
   activeVersionId: null,
+  available: true,
   ...over,
 });
 
@@ -66,6 +70,7 @@ const detail = (videos: ChannelVideoRow[]): ChannelDetail => ({
   syncedAt: "2026-09-16T00:00:00+00:00",
   videoCount: videos.length,
   unitsSpent: 3,
+  complete: true,
   videos,
 });
 
@@ -292,6 +297,87 @@ describe("selectable", () => {
       .toBe(false);
     expect(selectable(row({ video: video("a", { liveState: "upcoming" }) }))).toBe(false);
   });
+
+  it("is not offered for a video a full re-sync no longer found", () => {
+    // Deleted or private: the probe would fail at `resolve_video`, after a
+    // run row was opened for it.
+    expect(selectable(row({ video: video("a", { available: false }) }))).toBe(false);
+  });
+});
+
+describe("parkedRuns", () => {
+  // The screen held its probes in `useState` and nothing else, so a relaunch
+  // lost every gate it had opened — 10 of 11 on the first real channel. The
+  // run rows were fine; the table did not know they existed.
+  const catalogue = [
+    video("aaaaaaaaaaa", { documentId: "doc_a" }),
+    video("bbbbbbbbbbb", { documentId: "doc_b" }),
+    video("ccccccccccc"), // never probed: no document yet
+  ];
+  const parked = (over: Record<string, unknown> = {}) => ({
+    workflowId: "video-1",
+    documentId: "doc_a",
+    finishedAt: null,
+    ...over,
+  });
+
+  it("joins a run to its video through the document both payloads carry", () => {
+    expect(parkedRuns(catalogue, [parked()])).toEqual({ aaaaaaaaaaa: "video-1" });
+  });
+
+  it("ignores a run that has finished", () => {
+    // Approved, rejected or cancelled: re-attaching one would put a dead gate
+    // on a row that is either indexed or free to probe again.
+    expect(parkedRuns(catalogue, [parked({ finishedAt: "2026-09-16T12:00:00Z" })])).toEqual({});
+  });
+
+  it("ignores a run that has not registered a document yet", () => {
+    expect(parkedRuns(catalogue, [parked({ documentId: null })])).toEqual({});
+  });
+
+  it("drops a run whose document this channel's catalogue does not list", () => {
+    // A video the last sync did not mention. Inventing a row for it would put
+    // something on the table the channel does not say it has.
+    expect(parkedRuns(catalogue, [parked({ documentId: "doc_elsewhere" })])).toEqual({});
+  });
+
+  it("keeps the first run per video when a document has more than one", () => {
+    // `/runs` answers newest first, so the first is the live one.
+    const out = parkedRuns(catalogue, [
+      parked({ workflowId: "video-new" }),
+      parked({ workflowId: "video-old" }),
+    ]);
+    expect(out).toEqual({ aaaaaaaaaaa: "video-new" });
+  });
+
+  it("is empty rather than throwing on a channel with nothing probed", () => {
+    expect(parkedRuns(catalogue, [])).toEqual({});
+    expect(parkedRuns([], [parked()])).toEqual({});
+  });
+});
+
+describe("pageRows", () => {
+  const list = [
+    row({ video: video("a") }),
+    row({ video: video("b") }),
+    row({ video: video("c"), runId: "video-1" }),
+    row({ video: video("d") }),
+    row({ video: video("e"), runId: "video-2" }),
+  ];
+
+  it("draws the first N in table order", () => {
+    expect(pageRows(list, 2).map((r) => r.video.videoId)).toEqual(["a", "b", "c", "e"]);
+  });
+
+  it("always draws a row with a run, wherever the page boundary falls", () => {
+    // A parked gate is a pending decision; a page must not hide one.
+    expect(pageRows(list, 0).map((r) => r.video.videoId)).toEqual(["c", "e"]);
+    expect(pageRows(list, 1).map((r) => r.video.videoId)).toEqual(["a", "c", "e"]);
+  });
+
+  it("draws everything once the page covers it", () => {
+    expect(pageRows(list, 100)).toHaveLength(5);
+  });
 });
 
 describe("toggle", () => {
@@ -417,12 +503,30 @@ describe("overCap", () => {
 
 // --- the keyword filter --------------------------------------------------------
 
+describe("videoText", () => {
+  it("drops the cut-off tail of a truncated description", () => {
+    // `famil` was the sixth most frequent "word" of the first real channel.
+    const v = video("a", { description: "Hoy hablamos de la famil", descriptionTruncated: true });
+    expect(videoText(v)).toBe("Prédica a\nHoy hablamos de la ");
+    const whole = video("a", { description: "Hoy hablamos de la famil", descriptionTruncated: false });
+    expect(videoText(whole)).toBe("Prédica a\nHoy hablamos de la famil");
+  });
+});
+
 describe("filterRows", () => {
   const list = [
     row({ video: video("a", { title: "La justicia de Dios" }) }),
     row({ video: video("b", { title: "El perdón" }) }),
     row({ video: video("c", { title: "Sobre la oración" }), runId: "video-1" }),
   ];
+
+  it("matches on the description as well as the title", () => {
+    const withDescription = [
+      row({ video: video("x", { title: "Culto", description: "Hoy hablamos de la justicia" }) }),
+    ];
+    expect(filterRows(withDescription, new Set(["justicia"]))).toHaveLength(1);
+    expect(filterRows(withDescription, new Set(["culto"]))).toHaveLength(1);
+  });
 
   it("shows everything when no key is pressed", () => {
     expect(filterRows(list, new Set())).toHaveLength(3);

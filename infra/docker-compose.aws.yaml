@@ -1,0 +1,44 @@
+# AWS overlay, for a developer's local stack only.
+#
+#     docker compose -f docker-compose.yaml -f docker-compose.dev.yaml \
+#       -f docker-compose.adc.yaml -f docker-compose.aws.yaml up -d --build api worker backend
+#
+# Production needs none of this: the host holds an instance role, boto3 reaches
+# it through IMDS, and `apply.sh` writes the three Transcribe settings into
+# `.env` **and** the worker's own `environment:` block (see the comment there —
+# a variable in `.env` reaches no container by itself). A workstation has no
+# instance role, so this mounts the developer's own AWS profile read-only into
+# the two containers that call AWS — the worker, which stages audio and starts
+# jobs, and the paid plane, which reads nothing from AWS today but may — and
+# names the Transcribe settings the worker needs to quote a recording at all:
+# `Aws.configured` is `bool(region and bucket)`, and unset it refuses the quote.
+#
+# The bucket is the deployment's own, under its `transcribe/` prefix, keyed by
+# tenant and version: a local run and a production run never share a key, and
+# the lifecycle rule retires whatever lands there after seven days.
+#
+# **Not applied by the desktop app.** `compose_args()` adds the ADC overlay
+# conditionally because a missing bind-mount source becomes a directory; this
+# one is for a shell, by hand, and only on a machine with `~/.aws`.
+services:
+  worker:
+    environment:
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      AWS_SDK_LOAD_CONFIG: "1"
+      BRAIN_AWS_REGION: ${BRAIN_AWS_REGION:-us-west-2}
+      BRAIN_TRANSCRIBE_BUCKET: ${BRAIN_TRANSCRIBE_BUCKET:-vervux-prod-brain-006392690655}
+      BRAIN_TRANSCRIBE_PREFIX: ${BRAIN_TRANSCRIBE_PREFIX:-transcribe}
+      BRAIN_TRANSCRIBE_USD_PER_MINUTE: ${BRAIN_TRANSCRIBE_USD_PER_MINUTE:-0.024}
+    volumes:
+      - ${HOME}/.aws:/root/.aws:ro
+
+  api:
+    environment:
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      AWS_SDK_LOAD_CONFIG: "1"
+      BRAIN_AWS_REGION: ${BRAIN_AWS_REGION:-us-west-2}
+      BRAIN_TRANSCRIBE_BUCKET: ${BRAIN_TRANSCRIBE_BUCKET:-vervux-prod-brain-006392690655}
+      BRAIN_TRANSCRIBE_PREFIX: ${BRAIN_TRANSCRIBE_PREFIX:-transcribe}
+      BRAIN_TRANSCRIBE_USD_PER_MINUTE: ${BRAIN_TRANSCRIBE_USD_PER_MINUTE:-0.024}
+    volumes:
+      - ${HOME}/.aws:/root/.aws:ro

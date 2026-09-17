@@ -911,6 +911,11 @@ class AudioStaged:
     bytes: int
     seconds: int
     reused: bool = False
+    #: The sha256 of the audio bytes, when the staging read them — a bucket
+    #: object hashed on the way through. Empty on the YouTube path, where the
+    #: identity is a proxy and nothing re-reads the download. Appended and
+    #: defaulted, so a history from before the field decodes unchanged.
+    sha256: str = ""
 
 
 @dataclass
@@ -927,6 +932,10 @@ class TranscriptionJob:
     transcript_uri: str = ""
     failure_reason: str = ""
     language: str = ""
+    #: What produced the transcript, as the archive's sidecar records it:
+    #: `aws-transcribe-batch`, or `whisper.cpp/<model>` for one the desktop
+    #: app made on the person's own machine. Appended and defaulted.
+    engine: str = "aws-transcribe-batch"
 
 
 @dataclass
@@ -977,3 +986,211 @@ class VideoResult:
     #: Which half produced the text, so a reader of a finished run can tell
     #: whether anything was paid to Amazon at all.
     transcript_source: str = ""
+
+
+# --- audio from a customer's own S3 bucket -----------------------------------
+#
+# Paid plane only. The free plane serves no route that builds any of these,
+# and the worker's `Aws` settings are unset there, so `_aws()` refuses before a
+# quote if anyone starts the workflow by hand against the local stack.
+
+
+@dataclass
+class BucketSource:
+    """Where a customer's audio lives, and how this deployment may read it.
+
+    Nothing in here is secret and nothing in here is ours: the customer creates
+    an IAM role that trusts this deployment's host role with an ExternalId equal
+    to their tenant id, and hands over the bucket, the prefix and the role's
+    ARN. The trust policy is the gate. `role_arn` is therefore a plain string in
+    a workflow payload — which the module docstring forbids for a credential and
+    permits for this, because holding the ARN buys nothing without being the
+    principal the trust policy names.
+
+    **Nothing in here names Casa Roca.** The first bucket this was built for
+    carries a manifest with columns called `archivo`, `fecha_predica` and
+    `fuente`; those names arrive in `manifest_map` on the request and appear in
+    no source file. The next customer's columns are called something else.
+
+    `archive_prefix` is where the raw transcript is written back into *their*
+    bucket, so that "never pay ASR twice" holds even after this deployment's own
+    copy is gone. Empty switches the write-back off. It doubles as a cache: a
+    transcript found there whose sidecar names the same audio bytes is used
+    instead of starting a job.
+    """
+
+    bucket: str
+    prefix: str = ""
+    role_arn: str = ""
+    #: A hint. Empty means "ask S3 where the bucket lives", which is one extra
+    #: request per session and always right; a wrong hint is a redirect the SDK
+    #: follows. Kept so a caller who knows can save the round trip.
+    region: str = ""
+    archive_prefix: str = "transcripciones/"
+    #: The manifest's key inside the bucket, and which of its columns mean
+    #: what. Both optional; a bucket with no manifest is catalogued from its
+    #: keys alone. Recognised mapping names: ``file``, ``title``, ``author``,
+    #: ``recorded``, ``published``, ``source``, ``url``.
+    manifest_key: str = ""
+    manifest_map: dict[str, str] = field(default_factory=dict)
+    #: What Amazon is told to expect. `es-US` rather than the video path's
+    #: `es-ES`: the first corpus is Colombian speech, and that is the US-Spanish
+    #: model's side of the split. Unmeasured, and per bucket so it can move.
+    language: str = "es-US"
+
+
+@dataclass
+class BucketObject:
+    """One object in the catalogue, as the sync learned it for free.
+
+    `container` is what the bytes say, never what the key says — the first
+    corpus has M4A files wearing `.mp3`, and Transcribe's `MediaFormat` has to
+    match the bytes or the job fails after the upload. `duration_s` comes from
+    the file's own headers through :mod:`brainworker.audioprobe`; when it could
+    only be estimated from the size, `duration_estimated` says so and the quote
+    built on it is flagged.
+
+    Whether the object is *indexed* is deliberately not here — that is
+    Postgres, through `document.source_key` in the bucket's library, joined on
+    read. See `channelstore` for why a second record of that fact is refused.
+    """
+
+    key: str
+    etag: str
+    size: int
+    last_modified: str
+    container: str = ""
+    duration_s: int = 0
+    duration_estimated: bool = False
+    title: str = ""
+    author: str = ""
+    #: ISO dates, or "" — a manifest value that did not parse is kept in
+    #: `warnings` rather than silently dropped or silently invented.
+    recorded_at: str = ""
+    published_at: str = ""
+    source: str = ""
+    url: str = ""
+    #: False once a sync no longer finds the key. Never deleted, so a
+    #: re-upload lines back up with its history.
+    available: bool = True
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BucketSyncRequest:
+    """Catalogue a bucket. Free — S3 requests only, no model and no Amazon job."""
+
+    source: BucketSource
+    #: Required, no default: the ExternalId the role assumption presents is
+    #: this value, and a default here would present the legacy organisation's
+    #: id to every customer's trust policy. The `ChatTurn.tenant_id` rule.
+    tenant_id: str
+    library_name: str = ""
+    #: Index into a library that already exists instead of the `lib_s3_…` this
+    #: bucket derives.
+    #:
+    #: A bucket *is* a library by default, for the reason a channel is — but
+    #: "these recordings belong in the shelf I already have" is a real request
+    #: and the derived id cannot express it. What it buys is one corpus for
+    #: retrieval and one graph; what it costs is that the recordings can no
+    #: longer be asked separately, because the library is the unit of
+    #: narrowing. `ensure_library` still refuses a library another organisation
+    #: owns, so this is not a way into somebody else's shelf.
+    library_id: str = ""
+
+
+@dataclass
+class BucketSynced:
+    """What one sync found, for the screen to report."""
+
+    bucket_id: str
+    library_id: str
+    objects: int
+    added: int
+    changed: int
+    absent: int
+    #: Objects whose duration could not be read from their headers and was
+    #: estimated from size instead — the number the quote is least sure of.
+    estimated: int
+    manifest_rows: int
+    #: Rows of the manifest that matched no object, and objects no row named.
+    unmatched_rows: int
+    unmatched_objects: int
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AudioRequest:
+    """One object to index. The `VideoRequest` analogue for a bucket.
+
+    Carries its own `BucketSource` rather than a bucket id to look up, for the
+    reason `VideoRequest.fetch_queue` travels in the request: a workflow may
+    only decide on what its own history holds. A run parked seven days at its
+    gate must fetch from the bucket it was quoted against, not from whatever
+    `bucket.json` says by the time somebody approves it.
+    """
+
+    library_id: str
+    source: BucketSource
+    key: str
+    #: Required, no default. See `BucketSyncRequest.tenant_id`.
+    tenant_id: str
+    title: str = ""
+    author: str | None = None
+    auto_approve: bool = False
+    reindex: bool = False
+    library_name: str = ""
+    #: What the catalogue knew about this object when the run was started, so
+    #: the probe can quote from a duration already read and the document can
+    #: carry the manifest's dates without a second read of the CSV.
+    object: BucketObject | None = None
+    #: `transcribe` (Amazon, paid, on the worker) or `local` (whisper.cpp on
+    #: the person's own machine through the desktop app: free in money, paid
+    #: in hours). Decided per batch before quoting, so the gate quotes exactly
+    #: what will run; a run parked for a local transcript can be switched to
+    #: Amazon by signal, which re-opens the gate with the price.
+    transcriber: str = "transcribe"
+
+
+@dataclass
+class LocalTranscript:
+    """A transcript the desktop app made and uploaded, as the signal carries it.
+
+    `path` is where `POST /runs/{id}/transcript` landed the file, inside the
+    organisation's inbox as the worker sees it; `stage_transcript` checks it
+    with `Paths.contains` before opening it, the guard `stage_audio` makes for
+    the same reason: the string arrives over HTTP. `engine` and `model` are
+    what the app actually ran, for the archive's sidecar.
+    """
+
+    path: str
+    engine: str = "whisper.cpp"
+    model: str = ""
+    language: str = ""
+
+
+@dataclass
+class MediaLinkRequest:
+    """Ask for a presigned link to one object. Tenant required, as everywhere here."""
+
+    source: BucketSource
+    key: str
+    tenant_id: str
+    start_s: float = 0.0
+    source_url: str = ""
+
+
+@dataclass
+class MediaLink:
+    """A presigned URL for one object, minted on click and never stored.
+
+    It dies with the assumed-role session — role chaining caps that at an hour
+    — so a link written into a conversation turn would be dead on the next
+    read. `source_url` is the manifest's own link to the public feed, which
+    never expires and is the other half of "enlace reproducible".
+    """
+
+    url: str
+    expires_at: str
+    start_s: float = 0.0
+    source_url: str = ""

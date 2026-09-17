@@ -23,6 +23,25 @@ import { RunAudit } from "./RunAudit";
 import { api, errorGuidanceKey, errorMessage, type StageOptions } from "./lib/api";
 import { unfinished, waiting, type QueueItem } from "./lib/importQueue";
 import { runDot } from "./lib/runState";
+import { useLocalTranscriber } from "./lib/localTranscriber";
+import { AWAITING, percent } from "./lib/transcribing";
+
+/** What to call a library on a queue row: its name, or its id when it has none
+ *  — and the id alone for one this installation cannot see, which is a real
+ *  state rather than a gap. Shorter than `libraryLabel`'s "Name (id)" on
+ *  purpose: the row already carries the document's title, the kind and the
+ *  state, and this is the fourth thing on it. */
+export interface QueueLibrary {
+  id: string;
+  name: string;
+}
+
+function libraryName(id: string | null, rows: QueueLibrary[]): string | null {
+  if (!id) return null;
+  const found = rows.find((l) => l.id === id);
+  const named = found?.name.trim() ?? "";
+  return named === "" || named === id ? id : named;
+}
 
 /** Stopping a run destroys work already paid for, so it cannot happen on one
  *  click. The same two-step `ActivityIndicator` uses, for the same reason. */
@@ -138,12 +157,16 @@ function Activate({
 
 function Row({
   item,
+  showLibrary,
   stages,
   onDecide,
   onChanged,
   locale,
 }: {
   item: QueueItem;
+  /** The library this run went to, or null to leave it off — which is what the
+   *  screen does when the queue is already narrowed to one. */
+  showLibrary: string | null;
   stages: StageOptions;
   /** May return a promise; the row re-enables its buttons when it settles,
    *  whichever way it settles. */
@@ -158,6 +181,9 @@ function Row({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [deciding, setDeciding] = useState(false);
+  const local = useLocalTranscriber();
+  const [switching, setSwitching] = useState(false);
+  const [switched, setSwitched] = useState(false);
   const { run } = item;
   const live = unfinished(run);
   const state = item.state ?? run.state;
@@ -169,12 +195,17 @@ function Row({
 
   return (
     <li className="queue-item">
-      <div className="queue-row">
+      <div className={`queue-row${showLibrary !== null ? " has-library" : ""}`}>
         <span className={`dot ${runDot(item.state ?? run.state)}`} aria-hidden="true" />
         <span className="queue-name">{name}</span>
         <span className="badge">
           {t(`home.run.kind.${run.kind}`, { defaultValue: run.kind })}
         </span>
+        {/* Which shelf this went to. The queue spans every library now, and
+            without this a row is a title with no answer to "where". */}
+        {showLibrary !== null && (
+          <span className="muted small queue-library">{showLibrary}</span>
+        )}
         <span className="muted small">
           {/* The live state when Temporal answered, the catalog's otherwise.
               Never blank: a row with no state reads as a row that is broken. */}
@@ -189,8 +220,13 @@ function Row({
               `activity.stage.*` is a present-continuous progress label, so a run
               that ended half an hour ago claimed to still be doing something.
               Where it died is a real question, and the ledger below answers it
-              properly; the row is not the place. */}
-          {live && item.stage && item.stage !== state && (
+              properly; the row is not the place.
+
+              And a run parked for this machine sits in the `transcribing`
+              stage while transcribing is exactly what is *not* happening —
+              the stage is where the workflow is, the state is what it is
+              waiting for. Printing both would read as a contradiction. */}
+          {live && item.stage && item.stage !== state && state !== AWAITING && (
             <> · {t(`activity.stage.${item.stage}`, { defaultValue: item.stage })}</>
           )}
         </span>
@@ -215,6 +251,45 @@ function Row({
           )}
         </span>
       </div>
+
+      {/* A run parked for a transcript this machine has not made yet.
+          Rendered here as well as on Services because this is the screen a
+          person is on when they wonder why an approved run is not moving — and
+          because the way out, handing it to Amazon, belongs beside the run it
+          is about rather than in a settings panel. */}
+      {state === AWAITING && (
+        <p className="muted small">
+          {t(local.paused ? "queue.transcribeHerePaused" : "queue.transcribeHere")}
+          {local.current?.workflowId === run.workflowId && (
+            <>
+              {" "}
+              <progress value={percent(local.attempt)} max={100} />{" "}
+              {t(`whisper.phase.${local.attempt?.phase ?? "audio"}`)}
+            </>
+          )}{" "}
+          <button
+            type="button"
+            className="link"
+            disabled={switching || switched}
+            onClick={() => {
+              setSwitching(true);
+              void local
+                .giveUp(run.workflowId)
+                .then((ok) => setSwitched(ok))
+                // Always, whichever way it went: a refused switch that left the
+                // button disabled would be the `deciding` latch again, one
+                // screen over.
+                .finally(() => {
+                  setSwitching(false);
+                  onChanged();
+                });
+            }}
+          >
+            {t(switching ? "queue.transcribeSwitching" : "queue.transcribeOnAmazon")}
+          </button>
+          {switched && <> {t("queue.transcribeSwitched")}</>}
+        </p>
+      )}
 
       {item.progress && (
         <p className="muted small">
@@ -311,6 +386,9 @@ export function ImportQueue({
   items,
   loaded,
   error,
+  filter,
+  onFilter,
+  libraries,
   stages,
   onDecide,
   onChanged,
@@ -319,6 +397,14 @@ export function ImportQueue({
   items: QueueItem[];
   loaded: boolean;
   error: unknown;
+  /** The library the queue is narrowed to, and `null` for every one of them. */
+  filter: string | null;
+  onFilter: (libraryId: string | null) => void;
+  /** What the narrowing control offers and what names a row's library. A prop
+   *  rather than a `useLibraries()` call, because everything else this
+   *  component needs is one too: reading a context here would make every test
+   *  that renders the Import screen mount a provider to see a file chooser. */
+  libraries: QueueLibrary[];
   stages: StageOptions;
   /** May return a promise; the row re-enables its buttons when it settles,
    *  whichever way it settles. */
@@ -331,6 +417,7 @@ export function ImportQueue({
   locale: string;
 }) {
   const { t } = useTranslation();
+  const rows = libraries;
 
   if (error !== null)
     // A notice, not the red panel: a control plane that is not up yet is the
@@ -347,17 +434,39 @@ export function ImportQueue({
 
   return (
     <section className="panel">
-      <h3>{t("queue.title")}</h3>
+      <div className="queue-head">
+        <h3>{t("queue.title")}</h3>
+        {/* The queue spans every library, so this narrows rather than scopes.
+            It is a request parameter, not a filter over what arrived — see
+            `useImportQueue`, where the 30-run limit is the reason. */}
+        <label className="field field-inline queue-filter">
+          <span>{t("queue.filter")}</span>
+          <select
+            value={filter ?? ""}
+            onChange={(e) => onFilter(e.target.value === "" ? null : e.target.value)}
+          >
+            <option value="">{t("queue.filterAll")}</option>
+            {rows.map((l) => (
+              <option key={l.id} value={l.id}>
+                {libraryName(l.id, rows)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       {!loaded ? (
         <p className="waiting">{t("queue.loading")}</p>
       ) : items.length === 0 ? (
-        <p className="muted">{t("queue.empty")}</p>
+        <p className="muted">{filter === null ? t("queue.empty") : t("queue.emptyHere")}</p>
       ) : (
         <ul className="queue">
           {items.map((item) => (
             <Row
               key={item.run.id}
               item={item}
+              // Only when the list spans more than one: repeating the library
+              // somebody just filtered to on every row is noise.
+              showLibrary={filter === null ? libraryName(item.run.libraryId, rows) : null}
               stages={stages}
               onDecide={onDecide}
               onChanged={onChanged}

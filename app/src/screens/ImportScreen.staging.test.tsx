@@ -37,7 +37,11 @@ vi.mock("../lib/libraries", async (importOriginal) => {
     ...actual,
     useLibraries: () => ({
       selected: "lib_1",
-      libraries: [],
+      // `rows`, which is what the real hook returns — the queue names each
+      // run's library from it. The double said `libraries` and the real state
+      // has never had that field, so it agreed with the test and with nothing
+      // else.
+      rows: [{ id: "lib_1", name: "Teología" }],
       loading: false,
       error: null,
       select: vi.fn(),

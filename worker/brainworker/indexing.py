@@ -16,6 +16,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+from . import scripture
 from .graph.schema import chunk_id as make_chunk_id
 
 log = logging.getLogger(__name__)
@@ -25,7 +26,12 @@ log = logging.getLogger(__name__)
 #: `tenant_id` is first because it is the one filter every search carries: a
 #: library is a shelf inside an organisation, and every other key here narrows
 #: within one.
-PAYLOAD_INDEXES = ("tenant_id", "library_id", "version_id", "kind", "document_id")
+PAYLOAD_INDEXES = ("tenant_id", "library_id", "version_id", "kind", "document_id",
+                   "source_name", "scripture_refs", "scripture_chapters")
+#: Payload fields indexed as integers rather than keywords: a `range` filter
+#: over an unindexed field scans the collection, and `recorded_day` is what a
+#: date range narrows on.
+INTEGER_INDEXES = ("recorded_day",)
 
 
 def version_scope(tenant_id: str, version_id: str) -> dict[str, str]:
@@ -155,6 +161,8 @@ class QdrantWriter:
         source_title: str,
         model: str,
         dimensions: int,
+        recorded_day: int | None = None,
+        source_name: str = "",
     ) -> None:
         self._q = qdrant
         self.tenant_id = tenant_id
@@ -162,6 +170,15 @@ class QdrantWriter:
         self.document_id = document_id
         self.version_id = version_id
         self.source_title = source_title
+        #: Two document-level facts a retrieval filter narrows on, written on
+        #: every point of the version because a point is what a filter sees.
+        #: `recorded_day` is days since the epoch — an integer so Qdrant's
+        #: `range` applies with no datetime index — and absent, never zero,
+        #: for a document with no date: zero would be 1970 and would match a
+        #: range that reaches it. Both appended and defaulted so every
+        #: existing caller and every existing point are unchanged.
+        self.recorded_day = recorded_day
+        self.source_name = source_name
         #: Read by `runner.index_chunks`, which refuses to write vectors from a
         #: model this collection does not already hold. Two models of equal width
         #: are interchangeable to Qdrant and not to the cosine.
@@ -221,12 +238,29 @@ class QdrantWriter:
                     # correction changed the offsets.
                     "char_span": [r.chunk.char_from, r.chunk.char_to],
                     "cell_ref": r.chunk.cell_ref,
+                    **self._filterable(r.chunk.text),
                 },
             )
             for r in rows
         ]
         self._q.upsert(points)
         return len(points)
+
+    def _filterable(self, text: str) -> dict[str, Any]:
+        """The payload fields a `Question` may narrow on beyond the scope.
+
+        The scripture lists are computed per chunk from its own text through
+        `scripture.payload_fields`, so a filter on `Romanos 8` reaches the
+        chunk where the reference was *spoken* — and not the exposition that
+        follows without repeating it, which the screen says in so many words.
+        """
+        refs, chapters = scripture.payload_fields(text)
+        out: dict[str, Any] = {"scripture_refs": refs, "scripture_chapters": chapters}
+        if self.recorded_day is not None:
+            out["recorded_day"] = self.recorded_day
+        if self.source_name:
+            out["source_name"] = self.source_name
+        return out
 
     def prune_tail(self, keep: int) -> int:
         """Delete this version's points whose `chunk_index` is at or above `keep`.

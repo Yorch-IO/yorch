@@ -67,6 +67,12 @@ class StoredChannel:
     units_spent: int = 0
     library_id: str = ""
     schema: int = SCHEMA
+    #: Whether a sync has walked the uploads playlist to its end. Until it has,
+    #: the catalogue is "the most recent N" and an incremental sync must not
+    #: stop at the first page it already knows — every catalogue written under
+    #: the old 500-video cap is exactly that case, and a file from before the
+    #: field reads `False`, so the next sync walks to the end once.
+    complete: bool = False
 
 
 def library_id_for(channel_id: str) -> str:
@@ -139,6 +145,7 @@ class ChannelStore:
         *,
         units_spent: int = 0,
         now: datetime | None = None,
+        complete: bool | None = None,
     ) -> StoredChannel:
         """Merge a fetch into what is already known and write both files.
 
@@ -146,10 +153,36 @@ class ChannelStore:
         replacement: a sync is allowed to be partial — a limit, a quota that ran
         out mid-page — and a partial answer is not a statement that the videos it
         did not mention have gone.
+
+        `complete` left as `None` keeps what the channel already recorded: a
+        partial fetch into a complete catalogue does not make it incomplete.
+        """
+        merged = merge_catalogue(self.videos(ref.channel_id), videos)
+        if complete is None:
+            current = self.read(ref.channel_id)
+            complete = current.complete if current is not None else False
+        return self.write(
+            ref, merged, units_spent=units_spent, now=now, complete=complete
+        )
+
+    def write(
+        self,
+        ref: ChannelRef,
+        merged: list[ChannelVideo],
+        *,
+        units_spent: int = 0,
+        now: datetime | None = None,
+        complete: bool = False,
+    ) -> StoredChannel:
+        """Write an already-merged catalogue and its channel file.
+
+        The page-by-page sync calls this once per page with the list it is
+        accumulating in memory, rather than `save`, which would re-read and
+        re-parse the whole file for every fifty videos — on a channel of five
+        thousand that is a hundred parses of a three-megabyte file for nothing.
         """
         directory = self.dir_for(ref.channel_id)
         directory.mkdir(parents=True, exist_ok=True)
-        merged = merge_catalogue(self.videos(ref.channel_id), videos)
         _dump(
             directory / VIDEOS_FILE,
             {"schema": SCHEMA, "channel_id": ref.channel_id,
@@ -161,6 +194,7 @@ class ChannelStore:
             video_count=len(merged),
             units_spent=units_spent,
             library_id=library_id_for(ref.channel_id),
+            complete=complete,
         )
         _dump(directory / CHANNEL_FILE, asdict(stored))
         return stored
@@ -187,6 +221,7 @@ class ChannelStore:
                 units_spent=int(payload.get("units_spent") or 0),
                 library_id=str(payload.get("library_id") or ""),
                 schema=int(payload.get("schema") or SCHEMA),
+                complete=bool(payload.get("complete", False)),
             )
         except (TypeError, ValueError):
             return None
@@ -201,6 +236,7 @@ def _video_of(row: dict) -> ChannelVideo:
         duration_s=int(row.get("duration_s") or 0),
         live_state=str(row.get("live_state") or "none"),
         thumbnail=str(row.get("thumbnail") or ""),
+        available=bool(row.get("available", True)),
     )
 
 

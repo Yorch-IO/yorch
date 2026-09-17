@@ -418,6 +418,26 @@ table.services th {
   font-size: 0.8rem;
 }
 
+/* The same badge for a fact that is good news rather than a caveat — the
+   device whisper.cpp says it will use, when that device is a GPU. The plain
+   badge stays amber for the processor, which is not a failure and is an order
+   of magnitude slower: the colour is the difference between a batch measured
+   in hours and one measured in days. */
+.badge-ok {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+/* The two questions the Services panel answers at a glance. Wider spacing than
+   a probe list, because each line is a statement rather than a check. */
+.whisper-state {
+  margin-bottom: 0.6rem;
+}
+
+.whisper-state li {
+  margin-bottom: 0.25rem;
+}
+
 .progress {
   color: var(--accent);
 }
@@ -2481,6 +2501,16 @@ button.link.active {
   justify-content: start;
 }
 
+/* One track per child, and the library cell is **conditional** — it is left off
+   once the queue is narrowed to one library. A conditional child in a grid of
+   fixed tracks does not simply go missing: every later cell slides one track
+   left, so the `1fr` that pushes the tail of the row to the right would land on
+   the date instead of the state and the whole row would re-align the moment
+   somebody filtered. Hence a variant rather than a spare track. */
+.queue-row.has-library {
+  grid-template-columns: auto minmax(0, max-content) auto auto 1fr auto auto auto;
+}
+
 .queue-name {
   font-weight: 600;
   overflow-wrap: anywhere;
@@ -2631,6 +2661,37 @@ table.candidates tr.muted td {
   color: var(--warn);
 }
 
+/* The queue's heading and its narrowing control on one line. The control is a
+   narrowing over a project-wide list, not the scope of the screen, so it sits
+   with the list rather than in the top bar beside the library picker — two
+   controls that look alike and mean different things is the confusion this
+   whole change exists to end. */
+.queue-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.queue-head h3 {
+  margin-bottom: 0;
+}
+
+.queue-filter {
+  font-size: 0.85rem;
+}
+
+/* Which shelf a run went to. Muted and after the kind badge: it answers
+   "where", which is a question somebody asks only once per row. */
+.queue-library {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 16ch;
+}
+
 .channel-bulk {
   display: flex;
   gap: 0.5rem;
@@ -2685,15 +2746,35 @@ table.candidates tr.muted td {
   margin: 0;
 }
 
+/* Wide enough for `https://www.youtube.com/@canal` and no wider: at 1440 the
+   picker, the two re-syncs, this field and its button have to share one line
+   with the language switch, or the bar grows by a row on this tab alone. */
 .channel-bar input[type="text"] {
-  width: 18rem;
+  width: 13rem;
   max-width: 100%;
+}
+
+.channel-news {
+  font-size: 0.85rem;
 }
 
 .channel-bar > p {
   flex: 1 1 100%;
   margin: 0;
   font-size: 0.85rem;
+}
+
+/* The two re-syncs sit beside the picker: the incremental one as a button, the
+   full one as a link because it is the rare one and the one that marks. */
+.channel-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.channel-more {
+  align-items: center;
+  margin-top: 0;
 }
 
 /* Keyword chips. Pills, because a pill reads as a thing you press and a
@@ -2817,4 +2898,69 @@ ul.inferences > li {
 
 ul.inferences > li > p {
   margin: 0;
+}
+
+/* -- the Bucket screen -------------------------------------------------- */
+
+/* The filters sit on one wrapping line above the table; `.channel-bulk`
+   already lays out the two selection buttons under them. */
+.bucket-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.bucket-filters input[type="search"] {
+  flex: 1 1 14rem;
+  min-width: 10rem;
+}
+
+.bucket-filters input[type="text"] {
+  width: 5.5rem;
+}
+
+/* An object's state, coloured the way a verdict is: the same three tokens,
+   so dark mode inverts them together. */
+.state-indexed {
+  color: var(--ok);
+}
+
+.state-pending {
+  color: var(--warn);
+}
+
+.state-unindexed {
+  color: var(--muted);
+}
+
+/* The register form: one column of fields, the manifest mapping fenced. */
+.bucket-register .field {
+  margin-bottom: 0.5rem;
+}
+
+.bucket-register fieldset .field-inline {
+  margin: 0.25rem 0;
+}
+
+.bucket-register fieldset .field-inline > span {
+  min-width: 14rem;
+}
+
+/* The narrowings under the effort control: one wrapping row of small
+   fields, so the composer does not grow a screenful for four options. */
+.narrowings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+}
+
+.narrowings .field-inline > span {
+  min-width: 7rem;
+}
+
+.narrowings .caveat {
+  flex-basis: 100%;
+  margin: 0.25rem 0 0;
 }

@@ -21,17 +21,22 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { RunListItem } from "./api";
-import { unfinished, useImportQueue, waiting } from "./importQueue";
+import { QUEUE_LIMIT, unfinished, useImportQueue, waiting } from "./importQueue";
 
-const { runsList, runStatus, ingestGate } = vi.hoisted(() => ({
+const { runsList, runStatus, ingestGate, videoGate, audioGate } = vi.hoisted(() => ({
   runsList: vi.fn(),
   runStatus: vi.fn(),
   ingestGate: vi.fn(),
+  videoGate: vi.fn(),
+  audioGate: vi.fn(),
 }));
 
 vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
-  return { ...actual, api: { ...actual.api, runsList, runStatus, ingestGate } };
+  return {
+    ...actual,
+    api: { ...actual.api, runsList, runStatus, ingestGate, videoGate, audioGate },
+  };
 });
 
 function row(over: Partial<RunListItem> = {}): RunListItem {
@@ -151,11 +156,28 @@ it("does not re-ask for a report it already has", async () => {
   expect(ingestGate).toHaveBeenCalledTimes(1);
 });
 
-it("asks nothing at all until a library is selected", async () => {
+it("asks about every library when nothing narrows it", async () => {
+  // `null` used to mean "no library selected, ask nothing", which is what made
+  // a probe started from the Channel tab — whose library the picker is never
+  // on — invisible on the one screen that shows what is in flight. It means
+  // "every library" now, and the request says so by *omitting* the parameter:
+  // an empty `library_id` on the wire would narrow to nothing.
   const { result } = renderHook(() => useImportQueue(null));
   await waitFor(() => expect(result.current.loaded).toBe(true));
-  expect(runsList).not.toHaveBeenCalled();
-  expect(result.current.items).toEqual([]);
+  expect(runsList).toHaveBeenCalledTimes(1);
+  expect(runsList.mock.calls[0]![0]).toEqual({ limit: QUEUE_LIMIT });
+  expect("libraryId" in runsList.mock.calls[0]![0]).toBe(false);
+});
+
+it("narrows to one library on the request, not over what arrived", async () => {
+  // `QUEUE_LIMIT` is 30, so filtering after the fetch would show whichever of
+  // this library's runs the last 30 of *every* library happened to include.
+  const { result } = renderHook(() => useImportQueue("lib_yt_UCabc"));
+  await waitFor(() => expect(result.current.loaded).toBe(true));
+  expect(runsList.mock.calls[0]![0]).toEqual({
+    libraryId: "lib_yt_UCabc",
+    limit: QUEUE_LIMIT,
+  });
 });
 
 it("reports a queue it could not read, without throwing away the screen", async () => {
@@ -176,4 +198,30 @@ it("decides unfinished by the timestamp, never by the state column", () => {
 it("reads waiting off the catalog, so it survives a Temporal it cannot reach", () => {
   expect(waiting(row({ state: "awaiting_approval" }))).toBe(true);
   expect(waiting(row({ state: "running" }))).toBe(false);
+});
+
+it("asks an audio run for its own gate, and renders it as a video gate", async () => {
+  // A bucket recording publishes the same report a video does, on
+  // `/runs/{id}/audio-gate`. The queue keys on the kind to know which route to
+  // ask, and hands the report to `VideoGateReview` either way — one gate shape,
+  // two routes, and a kind the queue had not heard of would have asked the
+  // document gate and rendered nothing.
+  runsList.mockResolvedValue({
+    runs: [row({ id: "audio-1", workflowId: "audio-1", kind: "audio", state: "awaiting_approval" })],
+    nextBefore: null,
+  });
+  runStatus.mockResolvedValue({
+    workflowId: "audio-1", stage: "awaiting_approval", state: "awaiting_approval",
+    progress: null, scores: null,
+  });
+  const report = { runId: "audio-1", documentId: "doc_a", versionId: "ver_a" };
+  audioGate.mockResolvedValue(report);
+
+  const { result } = renderHook(() => useImportQueue("lib_1"));
+  await waitFor(() => expect(result.current.items.length).toBe(1));
+  await waitFor(() => expect(result.current.items[0]?.videoGate).toEqual(report));
+  expect(audioGate).toHaveBeenCalledWith("audio-1");
+  expect(videoGate).not.toHaveBeenCalled();
+  expect(ingestGate).not.toHaveBeenCalled();
+  expect(result.current.items[0]?.gate).toBeNull();
 });

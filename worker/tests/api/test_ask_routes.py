@@ -237,3 +237,32 @@ def test_a_refused_level_never_starts_a_workflow(configured):
     api = TestClient(main.app)
     api.post("/ask", json={"library_id": "lib_a", "text": "¿y?", "effort": "más"})
     assert fake.started == []
+
+
+# -- the narrowings a recording corpus makes askable ---------------------------
+
+
+def test_the_narrowings_reach_the_workflow_and_default_to_nothing(configured):
+    fake = with_outcome(configured, AskOutcome(state="running"))
+    api = TestClient(main.app)
+    api.post("/ask", json={"library_id": "lib_a", "text": "¿qué dijo sobre la fe?",
+                           "recorded_from": "1993-01-01", "recorded_to": "1999-12-31",
+                           "scripture": "Romanos 8", "source_name": "iVoox · Darío Silva-Silva"})
+    question = fake.started[0]
+    assert (question.recorded_from, question.recorded_to) == ("1993-01-01", "1999-12-31")
+    assert question.scripture == "Romanos 8"
+    assert question.source_name == "iVoox · Darío Silva-Silva"
+    api.post("/ask", json={"library_id": "lib_a", "text": "sin filtros"})
+    plain = fake.started[1]
+    assert (plain.recorded_from, plain.recorded_to, plain.scripture, plain.source_name) == ("", "", "", "")
+
+
+def test_a_malformed_date_is_refused_by_the_field_itself(configured):
+    """422 with FastAPI's own list, never a hand-raised 400: the paid plane
+    renders `class-validator` failures in this shape on purpose, so both
+    planes answer one bad request identically."""
+    with_outcome(configured, AskOutcome(state="running"))
+    api = TestClient(main.app)
+    response = api.post("/ask", json={"library_id": "lib_a", "text": "x", "recorded_from": "1995/04/02"})
+    assert response.status_code == 422
+    assert any("recorded_from" in str(err.get("loc")) for err in response.json()["detail"])

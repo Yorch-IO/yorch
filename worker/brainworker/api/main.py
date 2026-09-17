@@ -31,6 +31,7 @@ from temporalio.client import Client
 
 from .. import auditlog, auditversion as av, bookexport, channelstore, config, youtube
 from ..channel import estimate as channelest
+from ..channel import sync as channelsync
 from ..channel.types import DiscoverRequest, TopicsRequest
 from ..workflows.channel import (
     ChannelAskWorkflow,
@@ -42,6 +43,7 @@ from ..catalog import Catalog, MigrationError, current_version, require_schema
 from ..catalog.repo import LibraryOwnedByAnother
 from ..graph import DEFAULT_CONFIDENCE_FLOOR, Graph, GraphError
 from ..graph.queries import TemplateError, bind, get
+from ..graph.projection import AUDIO_FORMAT
 from ..answering.effort import DEFAULT_EFFORT, MAX_STYLE_CHARS
 from ..artifacts import ArtifactError
 from ..chat.title import fallback as fallback_title
@@ -63,6 +65,7 @@ from ..indexing import version_scope
 #: probe and the reader must not be able to drift apart.
 SCORES_ARTIFACT = "scores"
 from ..answering import Question, ask
+from ..answering.types import IsoDay
 from .. import videosource
 from ..pipeline import (
     SUPPORTED_FORMATS,
@@ -475,6 +478,10 @@ async def start_ingest(request: IngestRequest, options: StageOptions | None = No
 #: `document.format` for a source located by a clock rather than a byte range.
 #: The same string `graph.projection.TIMED_FORMATS` branches on, and the reason
 #: it is a named constant in both places rather than a literal in either.
+#: `audio` — an object in a customer's bucket — is the other member of that set
+#: and is deliberately **not** handled here: the free plane serves no bucket
+#: route, so a re-index of one is refused below rather than started as a
+#: video.
 TIMED_FORMAT = "youtube"
 
 
@@ -1462,6 +1469,10 @@ def documents(library_id: str, include_absent: bool = False) -> dict[str, Any]:
                 "author": d.author,
                 "format": d.format,
                 "source_key": d.source_key,
+                "recorded_at": d.recorded_at.isoformat() if d.recorded_at else None,
+                "published_at": d.published_at.isoformat() if d.published_at else None,
+                "source_url": d.source_url,
+                "source_name": d.source_name,
                 "present": d.present,
                 "tags": list(d.tags),
                 "active_version_id": active.get(d.id),
@@ -1563,6 +1574,10 @@ def document_detail(library_id: str, document_id: str) -> dict[str, Any]:
         "author": document.author,
         "format": document.format,
         "source_key": document.source_key,
+        "recorded_at": document.recorded_at.isoformat() if document.recorded_at else None,
+        "published_at": document.published_at.isoformat() if document.published_at else None,
+        "source_url": document.source_url,
+        "source_name": document.source_name,
         "source_path": document.source_path,
         "present": document.present,
         "tags": list(document.tags),
@@ -2246,6 +2261,17 @@ async def reindex_document(
                 },
             )
 
+    if document.format == AUDIO_FORMAT:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "kind": "paid_plane_only",
+                "message": (
+                    f"{document.title!r} es una grabación de un bucket S3; "
+                    "reindexarla es una operación del plano de pago"
+                ),
+            },
+        )
     if document.format == TIMED_FORMAT:
         # A video's `source_path` is its URL, not a path. Handing it to
         # `IngestWorkflow` puts it through `stage_source`, which checks tenant
@@ -2627,6 +2653,11 @@ class NewTurn:
 
     text: Annotated[str, Field(max_length=MAX_MESSAGE_CHARS)]
     effort: Literal["brief", "standard", "thorough"] = DEFAULT_EFFORT
+    #: The same narrowings `Question` carries, per turn. See `answering.types`.
+    recorded_from: IsoDay = ""
+    recorded_to: IsoDay = ""
+    scripture: str = ""
+    source_name: str = ""
 
 
 def _turn_json(turn: Any) -> dict[str, Any]:
@@ -2818,6 +2849,10 @@ async def add_turn(conversation_id: str, body: NewTurn) -> dict[str, Any]:
         library_id=row.library_id,
         tenant_id=LEGACY_TENANT_ID,
         effort=body.effort,
+        recorded_from=body.recorded_from,
+        recorded_to=body.recorded_to,
+        scripture=body.scripture,
+        source_name=body.source_name,
     )
     client = await temporal()
     await client.start_workflow(
@@ -3233,23 +3268,27 @@ def _youtube_http(e: youtube.YouTubeError) -> HTTPException:
 
 @dataclass
 class ChannelSync:
-    """Which channel to catalogue, and how deep.
+    """Which channel to catalogue, and how.
 
-    `limit` is a field constraint rather than a hand-raised error so FastAPI
-    answers an out-of-range one in its own 422-with-a-list shape — the same
-    decision as `Question.effort`'s `Literal`.
+    `limit` is "the most recent N" and **`None` is the whole playlist**, which
+    is the default. It used to be capped at 500 on the reasoning that the
+    catalogue is free and the preselection is what costs money; the cap was
+    still a cap, and a channel of two thousand sermons was catalogued up to its
+    five hundredth. What made the cap removable is `channel.sync`: it saves a
+    page at a time, hydrates only what is new, and stops at the first page it
+    already knows once the catalogue is complete — so a sync of any size keeps
+    what it fetched, and a second sync of an unchanged channel costs one unit.
 
-    The ceiling is 500 rather than the 100 the screen offers, because the
-    catalogue is a free artefact worth having in full while the *preselection*
-    is what costs money and is capped separately. Reading more of a channel than
-    you will ever analyse is a quota decision, not a spending one.
+    `full` walks to the end whatever is known and marks the videos it did not
+    meet as unavailable. It is the only thing that ever sets that flag.
     """
 
     url: str
-    limit: Annotated[int, Field(ge=1, le=500)] = 100
+    limit: Annotated[int, Field(ge=1)] | None = None
     #: Fill in durations with `videos.list`. On by default because a video with
     #: no duration cannot be quoted, and a quote is the point.
     hydrate: bool = True
+    full: bool = False
 
 
 @app.post("/channels/sync")
@@ -3275,14 +3314,21 @@ def channel_sync(request: ChannelSync) -> dict[str, Any]:
     client = _youtube_client()
     try:
         ref = client.resolve_channel(lookup)
-        videos = client.list_uploads(ref.uploads_playlist_id, request.limit)
-        if request.hydrate:
-            videos = client.hydrate(videos)
+        # Page by page, saved as it goes: an error here leaves every page
+        # before it on disk, so the 502 or 429 that follows is about the pages
+        # that did not arrive and not about the ones that did.
+        report = channelsync.sync_channel(
+            _channel_store(),
+            client,
+            ref,
+            limit=request.limit,
+            hydrate=request.hydrate,
+            full=request.full,
+        )
     except youtube.YouTubeError as e:
         raise _youtube_http(e) from e
 
-    stored = _channel_store().save(ref, videos, units_spent=client.units)
-
+    stored = report.channel
     s = settings()
     with Catalog(s.database_url) as catalog:
         try:
@@ -3300,8 +3346,12 @@ def channel_sync(request: ChannelSync) -> dict[str, Any]:
 
     return {
         **_channel_summary(stored),
-        "fetched": len(videos),
-        "units_spent": client.units,
+        "fetched": report.fetched,
+        "added": report.added,
+        "hydrated": report.hydrated,
+        "stopped_early": report.stopped_early,
+        "unavailable": report.unavailable,
+        "units_spent": report.units,
     }
 
 
@@ -3369,7 +3419,7 @@ def channel_detail(channel_id: str, full: bool = False) -> dict[str, Any]:
         document = by_key.get(videosource.source_key(v.video_id))
         description = v.description
         if not full and len(description) > DESCRIPTION_PREVIEW:
-            description = description[:DESCRIPTION_PREVIEW]
+            description = _preview(description)
         out.append(
             {
                 "video_id": v.video_id,
@@ -3384,9 +3434,26 @@ def channel_detail(channel_id: str, full: bool = False) -> dict[str, Any]:
                 "url": v.url,
                 "document_id": document.id if document else None,
                 "active_version_id": active.get(document.id) if document else None,
+                # False only after a complete re-sync did not meet the id. Kept
+                # in the list rather than dropped: it may be indexed already.
+                "available": v.available,
             }
         )
     return {**_channel_summary(stored), "videos": out}
+
+
+def _preview(description: str) -> str:
+    """The first `DESCRIPTION_PREVIEW` characters, cut at a word boundary.
+
+    The screen builds its keyword chips from this text, and a cut inside a
+    word mints a token: on the first real channel `familia` fell across the
+    400th character often enough that `famil` and `fami` were the sixth and
+    seventh most frequent "words" of 2,983 videos. Cutting at the last space
+    before the limit costs at most one word of preview and no chip.
+    """
+    head = description[:DESCRIPTION_PREVIEW]
+    cut = head.rfind(" ")
+    return head[:cut] if cut > 0 else head
 
 
 def _channel_summary(stored: channelstore.StoredChannel) -> dict[str, Any]:
@@ -3396,6 +3463,10 @@ def _channel_summary(stored: channelstore.StoredChannel) -> dict[str, Any]:
         "synced_at": stored.synced_at,
         "video_count": stored.video_count,
         "units_spent": stored.units_spent,
+        # Whether a sync has ever walked the playlist to its end. "The most
+        # recent 500" and "all 2,000" are different catalogues, and the screen
+        # has to be able to say which one it is showing.
+        "complete": stored.complete,
     }
 
 

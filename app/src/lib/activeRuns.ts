@@ -33,6 +33,14 @@ export interface ActiveRun {
   workflowId: string;
   title: string | null;
   kind: string;
+  /** Which library this run belongs to, so the indicator can *open* it.
+   *
+   *  It has travelled from Postgres to Rust since the route existed — the SQL
+   *  joins `COALESCE(d.library_id, r.library_id)` and `RunSummary` declares it
+   *  — and only this interface dropped it, which is why "Abrir" led to a queue
+   *  filtered to a different library and showing nothing. `null` for a run the
+   *  catalog cannot place. */
+  libraryId: string | null;
   /** From the catalog, or from Temporal when that answered. */
   stage: string | null;
   /** Live from Temporal. `null` means nobody could say, which must read as
@@ -87,6 +95,7 @@ export function useActiveRuns(): ActiveRun[] {
             workflowId: run.workflowId,
             title: run.title,
             kind: run.kind,
+            libraryId: run.libraryId,
             stage: live.stage ?? run.stage,
             state: live.state,
             progress: live.progress,
@@ -99,6 +108,7 @@ export function useActiveRuns(): ActiveRun[] {
             workflowId: run.workflowId,
             title: run.title,
             kind: run.kind,
+            libraryId: run.libraryId,
             stage: run.stage,
             state: null,
             progress: null,

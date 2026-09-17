@@ -16,10 +16,10 @@ import {
 import { KEYWORDS_SHOWN, type Keyword } from "../lib/keywords";
 
 /**
- * The words the channel's titles repeat, as toggles.
+ * The words the channel's titles and descriptions repeat, as toggles.
  *
  * Free, and computed from the catalogue already on screen — no call, no quota.
- * A pressed chip narrows the table to titles carrying the word and writes the
+ * A pressed chip narrows the table to videos carrying the word and writes the
  * selection into the topic field, so the same word that shortlists the videos
  * is what the model is then asked to look for in them. The count beside each
  * word is how many videos carry it, which is the number a person is choosing
@@ -114,12 +114,16 @@ export function KeywordChips({
  */
 export function ChannelCandidates({
   rows,
+  drawn,
   keys,
   picked,
   onPicked,
   busy,
 }: {
+  /** The whole filtered set: what the totals, "Marcar N" and the tick mean. */
   rows: Row[];
+  /** The rows actually painted — `pageRows` of the above. */
+  drawn: Row[];
   keys: ReadonlySet<string>;
   picked: Set<string>;
   onPicked: (next: Set<string>) => void;
@@ -158,7 +162,7 @@ export function ChannelCandidates({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {drawn.map((row) => (
             <Candidate
               key={row.video.videoId}
               row={row}
@@ -223,7 +227,7 @@ function Candidate({
 
   return (
     <>
-      <tr className={already ? "muted" : ""}>
+      <tr className={already || !row.video.available ? "muted" : ""}>
         <td>
           <input
             type="checkbox"
@@ -256,6 +260,11 @@ function Candidate({
             )}
           </span>
           {already && <span className="candidate-state">{t("channel.alreadyIndexed")}</span>}
+          {/* A complete re-sync did not meet it on the playlist: deleted, or
+              made private. Kept because it may be indexed; never probed. */}
+          {!row.video.available && (
+            <span className="candidate-state warn-inline">{t("channel.unavailable")}</span>
+          )}
           {/* Shown although the filter excludes it, because it carries a run:
               a parked gate is a pending decision and hiding one would leave a
               batch approved with a row nobody could see. */}

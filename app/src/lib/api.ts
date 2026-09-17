@@ -39,6 +39,20 @@ export type AppErrorKind =
   | "video_is_live"
   | "video_has_no_duration"
   | "audio_unavailable"
+  // The bundled whisper.cpp's own failures, carried for the same reason as
+  // yt-dlp's above: each names a different remedy, and a single
+  // "transcription failed" would send every one of them to the same dead end.
+  // `whisper_missing` is fixed by running a script, `whisper_model_missing` by
+  // pressing download, `whisper_model_corrupt` by pressing it again, and
+  // `whisper_container_unsupported` by transcribing that run on Amazon.
+  | "whisper_missing"
+  | "whisper_model_unknown"
+  | "whisper_model_missing"
+  | "whisper_model_corrupt"
+  | "whisper_download_failed"
+  | "whisper_audio_failed"
+  | "whisper_container_unsupported"
+  | "whisper_failed"
   | "config";
 
 /**
@@ -112,7 +126,33 @@ export type ControlErrorKind =
   /** A library id that belongs to another organisation. */
   | "library_owned_by_another"
   /** A topic pass asked for with no probed videos to read. */
-  | "no_videos_to_read";
+  | "no_videos_to_read"
+  // A customer's S3 bucket, paid plane only. Forked from the paid plane's
+  // `ControlErrorKind`, which forks `brainworker.s3source._translate`.
+  /** A bucket name, role ARN or manifest mapping the reader refuses. */
+  | "bucket_source_invalid"
+  /** STS refused to assume the customer's role: the trust policy or the ExternalId. */
+  | "bucket_role_refused"
+  /** The role was assumed and S3 refused: a permission the role lacks. */
+  | "bucket_forbidden"
+  | "bucket_not_found"
+  | "bucket_wrong_region"
+  | "bucket_session_expired"
+  | "bucket_unavailable"
+  | "bucket_not_registered"
+  | "object_not_found"
+  | "object_too_large"
+  | "object_empty"
+  | "object_changed_since_quote"
+  | "manifest_unreadable"
+  | "audio_container_unknown"
+  | "audio_too_long"
+  | "audio_too_large"
+  | "no_disk_for_audio"
+  /** No Transcribe region or bucket on this deployment; the quote cannot be made. */
+  | "transcribe_not_configured"
+  /** A document that is not a bucket recording, asked for a media link. */
+  | "media_not_available";
 
 export interface AppError {
   kind: AppErrorKind;
@@ -170,6 +210,13 @@ const GUIDANCE: Partial<Record<AppErrorKind, string>> = {
   video_unavailable: "error.videoUnavailable",
   video_is_live: "error.videoIsLive",
   audio_unavailable: "error.audioUnavailable",
+  whisper_missing: "error.whisperMissing",
+  whisper_model_missing: "error.whisperModelMissing",
+  whisper_model_corrupt: "error.whisperModelCorrupt",
+  whisper_download_failed: "error.whisperDownloadFailed",
+  whisper_audio_failed: "error.whisperAudioFailed",
+  whisper_container_unsupported: "error.whisperContainerUnsupported",
+  whisper_failed: "error.whisperFailed",
 };
 
 /** Advice keyed on the control API's own `kind`, read out of the error body. */
@@ -202,6 +249,17 @@ const CONTROL_GUIDANCE: Partial<Record<ControlErrorKind, string>> = {
   youtube_unreachable: "error.youtubeUnreachable",
   channel_not_synced: "error.channelNotSynced",
   library_owned_by_another: "error.libraryOwnedByAnother",
+  bucket_source_invalid: "error.bucketSourceInvalid",
+  bucket_role_refused: "error.bucketRoleRefused",
+  bucket_forbidden: "error.bucketForbidden",
+  bucket_not_found: "error.bucketNotFound",
+  bucket_wrong_region: "error.bucketWrongRegion",
+  bucket_not_registered: "error.bucketNotRegistered",
+  object_changed_since_quote: "error.objectChangedSinceQuote",
+  audio_container_unknown: "error.audioContainerUnknown",
+  audio_too_long: "error.audioTooLong",
+  transcribe_not_configured: "error.transcribeNotConfigured",
+  media_not_available: "error.mediaNotAvailable",
 };
 
 /**
@@ -790,6 +848,14 @@ export interface Approval {
 export type { AskEffort } from "./askEffort";
 import type { AskEffort } from "./askEffort";
 
+/** The four narrowings, as a screen holds them. Same spelling as `Question`. */
+export interface AskNarrowings {
+  recorded_from?: string;
+  recorded_to?: string;
+  scripture?: string;
+  source_name?: string;
+}
+
 export interface Question {
   library_id: string;
   text: string;
@@ -805,6 +871,15 @@ export interface Question {
    * plane has to police a number. Absent means the server's default.
    */
   effort?: AskEffort;
+  /** Narrowings a recording corpus makes askable. All optional; empty is "no
+   *  filter", and Rust omits the key. The dates are `YYYY-MM-DD`; the
+   *  scripture value is a reference or a chapter (`Juan 3:16`, `Romanos 8`),
+   *  normalised by the worker; `source_name` is the feed or folder a recording
+   *  came from. Each is a hard cut over what the dense floor admits. */
+  recorded_from?: string;
+  recorded_to?: string;
+  scripture?: string;
+  source_name?: string;
 }
 
 /**
@@ -850,6 +925,9 @@ export interface EvidenceItem {
   score: number;
   source: string;
   locator: string;
+  /** The document the chunk belongs to — what `mediaLink` is addressed by.
+   *  Optional because a shell older than this field does not forward it. */
+  documentId?: string;
 }
 
 export interface Spend {
@@ -1349,6 +1427,12 @@ export interface DocumentRow {
   tags: string[];
   activeVersionId: string | null;
   updatedAt: string | null;
+  /** A recording's dates, feed link and source, as its manifest said. All
+   *  null for a book. `recordedAt` is what the date filter narrows on. */
+  recordedAt?: string | null;
+  publishedAt?: string | null;
+  sourceUrl?: string | null;
+  sourceName?: string | null;
 }
 
 export interface Library {
@@ -1416,6 +1500,11 @@ export interface BookBuilt {
 export interface DocumentMetadata {
   title?: string;
   author?: string;
+  /** `YYYY-MM-DD`, or an empty string to clear. Absent means "leave alone". */
+  recordedAt?: string;
+  publishedAt?: string;
+  sourceUrl?: string;
+  sourceName?: string;
 }
 
 export interface DocumentMetadataResult {
@@ -1442,6 +1531,10 @@ export interface DocumentDetail {
    *  are not the same act. */
   canBuildEpub: boolean;
   versions: VersionRow[];
+  recordedAt?: string | null;
+  publishedAt?: string | null;
+  sourceUrl?: string | null;
+  sourceName?: string | null;
 }
 
 /**
@@ -1670,6 +1763,245 @@ export interface RebuildReport {
   estimate: Estimate | null;
 }
 
+/* -- buckets ---------------------------------------------------------------
+ *
+ * Audio out of a customer's own S3 bucket. **Paid plane only**: in local mode
+ * every one of these calls answers with the 404 the proxy already turns into
+ * `control_status`, and the tab says so rather than rendering an empty list.
+ */
+
+/** Where a customer's audio lives and how the plane may read it.
+ *
+ *  Spelled snake_case like `Question`, and for a stronger reason: it travels
+ *  *in* on a register and *out* inside every `StoredBucket`, and the Rust
+ *  struct can rename in one direction only. Nothing in it is a secret — the
+ *  role is the customer's, and its trust policy is the gate. */
+export interface BucketSource {
+  bucket: string;
+  prefix: string;
+  role_arn: string;
+  region: string;
+  /** Where the raw transcript is written back into the customer's bucket.
+   *  Empty switches the write-back off. */
+  archive_prefix: string;
+  manifest_key: string;
+  /** Which manifest column means what: `file`, `title`, `author`, `recorded`,
+   *  `published`, `source`, `url` → column name, or for `file` a template
+   *  like `{folder}/{filename}`. */
+  manifest_map: Record<string, string>;
+  language: string;
+}
+
+export const MANIFEST_FIELDS = [
+  "file",
+  "title",
+  "author",
+  "recorded",
+  "published",
+  "source",
+  "url",
+] as const;
+
+export interface StoredBucket {
+  bucketId: string;
+  source: BucketSource;
+  libraryId: string;
+  libraryName: string;
+  syncedAt: string;
+  objectCount: number;
+  complete: boolean;
+  /** Objects whose duration was estimated from size rather than read. */
+  estimated: number;
+  manifestRows: number;
+  unmatchedRows: number;
+  unmatchedObjects: number;
+  warnings: string[];
+}
+
+/** One object as the catalogue holds it, joined with what the catalog says.
+ *
+ *  `state` comes from Postgres on every read — `indexed`, `pending` or
+ *  `unindexed` — never from the catalogue file. `durationEstimated` is the
+ *  one figure the quote is least sure of, and the row says so. */
+export interface BucketObjectRow {
+  key: string;
+  etag: string;
+  size: number;
+  lastModified: string;
+  /** What the bytes say: `mp3`, `mp4`, … or "" when they say nothing. */
+  container: string;
+  durationS: number;
+  durationEstimated: boolean;
+  title: string;
+  author: string;
+  recordedAt: string;
+  publishedAt: string;
+  source: string;
+  url: string;
+  available: boolean;
+  warnings: string[];
+  documentId: string | null;
+  activeVersionId: string | null;
+  runId: string | null;
+  runState: string | null;
+  state: "indexed" | "pending" | "unindexed";
+}
+
+export interface BucketTotals {
+  objects: number;
+  seconds: number;
+  indexed: number;
+  pending: number;
+  unindexed: number;
+}
+
+export interface BucketDetail {
+  bucket: StoredBucket;
+  objects: BucketObjectRow[];
+  totals: BucketTotals;
+}
+
+export interface BucketList {
+  buckets: StoredBucket[];
+}
+
+export interface BucketSynced {
+  bucketId: string;
+  libraryId: string;
+  objects: number;
+  added: number;
+  changed: number;
+  absent: number;
+  estimated: number;
+  manifestRows: number;
+  unmatchedRows: number;
+  unmatchedObjects: number;
+  warnings: string[];
+}
+
+export interface BucketRegistered {
+  bucket: StoredBucket | null;
+  synced: BucketSynced;
+}
+
+export interface BucketProbeResult {
+  /** `transcriber` is what the run actually started on, which is not always
+   *  what was ticked: an object in a container this machine cannot decode is
+   *  started on Amazon whatever the batch asked for, and the answer says so
+   *  per key rather than leaving a run parked for a transcript nobody can
+   *  make. */
+  started: { key: string; workflowId: string; transcriber: Transcriber }[];
+  failed: { key: string; kind: string; message: string }[];
+}
+
+/** Who transcribes: Amazon, on the worker, or whisper.cpp on this machine. */
+export type Transcriber = "transcribe" | "local";
+
+/* -- transcribing here -----------------------------------------------------
+ *
+ * The same argument as the YouTube calls this app already makes, arriving from
+ * the other direction: there the server cannot make a call this machine can,
+ * and here the server has no GPU and this machine may. Transcription is the
+ * one paid stage of a bucket run that dwarfs every other — about $233 for the
+ * first 147-recording corpus — so a person with a GPU can trade hours for it.
+ */
+
+/** One Whisper model as the app can offer it, with whether it is downloaded. */
+export interface WhisperModelState {
+  name: string;
+  file: string;
+  bytes: number;
+  /** What the size buys, in one line: the trade, not the architecture. */
+  note: string;
+  present: boolean;
+  path: string;
+}
+
+/** What whisper.cpp itself said it runs on, and how that was learned.
+ *
+ *  Distinct from `WhisperStatus.backend`, which is what the *build* looks
+ *  capable of. A binary that links cuBLAS and finds no device — an old driver,
+ *  a laptop that parks its discrete card, a container with no `/dev/nvidia*` —
+ *  hints `cuda` and runs on the processor at a fraction of the speed. */
+export interface DeviceFact {
+  /** `cuda`, `vulkan`, `metal`, `blas` or `cpu`. */
+  backend: string;
+  /** What whisper.cpp called it: `CUDA0`, `Metal`, `CPU`. */
+  device: string;
+  /** `probe` — a model loaded and nothing transcribed — or `run`, which is a
+   *  whole recording and the stronger evidence. */
+  how: "probe" | "run";
+  model: string;
+  at: string;
+}
+
+export interface WhisperStatus {
+  /** Whether this build carries the transcriber at all. */
+  installed: boolean;
+  /** The bundled binary, or null with `error` saying why there is none. */
+  binary: string | null;
+  error: string | null;
+  /** `cuda`, `vulkan`, `metal`, `cpu`, or `none` when there is no binary. A
+   *  guess from the build; `device` is the answer to "GPU or CPU?". */
+  backend: string;
+  /** What the binary said it actually uses, or null until something asked. */
+  device: DeviceFact | null;
+  /** Whether the question can be settled at all: whisper.cpp names its device
+   *  while loading a model, so with none downloaded there is nothing to ask. */
+  canProbe: boolean;
+  models: WhisperModelState[];
+  defaultModel: string;
+  modelsDir: string;
+  /** Audio seconds per wall second on the last run, or null before one. This
+   *  is what turns "147 recordings" into a number of hours on this machine. */
+  measuredSpeed: number | null;
+  measuredOn: string | null;
+  decodable: string[];
+}
+
+/** One line of progress: bytes for `download`, `verify` and `audio`, percent
+ *  for `transcribe`. */
+export interface WhisperProgress {
+  phase: "download" | "verify" | "audio" | "transcribe";
+  done: number;
+  total: number;
+  message: string;
+}
+
+export interface Transcribed {
+  path: string;
+  engine: string;
+  model: string;
+  language: string;
+  backend: string;
+  audioSeconds: number;
+  wallSeconds: number;
+  segments: number;
+}
+
+export interface TranscriptUploaded {
+  workflowId: string;
+  state: string;
+}
+
+/** Giving up on a local transcript parks the run at a gate again, with
+ *  Amazon's price on it — never "running", because nobody has approved it. */
+export interface TranscriberSwitched {
+  workflowId: string;
+  state: string;
+  transcriber: Transcriber;
+}
+
+/** A presigned link to a recording at a second. Minted on click and never
+ *  stored — it dies with the session that signed it — so `sourceUrl`, the
+ *  public feed's own link, rides beside it. */
+export interface MediaLink {
+  url: string;
+  expiresAt: string;
+  startS: number;
+  sourceUrl: string;
+}
+
 /* -- channels --------------------------------------------------------------
  *
  * A YouTube channel, catalogued so a person can decide which of its videos are
@@ -1696,8 +2028,15 @@ export interface ChannelSummary {
    *  resource here that runs out, so saying what a sync cost beats discovering
    *  it at the end of the day. */
   unitsSpent: number;
-  /** Only on a sync's own answer. */
+  /** Whether a sync has ever walked the uploads playlist to its end. "The most
+   *  recent 500" and "all 2,000" are different catalogues, and the screen says
+   *  which one it is showing. */
+  complete: boolean;
+  /** Only on a sync's own answer: what that sync did. */
   fetched?: number;
+  added?: number;
+  stoppedEarly?: boolean;
+  unavailable?: number;
   /** Only on the listing, and from the *catalog* — not from the channel file.
    *  What a channel holds and what is indexed are different questions with
    *  different owners. */
@@ -1726,6 +2065,10 @@ export interface ChannelVideoRow {
   /** null on a document that exists is a real state, not a gap: a run that was
    *  cancelled, or an activation withheld over a structural mismatch. */
   activeVersionId: string | null;
+  /** false once a complete re-sync did not meet this id on the playlist —
+   *  deleted, or made private. Kept in the list because it may be indexed;
+   *  never offered to probe. */
+  available: boolean;
 }
 
 export interface ChannelDetail {
@@ -1734,6 +2077,7 @@ export interface ChannelDetail {
   syncedAt: string;
   videoCount: number;
   unitsSpent: number;
+  complete: boolean;
   videos: ChannelVideoRow[];
 }
 
@@ -1958,11 +2302,104 @@ export const api = {
    *  panel while the worker restarts. */
   runsList: (query: RunsQuery = {}) => invoke<RunListPage>("runs_list", query),
 
+  /* -- buckets ----------------------------------------------------------- */
+
+  /** Register a customer's bucket and catalogue it. Free — S3 requests only —
+   *  and awaited: seconds for a hundred objects, so the answer is the count. */
+  bucketRegister: (source: BucketSource, libraryName = "", libraryId = "") =>
+    invoke<BucketRegistered>("bucket_register", { source, libraryName, libraryId }),
+  buckets: () => invoke<BucketList>("buckets"),
+  bucketDetail: (bucketId: string, stateFilter = "all") =>
+    invoke<BucketDetail>("bucket_detail", { bucketId, stateFilter }),
+  /** Walk the listing again. Free; reads no known object twice. */
+  bucketSync: (bucketId: string) => invoke<BucketRegistered>("bucket_sync", { bucketId }),
+  /** Quote the ticked objects: one `audio` run per key, each parked at its own
+   *  gate. Free. The screen sums the quotes and approves each through
+   *  `ingestApprove`, unchanged. */
+  bucketProbe: (
+    bucketId: string,
+    keys: string[],
+    options: StageOptions = DEFAULT_STAGES,
+    reindex = false,
+    transcriber: Transcriber = "transcribe",
+  ) =>
+    invoke<BucketProbeResult>("bucket_probe", {
+      bucketId,
+      keys,
+      options,
+      reindex,
+      transcriber,
+    }),
+  /** Forget a bucket's catalogue. What was indexed stays. */
+  bucketForget: (bucketId: string) =>
+    invoke<{ forgotten: boolean }>("bucket_forget", { bucketId }),
+  /** An audio run's gate: the same report a video's, on its own route. null
+   *  while the object is still being probed. */
+  audioGate: (workflowId: string) =>
+    invoke<VideoGateReport | null>("audio_gate", { workflowId }),
+  /** A presigned link to the recording a document came from, at a second. */
+  mediaLink: (libraryId: string, documentId: string, startS = 0) =>
+    invoke<MediaLink>("media_link", { libraryId, documentId, startS: Math.floor(startS) }),
+
+  /* -- transcribing here ------------------------------------------------- */
+
+  /** What this machine can do about a transcript, before it is asked to. Free
+   *  and local: no control API call, so it answers with the stack down. */
+  whisperStatus: () => invoke<WhisperStatus>("whisper_status"),
+  /** Ask the binary which device it will use. Free and quick: it loads the
+   *  smallest downloaded model, reads the line whisper.cpp prints while doing
+   *  it, and stops — no audio is transcribed. */
+  whisperProbe: () => invoke<DeviceFact>("whisper_probe"),
+  /** Fetch a model, verified against the checksum its publisher's own metadata
+   *  carries. Idempotent: a model already there costs two reads and no bytes. */
+  whisperDownloadModel: (model: string, onProgress?: (p: WhisperProgress) => void) => {
+    const channel = new Channel<WhisperProgress>();
+    if (onProgress) channel.onmessage = onProgress;
+    return invoke<string>("whisper_download_model", { model, onEvent: channel });
+  },
+  /** Transcribe one run's recording here. The audio comes down through the
+   *  presigned link the plane minted, so this holds no credential. */
+  whisperTranscribe: (
+    args: {
+      workflowId: string;
+      audioUrl: string;
+      container: string;
+      model: string;
+      language?: string;
+      audioSeconds?: number;
+    },
+    onProgress?: (p: WhisperProgress) => void,
+  ) => {
+    const channel = new Channel<WhisperProgress>();
+    if (onProgress) channel.onmessage = onProgress;
+    return invoke<Transcribed>("whisper_transcribe", { ...args, onEvent: channel });
+  },
+  /** Hand the transcript to the plane, which signals the parked workflow. The
+   *  file is deleted only once it is somewhere else. */
+  transcriptUpload: (
+    workflowId: string,
+    path: string,
+    meta: { engine?: string; model?: string; language?: string } = {},
+  ) => invoke<TranscriptUploaded>("transcript_upload", { workflowId, path, ...meta }),
+  /** Give up on transcribing a run here: it re-quotes on Amazon and parks at
+   *  its gate again, so this spends nothing by itself. */
+  runSwitchTranscriber: (workflowId: string) =>
+    invoke<TranscriberSwitched>("run_switch_transcriber", { workflowId }),
+
   /* -- channels ---------------------------------------------------------- */
 
-  /** Catalogue a channel. Free: it costs Data API quota, never money. */
-  channelSync: (url: string, limit = 100) =>
-    invoke<ChannelSummary>("channel_sync", { url, limit }),
+  /** Catalogue a channel. Free: it costs Data API quota, never money.
+   *
+   *  No limit means the whole playlist, saved a page at a time on the worker
+   *  and stopping at the first page it already knows once the catalogue is
+   *  complete. `full` walks to the end whatever is known and marks what it
+   *  does not meet as unavailable — the only thing that ever does. */
+  channelSync: (url: string, options: { limit?: number; full?: boolean } = {}) =>
+    invoke<ChannelSummary>("channel_sync", {
+      url,
+      limit: options.limit,
+      full: options.full ?? false,
+    }),
   channels: () => invoke<ChannelList>("channels"),
   channelDetail: (channelId: string) =>
     invoke<ChannelDetail>("channel_detail", { channelId }),
@@ -2053,13 +2490,26 @@ export const api = {
     invoke<void>("chat_delete", { conversationId }),
   /** Ask the next question. Returns as soon as the turn has a number, not when
    *  it has an answer — `chatStream` follows that. */
-  chatTurn: (conversationId: string, text: string, effort?: AskEffort) =>
+  chatTurn: (
+    conversationId: string,
+    text: string,
+    effort?: AskEffort,
+    narrowings: AskNarrowings = {},
+  ) =>
     invoke<TurnStarted>("chat_turn", {
       conversationId,
       // `effort` omitted rather than sent as null when absent: omitting is how
       // the payload says "whatever the server's default is", and a null would
-      // be a value the server has to interpret.
-      request: effort ? { text, effort } : { text },
+      // be a value the server has to interpret. The narrowings follow the
+      // same rule: only the ones set travel.
+      request: {
+        text,
+        ...(effort ? { effort } : {}),
+        ...(narrowings.recorded_from ? { recordedFrom: narrowings.recorded_from } : {}),
+        ...(narrowings.recorded_to ? { recordedTo: narrowings.recorded_to } : {}),
+        ...(narrowings.scripture ? { scripture: narrowings.scripture } : {}),
+        ...(narrowings.source_name ? { sourceName: narrowings.source_name } : {}),
+      },
     }),
   /**
    * Follow a turn's answer as it is written.

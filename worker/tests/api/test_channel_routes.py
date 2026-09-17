@@ -91,13 +91,22 @@ def client():
 
 
 def _api(pages: list[dict]):
-    """An `open_url` that answers from a script."""
+    """An `open_url` that answers from a script, or raises the 403 a page names."""
     remaining = list(pages)
 
     def call(url: str) -> bytes:
         if not remaining:
             raise AssertionError(f"unscripted request: {url}")
-        return json.dumps(remaining.pop(0)).encode("utf-8")
+        page = remaining.pop(0)
+        if "__raise__" in page:
+            import io
+            import urllib.error
+
+            body = json.dumps(
+                {"error": {"errors": [{"reason": page["__raise__"]}], "message": "quota"}}
+            ).encode("utf-8")
+            raise urllib.error.HTTPError(url, 403, "Forbidden", {}, io.BytesIO(body))
+        return json.dumps(page).encode("utf-8")
 
     return call
 
@@ -123,8 +132,8 @@ CHANNEL_PAGE = {
 }
 
 
-def _uploads(ids: list[str]) -> dict:
-    return {
+def _uploads(ids: list[str], next_page: str = "") -> dict:
+    page = {
         "items": [
             {
                 "snippet": {
@@ -140,6 +149,14 @@ def _uploads(ids: list[str]) -> dict:
             for v in ids
         ]
     }
+    if next_page:
+        page["nextPageToken"] = next_page
+    return page
+
+
+def _quota_exceeded() -> dict:
+    """A page that is not a page: the scripted `open_url` raises it."""
+    return {"__raise__": "quotaExceeded"}
 
 
 def _durations(ids: list[str]) -> dict:
@@ -195,8 +212,9 @@ def _settings(key: str = "k"):
 
 def test_an_out_of_range_limit_is_fastapis_own_422(client):
     # A field constraint rather than a hand-raised error, so both planes answer
-    # an oversized body the same way — the decision `Question.effort` records.
-    r = client.post("/channels/sync", json={"url": "@x", "limit": 9000})
+    # a bad body the same way — the decision `Question.effort` records. There
+    # is no upper bound any more: the catalogue is free and saved page by page.
+    r = client.post("/channels/sync", json={"url": "@x", "limit": 0})
     assert r.status_code == 422
     assert isinstance(r.json()["detail"], list)
 
@@ -241,6 +259,106 @@ def test_sync_catalogues_the_channel_and_creates_its_library(
     # The shelf exists before anything is on it, named after the channel.
     assert catalog.ensured == [(LIBRARY, "Casa Sobre la Roca", main.LEGACY_TENANT_ID)]
     assert [v.duration_s for v in store.videos(CHANNEL)] == [2700, 2700]
+
+
+def test_no_limit_walks_the_whole_playlist_and_says_the_catalogue_is_complete(
+    client, catalog, store, monkeypatch
+):
+    # Three pages, no cap. `complete` is what tells "all 2,000" from "the most
+    # recent 500", and the screen needs to say which one it is showing.
+    a, b, c = ["a" * 11], ["b" * 11], ["c" * 11]
+    _with_key(
+        monkeypatch,
+        [CHANNEL_PAGE, _uploads(a, "p2"), _durations(a), _uploads(b, "p3"), _durations(b),
+         _uploads(c), _durations(c)],
+    )
+    r = client.post("/channels/sync", json={"url": "@Casarocachannel"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["video_count"] == 3
+    assert body["fetched"] == 3
+    assert body["added"] == 3
+    assert body["complete"] is True
+    assert body["stopped_early"] is False
+    assert store.read(CHANNEL).complete is True
+
+
+def test_a_quota_that_runs_out_mid_walk_keeps_every_page_before_it(
+    client, catalog, store, monkeypatch
+):
+    # The whole reason the sync is page by page. The 429 is about the pages
+    # that did not arrive; the ones that did are on disk, and the catalogue
+    # says it is incomplete so the next sync walks on rather than stopping at
+    # what it knows.
+    a = ["a" * 11]
+    _with_key(monkeypatch, [CHANNEL_PAGE, _uploads(a, "p2"), _durations(a), _quota_exceeded()])
+    r = client.post("/channels/sync", json={"url": "@Casarocachannel"})
+    assert r.status_code == 429
+    assert r.json()["detail"]["kind"] == "youtube_quota_exceeded"
+    assert [v.video_id for v in store.videos(CHANNEL)] == a
+    assert store.videos(CHANNEL)[0].duration_s == 2700
+    assert store.read(CHANNEL).complete is False
+
+
+def test_a_second_sync_of_a_complete_catalogue_stops_at_the_first_known_page(
+    client, catalog, store, monkeypatch
+):
+    # Newest-first: once a page holds nothing new, nothing after it is new
+    # either. One `playlistItems` call and no `videos.list` at all — the known
+    # durations are already paid for. `_api` raises on an unscripted request,
+    # so the assertion is that the second script is never reached.
+    a = ["a" * 11]
+    _with_key(monkeypatch, [CHANNEL_PAGE, _uploads(a), _durations(a)])
+    client.post("/channels/sync", json={"url": "@Casarocachannel"})
+    _with_key(monkeypatch, [CHANNEL_PAGE, _uploads(a, "p2")])
+    r = client.post("/channels/sync", json={"url": "@Casarocachannel"})
+    assert r.status_code == 200
+    assert r.json()["stopped_early"] is True
+    assert r.json()["units_spent"] == 2
+    assert r.json()["complete"] is True
+
+
+def test_an_incomplete_catalogue_walks_past_what_it_knows(
+    client, catalog, store, monkeypatch
+):
+    # Every catalogue written under the old 500-video cap is this case: its
+    # first pages are known perfectly and nothing after them is. Stopping at
+    # the first known page would leave it capped for ever.
+    a, b = ["a" * 11], ["b" * 11]
+    _with_key(monkeypatch, [CHANNEL_PAGE, _uploads(a, "p2"), _durations(a)])
+    client.post("/channels/sync", json={"url": "@Casarocachannel", "limit": 1})
+    assert store.read(CHANNEL).complete is False
+    _with_key(monkeypatch, [CHANNEL_PAGE, _uploads(a, "p2"), _uploads(b), _durations(b)])
+    r = client.post("/channels/sync", json={"url": "@Casarocachannel"})
+    assert r.status_code == 200
+    assert r.json()["stopped_early"] is False
+    assert r.json()["added"] == 1
+    assert r.json()["complete"] is True
+    # Same publication date in the fixture, so the order is the id's; what
+    # matters is that both are there.
+    assert sorted(v.video_id for v in store.videos(CHANNEL)) == a + b
+
+
+def test_a_full_sync_marks_what_the_playlist_no_longer_holds_and_drops_nothing(
+    client, catalog, store, monkeypatch
+):
+    a, b = ["a" * 11], ["b" * 11]
+    _with_key(monkeypatch, [CHANNEL_PAGE, _uploads(a + b), _durations(a + b)])
+    client.post("/channels/sync", json={"url": "@Casarocachannel"})
+    # `b` was deleted on YouTube. An incremental sync says nothing about it…
+    _with_key(monkeypatch, [CHANNEL_PAGE, _uploads(a)])
+    client.post("/channels/sync", json={"url": "@Casarocachannel"})
+    assert all(v.available for v in store.videos(CHANNEL))
+    # …a full one marks it, keeps it, and the listing says so.
+    _with_key(monkeypatch, [CHANNEL_PAGE, _uploads(a)])
+    r = client.post("/channels/sync", json={"url": "@Casarocachannel", "full": True})
+    assert r.status_code == 200
+    assert r.json()["unavailable"] == 1
+    assert r.json()["video_count"] == 2
+    by_id = {v.video_id: v.available for v in store.videos(CHANNEL)}
+    assert by_id == {"a" * 11: True, "b" * 11: False}
+    detail = client.get(f"/channels/{CHANNEL}").json()
+    assert {v["video_id"]: v["available"] for v in detail["videos"]} == by_id
 
 
 def test_two_syncs_do_not_duplicate(client, catalog, store, monkeypatch):
@@ -329,6 +447,19 @@ def test_the_listing_truncates_descriptions_and_says_so(
     full = client.get(f"/channels/{CHANNEL}?full=true").json()["videos"][0]
     assert len(full["description"]) == 900
     assert full["description_truncated"] is False
+
+
+def test_the_preview_is_cut_at_a_word_and_never_inside_one():
+    # The screen builds keyword chips from the preview. On the first real
+    # channel the cut fell inside "familia" often enough to put `famil` in the
+    # top ten chips of 2,983 videos.
+    words = ("familia " * 80).strip()            # 639 characters, spaces every 8
+    out = main._preview(words)
+    assert len(out) <= main.DESCRIPTION_PREVIEW
+    assert out.endswith("familia")
+    assert not out.endswith(" ")
+    # No space at all: nothing to cut at, so the hard limit stands.
+    assert len(main._preview("x" * 900)) == main.DESCRIPTION_PREVIEW
 
 
 # --- quoting and starting ----------------------------------------------------

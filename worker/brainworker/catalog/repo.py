@@ -16,7 +16,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Iterator, Sequence
 
 import psycopg
@@ -95,6 +95,18 @@ class Document:
     #: column existed still builds a row, and the value it would have carried is
     #: the one every pre-tenancy row already has.
     tenant_id: str = LEGACY_TENANT_ID
+    #: When the recording was made and when it was published, as the source's
+    #: own manifest says — for a corpus spanning three decades the two differ
+    #: by years, and a date filter has to know which one it is narrowing on.
+    #: Nullable and defaulted: a book has neither, and a SELECT that does not
+    #: ask still builds a row. `source_url` is the public feed's own link to
+    #: the item, the half of "a reproducible link" that never expires.
+    recorded_at: date | None = None
+    published_at: date | None = None
+    source_url: str | None = None
+    #: Which feed or folder a recording came from. A retrieval filter, carried
+    #: into the Qdrant payload as `source_name`.
+    source_name: str | None = None
 
 
 @dataclass
@@ -880,6 +892,52 @@ class Catalog:
             ).fetchone()
         return row is not None
 
+    def set_document_dates(
+        self,
+        document_id: str,
+        *,
+        recorded_at: str | None = None,
+        published_at: str | None = None,
+        source_url: str | None = None,
+        source_name: str | None = None,
+        tenant_id: str,
+    ) -> bool:
+        """The dates a source's own manifest states, and its link to the item.
+
+        `None` means "leave this one alone", as in `set_document_metadata`.
+        The tenant is in the WHERE, not in a lookup beforehand: an id is not
+        authorization and this is a write. Dates arrive as ISO strings and
+        the column is `date`, so Postgres does the parsing and a malformed
+        value is a refusal here rather than a row carrying garbage.
+        """
+        sets: list[str] = []
+        params: list[Any] = []
+        if recorded_at is not None:
+            sets.append("recorded_at = %s::date")
+            params.append(recorded_at or None)
+        if published_at is not None:
+            sets.append("published_at = %s::date")
+            params.append(published_at or None)
+        if source_url is not None:
+            sets.append("source_url = %s")
+            params.append(source_url or None)
+        if source_name is not None:
+            sets.append("source_name = %s")
+            params.append(source_name or None)
+        if not sets:
+            return False
+        params += [document_id, tenant_id]
+        with self._conn() as conn:
+            row = conn.execute(
+                f"""
+                UPDATE document SET {", ".join(sets)}, updated_at = now()
+                 WHERE id = %s AND tenant_id = %s
+             RETURNING id
+                """,
+                tuple(params),
+            ).fetchone()
+        return row is not None
+
     def library_language(self, library_id: str, *, tenant_id: str) -> str:
         """What language a library's documents are written in.
 
@@ -910,7 +968,8 @@ class Catalog:
         sql = """
             SELECT id, library_id, folder_id, source_key, title, author, format,
                    present, absent_since, tags, created_at, updated_at,
-                   source_path, tenant_id
+                   source_path, tenant_id, recorded_at, published_at, source_url,
+                   source_name
               FROM document
              WHERE library_id = %s
         """
@@ -1070,7 +1129,8 @@ class Catalog:
         sql = """
             SELECT id, library_id, folder_id, source_key, title, author, format,
                    present, absent_since, tags, created_at, updated_at,
-                   source_path, tenant_id
+                   source_path, tenant_id, recorded_at, published_at, source_url,
+                   source_name
               FROM document WHERE id = %s
         """
         params: tuple[Any, ...] = (document_id,)

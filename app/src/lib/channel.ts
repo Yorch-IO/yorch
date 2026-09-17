@@ -23,6 +23,55 @@ import { titleMatches } from "./keywords";
  *  because it is the same catalog answering. */
 export const PROBE_POLL_MS = 5000;
 
+/** How many of a channel's runs are read back when recovering parked probes.
+ *  A batch is capped at 25 by the caption throttle, so this covers several of
+ *  them; the catalog keeps the rest and the import queue is where an old run
+ *  is looked for. */
+export const PARKED_LIMIT = 60;
+
+/**
+ * The probes this channel has parked, recovered from the catalog.
+ *
+ * **The screen used to hold this in `useState` and nothing else**, so a
+ * relaunch, a plane switch or a second channel lost the mapping and every gate
+ * it had opened became unreachable *from the screen that opened them* — the
+ * run rows were fine, parked for their seven days, and the table simply did
+ * not know they existed. Measured on the first real channel: 10 of 11 parked
+ * probes were from a previous session and invisible here. It is the same
+ * failure `ImportScreen` had with one run in `useState`, and the same fix:
+ * the catalog is the source of truth, so derive rather than remember.
+ *
+ * The join is `document_id`, which both payloads already carry — a run row
+ * because it registered the document, a catalogue row because
+ * `GET /channels/{id}` looks it up by `source_key`. Nothing new crosses the
+ * wire for this.
+ *
+ * A run whose document is not in this channel's catalogue is dropped rather
+ * than guessed at: it is a video the last sync did not list, and inventing a
+ * row for it would put something on this table that the channel does not say
+ * it has.
+ */
+export function parkedRuns(
+  videos: ChannelVideoRow[],
+  runs: { workflowId: string; documentId: string | null; finishedAt: string | null }[],
+): Record<string, string> {
+  const byDocument = new Map<string, string>();
+  for (const v of videos) {
+    if (v.documentId) byDocument.set(v.documentId, v.videoId);
+  }
+  const out: Record<string, string> = {};
+  for (const run of runs) {
+    // Finished runs are not probes waiting on anybody: they were approved,
+    // rejected or cancelled, and re-attaching one would put a dead gate on a
+    // row that is either indexed or free to probe again.
+    if (run.finishedAt !== null || !run.documentId) continue;
+    const videoId = byDocument.get(run.documentId);
+    if (videoId === undefined || videoId in out) continue;
+    out[videoId] = run.workflowId;
+  }
+  return out;
+}
+
 /** One row of the candidates table: everything known about one video, from all
  *  four sources that know something about it.
  *
@@ -42,8 +91,60 @@ export interface Row {
   gate: VideoGateReport | null;
 }
 
+/** The prefix `channelstore.library_id_for` puts in front of a channel id. */
+export const CHANNEL_LIBRARY_PREFIX = "lib_yt_";
+
+/** The channel a library belongs to, or `null` if it is not a channel's.
+ *
+ *  The inverse of the worker's `library_id_for`, and it keeps that function's
+ *  one rule: the channel id is carried **verbatim and never lowercased**,
+ *  because a YouTube channel id is case-sensitive base64 and folding it would
+ *  name a different channel — a lookup that 404s if you are lucky and answers
+ *  about somebody else's channel if you are not. */
+export function channelIdFor(libraryId: string | null): string | null {
+  if (!libraryId || !libraryId.startsWith(CHANNEL_LIBRARY_PREFIX)) return null;
+  const id = libraryId.slice(CHANNEL_LIBRARY_PREFIX.length);
+  return id === "" ? null : id;
+}
+
 /** Whether this video already has an index that can be asked. */
 export const indexed = (row: Row): boolean => row.video.activeVersionId !== null;
+
+/** What the keyword chips are built from and matched against: the title and
+ *  the description the listing carries, one text per video.
+ *
+ *  A truncated description ends wherever the server cut it, and on the first
+ *  real channel that cut fell inside "familia" often enough to put `famil`
+ *  and `fami` in the top ten chips. The server cuts at a word boundary now;
+ *  the last token is dropped here as well, because a catalogue served by an
+ *  older worker, or by a cut that landed exactly at a boundary, must not
+ *  depend on which of the two is running. */
+export function videoText(video: ChannelVideoRow): string {
+  let description = video.description;
+  if (video.descriptionTruncated) {
+    description = description.replace(/\S+$/u, "");
+  }
+  return `${video.title}\n${description}`;
+}
+
+/** How many rows the table draws before asking. The chips, the counts,
+ *  "Marcar N" and the ids that go to the quote use the whole filtered set;
+ *  the page is only what is painted. Five thousand `<tr>` in WebKitGTK is
+ *  unmeasured and this keeps it from ever being measured by accident. */
+export const PAGE_ROWS = 100;
+
+/** The rows to draw: every row with a run, always — a parked gate is a
+ *  pending decision and a page boundary must not hide one — plus the first
+ *  `shown` of the rest, in table order. */
+export function pageRows(rows: Row[], shown: number): Row[] {
+  let left = Math.max(0, shown);
+  return rows.filter((r) => {
+    if (r.runId !== null) return true;
+    if (left === 0) return false;
+    left -= 1;
+    return true;
+  });
+}
 
 /** Whether the probe found captions. **Absent captions is not absent
  *  information** — it means the transcript costs an Amazon Transcribe bill, and
@@ -75,7 +176,7 @@ export const awaiting = (row: Row): boolean => row.gate !== null;
  *  what to approve. It used to be enabled only once a gate had landed, which
  *  read as a checkbox that did not work. */
 export const selectable = (row: Row): boolean =>
-  !indexed(row) && row.video.liveState !== "upcoming";
+  !indexed(row) && row.video.liveState !== "upcoming" && row.video.available;
 
 /** The rows the table shows under a keyword filter.
  *
@@ -86,12 +187,12 @@ export const selectable = (row: Row): boolean =>
  *  rather than silently kept. */
 export function filterRows(rows: Row[], keys: ReadonlySet<string>): Row[] {
   if (keys.size === 0) return rows;
-  return rows.filter((r) => r.runId !== null || titleMatches(r.video.title, keys));
+  return rows.filter((r) => r.runId !== null || titleMatches(videoText(r.video), keys));
 }
 
 /** Whether a row is on screen only because it carries a run. */
 export const outsideFilter = (row: Row, keys: ReadonlySet<string>): boolean =>
-  keys.size > 0 && row.runId !== null && !titleMatches(row.video.title, keys);
+  keys.size > 0 && row.runId !== null && !titleMatches(videoText(row.video), keys);
 
 /** How many more probes the quote allows.
  *

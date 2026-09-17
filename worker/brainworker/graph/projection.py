@@ -398,7 +398,15 @@ def _title_for(version: VersionNode, chunk: ChunkNode) -> str | None:
 
 
 #: Formats whose chunks are located by a clock rather than by a byte range.
-TIMED_FORMATS = frozenset({"youtube"})
+#:
+#: `youtube` is a video; `audio` is an object in a customer's S3 bucket. Both
+#: index a transcript with a time table, so both locate by the clock, and they
+#: differ only in the second fact — where to hear it — which `_heard_at`
+#: renders per format.
+TIMED_FORMATS = frozenset({"youtube", "audio"})
+#: `document.format` for a bucket object. Named here beside its sibling so the
+#: API's own constant and this set cannot drift; see `main.TIMED_FORMAT`.
+AUDIO_FORMAT = "audio"
 
 
 def _locator(version: VersionNode, chunk: ChunkNode) -> str:
@@ -421,8 +429,7 @@ def _locator(version: VersionNode, chunk: ChunkNode) -> str:
     ``source_title``.
     """
     if chunk.start_s is not None and version.fmt in TIMED_FORMATS:
-        vid = version.source_key.rsplit("/", 1)[-1]
-        return f"{hhmmss(chunk.start_s)} · {watch_url(vid, chunk.start_s)}"
+        return f"{hhmmss(chunk.start_s)} · {_heard_at(version, chunk.start_s)}"
 
     parts = [version.title]
     if chunk.page is not None:
@@ -435,6 +442,22 @@ def _locator(version: VersionNode, chunk: ChunkNode) -> str:
         parts.append(title)
     parts.append(f"[{chunk.char_start}:{chunk.char_end}]")
     return " · ".join(parts)
+
+
+def _heard_at(version: VersionNode, start_s: float) -> str:
+    """Where a timed chunk can be heard: the watch URL with its offset for a
+    video, the `s3://` URL for a bucket object.
+
+    The second is not something a browser opens — that is what the media-link
+    route presigns on click — but it is the one fact about the object that
+    cannot move without the object being a different one, which is what a
+    citation's identity needs. `source_key` for an object is `s3/<bucket>/<key>`,
+    so the URL is the key with its scheme restored.
+    """
+    if version.fmt == AUDIO_FORMAT:
+        return "s3://" + version.source_key.removeprefix("s3/")
+    vid = version.source_key.rsplit("/", 1)[-1]
+    return watch_url(vid, start_s)
 
 
 def activate(graph: Graph, version: VersionNode) -> None:

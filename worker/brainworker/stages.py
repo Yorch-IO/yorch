@@ -117,6 +117,35 @@ VIDEO_STAGES: tuple[str, ...] = (
     "done",
 )
 
+#: One recording out of a customer's S3 bucket.
+#:
+#: `VIDEO_STAGES` minus `grouping` before the gate — an object has no captions
+#: to group, so there is nothing to preview until the money is spent — plus
+#: `archiving` after `transcribing`, where the raw transcript is written back
+#: into the customer's own bucket so the next import of these bytes pays no
+#: ASR. `check_archive` runs at the head of `fetching` and, when it finds one,
+#: the run enters `transcribing` with a detail saying so and skips straight to
+#: `grouping`: the `transcription_result` artifact is attributed to
+#: `transcribing` on both paths, which is what keeps the map below honest.
+AUDIO_STAGES: tuple[str, ...] = (
+    "probing",
+    "registering",
+    "previewing",
+    "awaiting_approval",
+    "fetching",
+    "transcribing",
+    "archiving",
+    "grouping",
+    "correcting",
+    "chunking",
+    "projecting",
+    "epub",
+    "embedding",
+    "semantics",
+    "activating",
+    "done",
+)
+
 #: Reading a channel: what its videos are about, before any of them is indexed.
 #:
 #: **A display order, not a schedule**, and here the two halves never run in one
@@ -261,6 +290,7 @@ ARTIFACT_STAGES: dict[str, str] = {
     # from either source, and an artifact attributed to two stages would make
     # this map a lie on one of the two paths.
     "video_probe": "probing",
+    "audio_probe": "probing",
     "captions": "probing",
     "transcription_result": "transcribing",
     "transcript": "grouping",
@@ -298,6 +328,8 @@ def stage_of_cost(cost_stage: str) -> str | None:
 #: from.
 ARTIFACT_STAGE_OVERRIDES: dict[str, dict[str, str]] = {
     "video": {"evidence": "grouping"},
+    # The same grouper writes it on the bucket path.
+    "audio": {"evidence": "grouping"},
     # `estimate` is written by whichever stage quotes, and that stage is named
     # `previewing` on the ingest path and `estimating` on the rebuild one. Found
     # by adding the writer: the artifact had never been written, so the
@@ -350,6 +382,7 @@ def as_json() -> str:
             "ingest_stages": list(INGEST_STAGES),
             "rebuild_stages": list(REBUILD_STAGES),
             "video_stages": list(VIDEO_STAGES),
+            "audio_stages": list(AUDIO_STAGES),
             "removal_stages": list(REMOVAL_STAGES),
             "activation_stages": list(ACTIVATION_STAGES),
             "epub_stages": list(EPUB_STAGES),

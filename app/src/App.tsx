@@ -3,10 +3,13 @@ import { useTranslation } from "react-i18next";
 
 import { LANGUAGES, setLanguage, type Language } from "./i18n";
 import { BackendProvider, useBackend } from "./lib/backend";
+import { BucketPicker, BucketsProvider } from "./lib/buckets";
 import { ChannelPicker, ChannelsProvider } from "./lib/channels";
+import { LocalTranscriberProvider } from "./lib/localTranscriber";
 import { LibrariesProvider, LibraryPicker } from "./lib/libraries";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { AskScreen } from "./screens/AskScreen";
+import { BucketScreen } from "./screens/BucketScreen";
 import { ChannelScreen } from "./screens/ChannelScreen";
 import { ChatScreen } from "./screens/ChatScreen";
 import { ImportScreen } from "./screens/ImportScreen";
@@ -29,6 +32,7 @@ const TABS = [
   "graph",
   "import",
   "channel",
+  "bucket",
   "ask",
   "chat",
 ] as const;
@@ -54,6 +58,7 @@ const SCREENS: Record<
   graph: GraphScreen,
   import: ImportScreen,
   channel: ChannelScreen,
+  bucket: BucketScreen,
   ask: AskScreen,
   chat: ChatScreen,
 };
@@ -109,6 +114,13 @@ function Shell() {
   return (
     <LibrariesProvider>
       <ChannelsProvider>
+      <BucketsProvider>
+      {/* Above the screens and outside their key, because the queue must keep
+          transcribing while somebody reads the Library — the same reason the
+          import gate's poll stopped being a screen-local interval. It stops on
+          a *plane* change, which is right: the parked runs belong to the
+          organisation that was signed in. */}
+      <LocalTranscriberProvider>
       <div className="app">
         <aside className="sidebar">
           <div className="brand">
@@ -145,6 +157,10 @@ function Shell() {
             <div className="topbar-library">
               {tab === "channel" ? (
                 <ChannelPicker />
+              ) : tab === "bucket" ? (
+                /* A bucket is a library too — `lib_s3_<id>` — so the same
+                   slot, the same reasoning as the channel's. */
+                <BucketPicker />
               ) : (
                 NEEDS_LIBRARY.has(tab) && <LibraryPicker compact />
               )}
@@ -212,6 +228,8 @@ function Shell() {
           </main>
         </div>
       </div>
+      </LocalTranscriberProvider>
+      </BucketsProvider>
       </ChannelsProvider>
     </LibrariesProvider>
   );

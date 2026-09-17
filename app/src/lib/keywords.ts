@@ -1,6 +1,12 @@
 /**
- * The words a channel's titles repeat, so a person can narrow a catalogue
- * without paying for the metadata pass.
+ * The words a channel's titles and descriptions repeat, so a person can narrow
+ * a catalogue without paying for the metadata pass.
+ *
+ * Descriptions as well as titles, by decision: a sermon's title is often a
+ * verse and its description the subject. The description the listing carries
+ * is its first 400 characters — the summary end of it, before the links and
+ * service times — and the boilerplate rule below is what keeps a paragraph the
+ * channel pastes under every video out of the chips.
  *
  * Pure, and kept out of the screen for the reason `channel.ts` and `radial.ts`
  * give: what is worth asserting here is the derivation — which words survive,
@@ -69,6 +75,31 @@ dice dicen dicho les nos ello ella ellos ellas usted ustedes ver vez veces
 modo manera caso pues bien cierto cierta`.split(/\s+/),
 );
 
+/** Words a YouTube catalogue carries because it is a YouTube catalogue, not
+ *  because of what the videos are about. Measured on the first real channel
+ *  (2,983 videos, 2026-09-16): the top forty chips held `www`, `http`, `com`,
+ *  `Facebook`, `Síguenos` from the descriptions' links and social lines, and
+ *  `mayo`, `agosto`, `Viernes` from the dates the titles carry. None of them
+ *  is a subject anybody would search a channel for. Folded like the keys. */
+export const NOISE: ReadonlySet<string> = new Set(
+  `enero febrero marzo abril mayo junio julio agosto septiembre setiembre octubre
+noviembre diciembre lunes martes miercoles jueves viernes sabado sabados domingo
+domingos semana
+www http https com org net html link enlace suscribete siguenos facebook
+instagram twitter tiktok youtube whatsapp telegram spotify canal programa serie
+calle carrera avenida pbx tel telefono informate inscribete`.split(/\s+/),
+);
+
+/** Links, mail addresses, handles and hashtags are removed whole before
+ *  tokenising: `casaroca.org/eventos` would otherwise mint `casaroca`, `org`
+ *  and `eventos`, and the third looks like a topic. Bare domains too — the
+ *  description said "Más información en casaroca.org" 1,268 times with no
+ *  `www.` to catch. A hashtag is the channel's branding by construction:
+ *  `#CasaRocaNoPara` was the single most frequent "word" once the links were
+ *  gone. `Rev.` and `Ps.` survive, because the dot is not followed by a
+ *  letter. */
+const LINK = /(?:https?:\/\/|www\.)\S+|[\p{L}\p{N}-]+\.[\p{L}\p{N}.-]*\p{L}{2,}(?:\/\S*)?|\S+@\S+|[@#][\p{L}\p{N}_]+/gu;
+
 function fold(word: string): string {
   let out = "";
   for (const ch of word) out += FOLD.get(ch) ?? ch;
@@ -83,20 +114,29 @@ function fold(word: string): string {
  *  chapter number is not a topic anybody would search a channel for. */
 export function tokens(title: string): Array<[string, string]> {
   const out: Array<[string, string]> = [];
-  for (const surface of title.split(/[^\p{L}\p{N}]+/u)) {
+  for (const surface of title.replace(LINK, " ").split(/[^\p{L}\p{N}]+/u)) {
     if (surface.length < MIN_TOKEN_LEN) continue;
     if (/^\p{N}+$/u.test(surface)) continue;
     const key = fold(surface);
-    if (key.length < MIN_TOKEN_LEN || STOPWORDS.has(key)) continue;
+    if (key.length < MIN_TOKEN_LEN || STOPWORDS.has(key) || NOISE.has(key)) continue;
     out.push([key, surface]);
   }
   return out;
 }
 
-/** The frequent words of these titles, most frequent first, at most
- *  `KEYWORDS_MAX`. Ties break on the label, so the order is stable across
- *  renders and the same channel always offers the same chips. */
-export function titleKeywords(titles: string[]): Keyword[] {
+/** The frequent words of these texts — one per video, its title and its
+ *  description together — most frequent first, at most `KEYWORDS_MAX`. Ties
+ *  break on the label, so the order is stable across renders and the same
+ *  channel always offers the same chips.
+ *
+ *  `exclude` is the channel's own name, tokenised: on the first real channel
+ *  it sat on 20% of the titles, well under the boilerplate share, and `Casa`
+ *  and `Roca` were the third and fourth chips. A channel's name is not one of
+ *  its subjects whatever share of the titles it is on. */
+export function titleKeywords(
+  titles: string[],
+  exclude: ReadonlySet<string> = new Set(),
+): Keyword[] {
   const videos = new Map<string, number>();
   const spellings = new Map<string, Map<string, number>>();
 
@@ -125,7 +165,7 @@ export function titleKeywords(titles: string[]): Keyword[] {
 
   const out: Keyword[] = [];
   for (const [key, count] of videos) {
-    if (count > ceiling) continue;
+    if (count > ceiling || exclude.has(key)) continue;
     out.push({ key, label: majority(spellings.get(key)!), videos: count });
   }
   out.sort((a, b) => b.videos - a.videos || a.label.localeCompare(b.label, "es"));
@@ -146,9 +186,9 @@ function majority(forms: Map<string, number>): string {
   return best;
 }
 
-/** Whether a title carries **any** of the selected keys — the any-of rule a
- *  multi-select filter means. Matched through the same tokenisation the chips
- *  were built from, so a chip always matches at least the titles it was
+/** Whether a video's text carries **any** of the selected keys — the any-of
+ *  rule a multi-select filter means. Matched through the same tokenisation the
+ *  chips were built from, so a chip always matches at least the videos it was
  *  counted on. */
 export function titleMatches(title: string, keys: ReadonlySet<string>): boolean {
   if (keys.size === 0) return true;

@@ -2,3 +2,8 @@
 # release about monthly. See the header of fetch.sh for the whole reason.
 yt-dlp-*
 *.part
+
+# Built or fetched by fetch-whisper.sh, never committed: tens of megabytes per
+# platform, and a CUDA build is hundreds. Same judgement as yt-dlp above.
+whisper-cli-*
+runtime-*

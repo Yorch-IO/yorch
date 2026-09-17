@@ -13,6 +13,22 @@ import i18n from "./i18n";
 import { ImportQueue } from "./ImportQueue";
 import { api, DEFAULT_STAGES, type GateReport, type RunListItem } from "./lib/api";
 import type { QueueItem } from "./lib/importQueue";
+import * as transcriber from "./lib/localTranscriber";
+
+/** What the queue looks like with nothing waiting for this machine, which is
+ *  what every row below but one is rendered against. */
+const IDLE_QUEUE: ReturnType<typeof transcriber.useLocalTranscriber> = {
+  status: null, model: "", setModel: () => {}, readiness: "unknown", jobs: [],
+  current: null, attempt: null, history: [], paused: false, setPaused: () => {},
+  probe: async () => false, probing: false,
+  download: async () => false, downloading: null, giveUp: async () => false,
+  hoursLeft: null, refresh: async () => {}, error: null,
+};
+
+const LIBRARIES = [
+  { id: "lib_1", name: "Teología" },
+  { id: "lib_yt_UCabc", name: "Casa Sobre La Roca" },
+];
 
 vi.mock("./lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./lib/api")>();
@@ -67,12 +83,16 @@ const draw = (
     approved: boolean,
     options: typeof DEFAULT_STAGES,
   ) => void | Promise<void> = () => {},
+  queue: { filter?: string | null; onFilter?: (id: string | null) => void } = {},
 ) =>
   render(
     <ImportQueue
       items={items}
       loaded
       error={null}
+      filter={queue.filter ?? null}
+      onFilter={queue.onFilter ?? (() => {})}
+      libraries={LIBRARIES}
       stages={DEFAULT_STAGES}
       onDecide={onDecide}
       onChanged={onChanged}
@@ -101,6 +121,57 @@ const withheld = (over: Partial<RunListItem> = {}): QueueItem =>
 
 beforeEach(async () => {
   await i18n.changeLanguage("es");
+  vi.clearAllMocks();
+});
+
+// --- the queue spans every library ------------------------------------------
+
+it("names the library on every row when the list spans more than one", async () => {
+  // The defect this replaces: a probe started from the Channel tab lands in
+  // `lib_yt_<channelId>`, the queue was filtered to the picker's library, and
+  // the run was invisible on the one screen whose job is to show what is in
+  // flight — while the sidebar, which is project-wide, showed it going.
+  const { container } = draw([
+    item({ run: { id: "a", workflowId: "a", libraryId: "lib_1", title: "Un libro" } }),
+    item({
+      run: { id: "b", workflowId: "b", libraryId: "lib_yt_UCabc", title: "Una prédica" },
+    }),
+  ]);
+  await waitFor(() => expect(container.textContent).toContain("Casa Sobre La Roca"));
+  expect(container.textContent).toContain("Teología");
+});
+
+it("leaves the library off the rows once the list is narrowed to one", async () => {
+  // Repeating the library somebody just filtered to on every row is noise.
+  const { container } = draw(
+    [item({ run: { libraryId: "lib_1" } })],
+    () => {},
+    () => {},
+    { filter: "lib_1" },
+  );
+  expect(container.querySelector(".queue-library")).toBeNull();
+});
+
+it("narrows by library, and says which emptiness it is showing", async () => {
+  const onFilter = vi.fn();
+  const { container } = draw([], () => {}, () => {}, { onFilter });
+  // Unfiltered and empty is "nothing has been imported"; filtered and empty is
+  // "nothing *here*", which has a way out the other does not.
+  expect(container.textContent).toContain(t("queue.empty"));
+
+  const select = container.querySelector(".queue-filter select") as HTMLSelectElement;
+  await waitFor(() => expect(select.options.length).toBe(3));
+  fireEvent.change(select, { target: { value: "lib_yt_UCabc" } });
+  expect(onFilter).toHaveBeenCalledWith("lib_yt_UCabc");
+  fireEvent.change(select, { target: { value: "" } });
+  // Empty string is the "all libraries" option, and it must reach the hook as
+  // `null` — an empty `library_id` on the wire would narrow to nothing.
+  expect(onFilter).toHaveBeenLastCalledWith(null);
+});
+
+it("says nothing is here rather than nothing exists when narrowed", async () => {
+  const { container } = draw([], () => {}, () => {}, { filter: "lib_1" });
+  expect(container.textContent).toContain(t("queue.emptyHere"));
 });
 
 afterEach(cleanup);
@@ -311,4 +382,38 @@ it("gives the buttons back when an approval is refused", async () => {
   fireEvent.click(approve());
   await waitFor(() => expect(refused).toHaveBeenCalled());
   await waitFor(() => expect(approve().disabled).toBe(false));
+});
+
+/**
+ * A bucket run parked for this machine's GPU.
+ *
+ * Two things are asserted and both were reachable only from this screen. The
+ * row has to say *why* an approved run is not moving — "waiting for this
+ * machine" is a state nothing else in the product has — and it has to carry
+ * the way out, because the alternative is a settings panel two tabs away that
+ * nobody thinks to open while looking at a stalled run.
+ */
+it("says a run is waiting for this machine, and offers Amazon beside it", async () => {
+  const switched = vi.fn().mockResolvedValue(true);
+  vi.spyOn(transcriber, "useLocalTranscriber").mockReturnValue({
+    ...IDLE_QUEUE,
+    giveUp: switched,
+  });
+  const changed = vi.fn();
+  draw([item({ state: "awaiting_transcript", stage: "transcribing", run: { kind: "audio", state: "awaiting_transcript", workflowId: "audio-1" } })], changed);
+
+  expect(screen.getByText(t("home.run.state.awaiting_transcript"))).toBeTruthy();
+  expect(document.body.textContent).toContain(t("queue.transcribeHere"));
+
+  const amazon = Array.from(document.querySelectorAll("button")).find(
+    (b) => b.textContent === t("queue.transcribeOnAmazon"),
+  )!;
+  fireEvent.click(amazon);
+  await waitFor(() => expect(switched).toHaveBeenCalledWith("audio-1"));
+  // The queue is asked to re-read: the run is back at a gate with a price on
+  // it, and the row that offered the switch is no longer the right row.
+  await waitFor(() => expect(changed).toHaveBeenCalled());
+  await waitFor(() =>
+    expect(document.body.textContent).toContain(t("queue.transcribeSwitched")),
+  );
 });

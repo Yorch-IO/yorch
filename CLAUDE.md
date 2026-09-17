@@ -71,11 +71,32 @@ on a screen and not a gate, why the transcript pass reads the *uncorrected*
 stream, why the quote widens its input where every other quote in this product
 widens only its output, and — since later the same day — why one tick drives
 both the probe and the approval, why the probe cap is a budget across rounds,
-and why the title-keyword filter reaches Discover but nothing else. **Built 2026-09-16 for the free
+why the title-keyword filter reaches Discover but nothing else, and why a
+sync of any size saves page by page and stops at the first known page *only*
+once the catalogue has reached the end of the playlist, and why a parked probe
+is reachable both from the screen that started it and from the import queue —
+which now spans every library, because a channel's runs live in a library the
+picker is never on. **Built 2026-09-16 for the free
 plane and the desktop app only**; the paid plane holds the migration and the
 stage-vocabulary fork and serves no route, and the Angular client has nothing.
 That is a decision on the record, made with the count at the top of this file
 in view, not an omission.
+
+**Indexing a customer's S3 bucket has its own document: `doc/BUCKET.md`.** Read
+it before touching `s3source.py`, `audioprobe.py`, `bucketstore.py`,
+`activities/bucket.py`, `workflows/bucket.py`, `workflows/timed.py`,
+`scripture.py`, `app/src-tauri/src/whisper.rs`, `lib/localTranscriber.tsx`,
+`BucketScreen.tsx` or the paid plane's `src/buckets/`. It holds what is not
+visible from any one file — why a bucket is a library and its catalogue a file
+while Postgres owns what is indexed, why the quote is bound to the etag it was
+made for, why Transcribe runs on *our* copy in *our* account, why there is a
+run per object rather than a batch gate, why the transcript is written back to
+the customer's bucket (a re-index then costs $0 in transcription), and the
+whole local-transcriber half: why the engine is chosen **before** quoting, why
+`awaiting_transcript` earned a seventh run state, and why the speed that
+justifies it is measured rather than derived. **Built 2026-09-16/17 for the
+paid plane and both clients.** The free plane serves no route by decision, and
+says so.
 
 ## Commands
 
@@ -99,10 +120,11 @@ uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # stack up: 1301 passed
-# Measured 2026-09-16 with the stack **up** and BRAIN_MEMGRAPH_URL pointed at
+cd worker && uv sync && uv run pytest -q           # stack up: 1417 passed
+# Measured 2026-09-17 with the stack **up** and BRAIN_MEMGRAPH_URL pointed at
 # the port `docker` publishes (below). Without that variable 92 graph and
-# retrieval tests skip against the default 7788 — a skip, not a failure, and
+# retrieval tests skip against the default 7788 — measured again the same day:
+# 1325 passed, 92 skipped. A skip, not a failure, and
 # the stack-down figures below have not been re-measured since.
 # Before that: 988 on 2026-09-06. With it down, graph/ and catalog/
 # skip instead — 637 passed / 150 skipped the last time that was actually run
@@ -137,7 +159,11 @@ cd app && npm install
 # monthly. Fetch it before `tauri build`, which fails at the bundler without
 # it, or `tauri dev`, which starts and then answers `ytdlp_missing`.
 ./src-tauri/binaries/fetch.sh                      # this machine's triple
-npm run typecheck && npx vitest run && npm run build   # 547 passed
+# And the transcriber the app runs on the person's own GPU. Built from source
+# on Linux and macOS (cmake, pinned commit), downloaded on Windows. `--cuda`
+# when nvcc is there; the models are not bundled and are fetched on first use.
+./src-tauri/binaries/fetch-whisper.sh              # this machine's triple
+npm run typecheck && npx vitest run && npm run build   # 668 passed
 npx vitest run -t "define no key"                  # single test by name
 COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch npm run tauri dev
 
@@ -151,9 +177,11 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch \
 # and PKG_CONFIG_PATH set, or the `soup3-sys` build script fails first. No
 # `--release`: the tuned dev profile runs this gate in 60s at 412% CPU.
 export PKG_CONFIG_PATH=~/.local/tauri-sysroot/prefix/usr/lib/x86_64-linux-gnu/pkgconfig
-cd app/src-tauri && cargo test                     # 146 passed, 1 ignored
-# One test is `#[ignore]`d because it talks to YouTube; it is the only thing
-# that can say the bundled binary works at all. Run it on purpose:
+cd app/src-tauri && cargo test                     # 163 passed, 2 ignored
+# Two tests are `#[ignore]`d because they talk to the bundled binaries — one to
+# YouTube, one to whisper.cpp — and they are the only things that can say those
+# binaries work at all. The whisper one found a timeout the unit tests could
+# not: a CUDA build takes 38.7 s to name its device. Run them on purpose:
 #   COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch cargo test -- --ignored
 
 # Rebuild the image the API and worker actually run. **All three overlays.**
@@ -2117,6 +2145,41 @@ belong to no pipeline stage, so they land in a trailing `stage: null` group. Tha
 is what keeps the ledger's totals equal to `total_cost` rather than quietly less
 than the bill.
 
+### The import queue spans every library, and that was a defect for a while
+
+Enqueuing *is* starting the workflow, so the queue is `run` rows and nothing
+else — see the entry below. What it was **not** is project-wide: it took the
+library from the top-bar picker and could not be asked for anything else. That
+is fine for a screen somebody imports *into*, and wrong the moment a run is
+started somewhere that owns no picker.
+
+The Channel tab is exactly that: a channel *is* a library (`lib_yt_<channelId>`)
+and that screen picks a channel, so the library picker is never on it. Reported
+2026-09-16 as "a video requested from Channel does not appear in Import" — 11
+probes parked correctly, seven days each, nothing spent, and invisible on the
+one screen whose job is to show what is in flight, while the sidebar showed
+them going because `/project-summary` is project-wide.
+
+So the queue asks about every library and names each run's on its row, and the
+library is an optional **narrowing**. Three things that are decisions:
+
+- **The narrowing is a request parameter, never a filter over what arrived.**
+  `QUEUE_LIMIT` is 30, so narrowing afterwards would show whichever of a
+  library's runs the last 30 of *every* library happened to include — a
+  different and much smaller list than "the last 30 of this one".
+- **The library cell is conditional, so the row's grid needs a variant.** A
+  conditional child in a grid of fixed tracks does not go missing: every later
+  cell slides one track left, so the `1fr` that pushes the tail of the row to
+  the right would land on the date the moment somebody filtered.
+  `.queue-row.has-library` carries the eighth track; a screenshot is what said
+  so, because jsdom lays out no grid — the same way the stretched kind badge
+  was found.
+- **The library rows reach `ImportQueue` as a prop, not as `useLibraries()`.**
+  Everything else that component needs is one, and a context read there made
+  three `ImportScreen` suites mount a provider to see a file chooser. It also
+  exposed a double that had been lying: they faked the hook with a `libraries`
+  key the real state has never had.
+
 ### The import queue needs no client persistence, and that is not an accident
 
 Enqueuing *is* starting the workflow: the free stages cost nothing and the gate
@@ -3600,9 +3663,9 @@ maps them to localised labels.
 - Both `en` and `es` bundles are shipped, and tests enforce key parity, matching
   interpolation placeholders, and that no key goes unused. UI language is a
   separate setting from a collection's *content* language.
-- **The nine screens are all mounted at once and only one is shown**, and the
+- **The ten screens are all mounted at once and only one is shown**, and the
   tab order is the order of the work: `home`, `stack`, `library`, `explore`,
-  `graph`, `import`, `channel`, `ask`, `chat`. Home is the default because
+  `graph`, `import`, `channel`, `bucket`, `ask`, `chat`. Home is the default because
   "what is in here?" is the question a person arrives with — Services was the
   landing screen only for want of anything else. Home and Services own no
   library, so the picker is off both; Home's figures are project-wide, so a
@@ -3613,7 +3676,12 @@ maps them to localised labels.
   takes the *same slot* in the top bar, with the sync field beside it
   (`lib/channels.tsx`, the `LibrariesProvider` pattern with a channel in it),
   because the thing you do once per channel belongs in the bar and not in the
-  first screenful. A tab id has to be lowercase letters only: `i18n.test.ts` reads `TABS` with `"([a-z]+)"` and
+  first screenful. **Bucket is the fourth without a library picker and takes
+  that same slot**, for the same reason again — a bucket *is* a library,
+  `lib_s3_<sha1(bucket/prefix)[:12]>` — with one difference worth knowing:
+  registering a bucket takes a name, a prefix, a role ARN and a manifest
+  mapping, which is a form and not a field, so the screen holds it and only the
+  re-sync lives in the bar. A tab id has to be lowercase letters only: `i18n.test.ts` reads `TABS` with `"([a-z]+)"` and
   would silently skip anything else.
 - **Every screen may take a `go`, and only Home reads it.** A component declaring
   no parameters is assignable to `(props: { go: (tab: Tab) => void }) => JSX`, so

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { Locator } from "../Locator";
+import { MediaLocator } from "../MediaLocator";
+import { Narrowings, activeNarrowings } from "../Narrowings";
+import { bucketIdFor } from "../lib/bucket";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -7,6 +9,7 @@ import {
   errorGuidanceKey,
   errorMessage,
   type AnswerState,
+  type AskNarrowings,
   type EvidenceItem,
 } from "../lib/api";
 import {
@@ -63,7 +66,7 @@ const NOT_CITED_KEY: Record<AnswerState, string> = {
  *  reasoning `DocumentGraph`'s `Swatch` records applies: one component means one
  *  stylesheet rule moves both, rather than two that drift until somebody
  *  notices the passages look different on two screens. */
-export function Passage({ item }: { item: EvidenceItem }) {
+export function Passage({ item, libraryId }: { item: EvidenceItem; libraryId?: string | null }) {
   const { t } = useTranslation();
   return (
     <div className="passage">
@@ -73,7 +76,7 @@ export function Passage({ item }: { item: EvidenceItem }) {
         {t(`ask.source.${item.source}`, { defaultValue: item.source })}
       </span>
       <p className="chunk-text">{item.text}</p>
-      <Locator text={item.locator} className="locator" />
+      <MediaLocator locator={item.locator} libraryId={libraryId ?? null} documentId={item.documentId} />
     </div>
   );
 }
@@ -97,6 +100,10 @@ export function AskScreen() {
   // same reason: the remount on a plane change re-reads the level belonging to
   // the plane now on screen.
   const [effort, setEffort] = useState<AskEffort>(() => loadEffort(identity));
+  // Not persisted: a filter that outlived the session that set it would be a
+  // silent one, and the screen it belongs to is remounted on a plane change.
+  const [narrowings, setNarrowings] = useState<AskNarrowings>({});
+  const isBucket = bucketIdFor(libraryId) !== null;
   const nextId = useRef(lastId(session));
   const [now, setNow] = useState(() => Date.now());
 
@@ -179,7 +186,12 @@ export function AskScreen() {
   // every old question at whatever the control happens to say now, which is the
   // one thing that would make two entries incomparable.
   const startAsk = useCallback(
-    async (question: string, library: string, level: AskEffort) => {
+    async (
+      question: string,
+      library: string,
+      level: AskEffort,
+      narrow: AskNarrowings = {},
+    ) => {
       const id = `q${(nextId.current += 1)}`;
       dispatch({
         type: "submit",
@@ -194,6 +206,7 @@ export function AskScreen() {
           library_id: library,
           text: question,
           effort: level,
+          ...activeNarrowings(narrow),
         });
         dispatch({ type: "started", id, questionId });
       } catch (e) {
@@ -207,8 +220,8 @@ export function AskScreen() {
     const question = text.trim();
     if (!question || !libraryId) return;
     setText("");
-    void startAsk(question, libraryId, effort);
-  }, [libraryId, text, startAsk, effort]);
+    void startAsk(question, libraryId, effort, isBucket ? narrowings : {});
+  }, [libraryId, text, startAsk, effort, narrowings, isBucket]);
 
   const spent = answer?.spend.reduce((sum, s) => sum + (s.usd ?? 0), 0) ?? 0;
   const anyUnpriced = answer?.spend.some((s) => s.usd === null) ?? false;
@@ -340,6 +353,10 @@ export function AskScreen() {
             ))}
           </fieldset>
 
+          {isBucket && (
+            <Narrowings value={narrowings} onChange={setNarrowings} disabled={busy} />
+          )}
+
           <button
             type="button"
             onClick={submit}
@@ -365,14 +382,18 @@ export function AskScreen() {
                     >
                       {c.claim}
                     </button>
-                    <Locator text={c.locator} className="locator" />
+                    <MediaLocator
+                      locator={c.locator}
+                      libraryId={entry?.libraryId ?? libraryId}
+                      documentId={answer.evidence.find((e) => e.chunkId === c.chunkId)?.documentId}
+                    />
                   </li>
                 ))}
               </ol>
 
               <h3>{t("ask.citedPassage")}</h3>
               {cited ? (
-                <Passage item={cited} />
+                <Passage item={cited} libraryId={entry?.libraryId ?? libraryId} />
               ) : (
                 <p className="notice">{t("ask.noEvidence")}</p>
               )}
@@ -385,7 +406,7 @@ export function AskScreen() {
               <h3>{t("ask.evidence", { count: answer.evidence.length })}</h3>
               <p className="notice">{t(NOT_CITED_KEY[answer.state])}</p>
               {answer.evidence.map((e) => (
-                <Passage key={e.chunkId} item={e} />
+                <Passage key={e.chunkId} item={e} libraryId={entry?.libraryId ?? libraryId} />
               ))}
             </>
           )}

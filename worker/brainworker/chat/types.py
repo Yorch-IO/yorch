@@ -84,6 +84,14 @@ class ChatTurn:
     #: corpus.
     tenant_id: str
     effort: Literal["brief", "standard", "thorough"] = DEFAULT_EFFORT
+    #: The same four narrowings `Question` carries, per turn, copied into the
+    #: `Question` the turn asks. Per turn rather than per conversation because
+    #: a reader narrows and widens as they go, and a filter that outlived the
+    #: turn that set it would be a silent one.
+    recorded_from: str = ""
+    recorded_to: str = ""
+    scripture: str = ""
+    source_name: str = ""
 
 
 @dataclass

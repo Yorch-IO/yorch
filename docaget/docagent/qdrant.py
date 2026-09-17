@@ -181,31 +181,50 @@ class Qdrant:
     def drop(self) -> None:
         self._call("DELETE", f"/collections/{self.collection}")
 
-    def create(self, dims: int, payload_indexes: tuple[str, ...] = ()) -> None:
-        """Create the hybrid collection if it does not exist.
+    def create(
+        self,
+        dims: int,
+        payload_indexes: tuple[str, ...] = (),
+        integer_indexes: tuple[str, ...] = (),
+    ) -> None:
+        """Create the hybrid collection if it does not exist, and its indexes always.
 
         Vectors stay in RAM: a few hundred points at 3072 dims is single-digit MB.
+
+        The indexes are ensured on every call, not only when the collection is
+        made: the index set grows — `source_name` and the scripture lists
+        arrived long after `brain` existed — and an early return on an existing
+        collection is how a new filter would scan the whole collection for ever
+        while every log line read as healthy. Creating an index that already
+        exists is a no-op.
         """
-        if self.exists():
-            return
-        self._ok(
-            "PUT",
-            f"/collections/{self.collection}",
-            {
-                "vectors": {
-                    # gemini-embedding-001 returns L2-normalised vectors at the
-                    # full 3072 dims, so cosine needs no renormalisation here.
-                    # Truncating to 768/1536 via Matryoshka would.
-                    DENSE_VEC: {"size": dims, "distance": "Cosine"}
+        if not self.exists():
+            self._ok(
+                "PUT",
+                f"/collections/{self.collection}",
+                {
+                    "vectors": {
+                        # gemini-embedding-001 returns L2-normalised vectors at
+                        # the full 3072 dims, so cosine needs no renormalisation
+                        # here. Truncating to 768/1536 via Matryoshka would.
+                        DENSE_VEC: {"size": dims, "distance": "Cosine"}
+                    },
+                    "sparse_vectors": {SPARSE_VEC: {"modifier": "idf"}},
                 },
-                "sparse_vectors": {SPARSE_VEC: {"modifier": "idf"}},
-            },
-        )
+            )
         for fieldname in payload_indexes:
             self._ok(
                 "PUT",
                 f"/collections/{self.collection}/index?wait=true",
                 {"field_name": fieldname, "field_schema": "keyword"},
+            )
+        # Integer-indexed fields take a `range` filter without a scan. Idempotent
+        # like the keyword ones: creating an index that exists is a no-op.
+        for fieldname in integer_indexes:
+            self._ok(
+                "PUT",
+                f"/collections/{self.collection}/index?wait=true",
+                {"field_name": fieldname, "field_schema": "integer"},
             )
 
     def info(self) -> CollectionInfo:
@@ -389,14 +408,29 @@ class Qdrant:
 
     # --- retrieval ----------------------------------------------------------
 
-    def _filter(self, filters: dict[str, str]) -> dict | None:
+    def _filter(self, filters: dict[str, Any]) -> dict | None:
+        """A payload filter from a plain dict, in three shapes by value.
+
+        A string is an equality — the scope every search carries. A list is
+        `match any`, for a field that is itself a list on the point, like a
+        chunk's scripture references. A dict of `gte`/`lte` is a `range`, for
+        an integer such as a recording's day. The caller chooses the shape by
+        the value it passes and never spells Qdrant's syntax itself, which is
+        what keeps the allowlist in `retrieve.search` the only place a filter
+        is decided.
+        """
         if not filters:
             return None
-        return {
-            "must": [
-                {"key": k, "match": {"value": v}} for k, v in sorted(filters.items())
-            ]
-        }
+        must = []
+        for k, v in sorted(filters.items()):
+            if isinstance(v, dict):
+                bounds = {b: v[b] for b in ("gte", "lte", "gt", "lt") if b in v}
+                must.append({"key": k, "range": bounds})
+            elif isinstance(v, (list, tuple, set)):
+                must.append({"key": k, "match": {"any": sorted(v)}})
+            else:
+                must.append({"key": k, "match": {"value": v}})
+        return {"must": must}
 
     def search(self, vector: list[float], opts: SearchOpts) -> list[Hit]:
         """Dense-only, sparse-only, or hybrid retrieval with RRF fusion.

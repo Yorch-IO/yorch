@@ -10,10 +10,19 @@ from __future__ import annotations
 
 from ..graph.schema import LEGACY_TENANT_ID
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Annotated, Literal
+
+from pydantic import Field
 
 from ..pipeline import Spend
 from .effort import DEFAULT_EFFORT
+
+#: `YYYY-MM-DD` or empty. A pattern on the field rather than a hand-raised 400,
+#: for the reason `effort` is a `Literal`: FastAPI refuses it with its own
+#: 422-and-a-list, which is the shape the paid plane's filter reproduces for
+#: `class-validator`, so both planes answer a bad date identically.
+ISO_DAY = r"^(\d{4}-\d{2}-\d{2})?$"
+IsoDay = Annotated[str, Field(pattern=ISO_DAY)]
 
 
 @dataclass
@@ -59,6 +68,21 @@ class Question:
     #: `test_effort.py::test_the_literal_and_the_level_tuple_cannot_drift` is
     #: what keeps the two copies equal.
     effort: Literal["brief", "standard", "thorough"] = DEFAULT_EFFORT
+    #: Narrowings a recording corpus makes askable, appended after `effort` so
+    #: the field order both planes mirror is unchanged. All optional and all
+    #: empty by default, which is "no filter". Each is a hard cut over what the
+    #: dense floor already admits, so `off_corpus` fires more readily under one
+    #: — and the reason must render as the reason.
+    #:
+    #: `recorded_from`/`recorded_to` are inclusive `YYYY-MM-DD` bounds on the
+    #: document's recording date; `scripture` is a reference or a chapter
+    #: (`Juan 3:16`, `Romanos 8`) normalised by `scripture.normalise_query`,
+    #: matched where the reference was *spoken*; `source_name` is the feed or
+    #: folder the document came from, an equality like `filters` carries.
+    recorded_from: IsoDay = ""
+    recorded_to: IsoDay = ""
+    scripture: str = ""
+    source_name: str = ""
 
 
 @dataclass

@@ -88,6 +88,10 @@ KINDS: dict[str, str] = {
     # is a kind of its own rather than `raw_text` because `ARTIFACT_STAGES`
     # already attributes that one to `extracting`.
     "video_probe": "video-probe.json",
+    # The same fact for an object in a customer's bucket: what the sync and the
+    # probe learned for free — etag, size, container, duration and how it was
+    # read — and the identity basis the version id derives from.
+    "audio_probe": "audio-probe.json",
     "captions": "captions.vtt",
     "transcription_result": "transcription-result.json",
     "transcript": "transcript.json",

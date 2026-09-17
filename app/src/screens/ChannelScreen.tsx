@@ -17,16 +17,21 @@ import {
   buildRows,
   filterRows,
   overCap,
+  PAGE_ROWS,
+  pageRows,
+  PARKED_LIMIT,
+  parkedRuns,
   probeBudget,
   PROBE_POLL_MS,
   seedFromDiscovery,
   selectable,
   toProbe,
   unpickOnGate,
+  videoText,
   type Row,
 } from "../lib/channel";
 import { useChannels } from "../lib/channels";
-import { titleKeywords, topicOf } from "../lib/keywords";
+import { titleKeywords, tokens, topicOf } from "../lib/keywords";
 import { ChannelCandidates, KeywordChips } from "./ChannelCandidates";
 import { ChannelSynthesis } from "./ChannelSynthesis";
 import { exportName, toCsv, toJson } from "../lib/synthesisExport";
@@ -77,12 +82,21 @@ const VIDEO_STAGES: Partial<StageOptions> = {
  */
 export function ChannelScreen() {
   const { t } = useTranslation();
-  const { selected: channelId } = useChannels();
+  const { selected: channelId, rows: channels } = useChannels();
+  // When the selected channel was last synced. A re-sync of the *same*
+  // channel changes this and nothing else the screen keys on, and the table
+  // and the chips are built from the detail — so without it a sync that
+  // brought twelve new videos would show them in the bar's count and nowhere
+  // else. Found on the first real channel.
+  const syncedAt = channels.find((c) => c.channel.channelId === channelId)?.syncedAt ?? "";
 
   const [detail, setDetail] = useState<ChannelDetail | null>(null);
 
   const [topic, setTopic] = useState("");
   const [keys, setKeys] = useState<Set<string>>(new Set());
+  // How many of the filtered rows are drawn. Reset by the filter and by the
+  // channel: a page into one list is not a page into another.
+  const [shown, setShown] = useState(PAGE_ROWS);
   const [limit, setLimit] = useState(100);
   const [deepLimit, setDeepLimit] = useState(10);
   const [quote, setQuote] = useState<ChannelReading["estimate"] | null>(null);
@@ -92,7 +106,14 @@ export function ChannelScreen() {
 
   const [discovery, setDiscovery] = useState<ChannelReading | null>(null);
   const [reading, setReading] = useState<ChannelReading | null>(null);
+  /** The probes *this session* started. It is what the caption throttle is
+   *  counted against — see `probeBudget` — because that is a fact about
+   *  downloads made now, not about gates parked days ago. */
   const [runs, setRuns] = useState<Record<string, string>>({});
+  /** The probes already parked when this screen arrived, read back from the
+   *  catalog. Kept apart from `runs` for the reason directly above, and merged
+   *  into `allRuns` for everything a person sees. */
+  const [parked, setParked] = useState<Record<string, string>>({});
   const [gates, setGates] = useState<Record<string, VideoGateReport>>({});
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [semantics, setSemantics] = useState(false);
@@ -130,16 +151,27 @@ export function ChannelScreen() {
     setDiscovery(null);
     setReading(null);
     setRuns({});
+    setParked({});
     setGates({});
     setPicked(new Set());
     setKeys(new Set());
+    setShown(PAGE_ROWS);
     unpicked.current.clear();
     seededFrom.current = null;
     setQuote(null);
     setQuoteFor(null);
     setSynthesis(null);
     setSaved(null);
-    if (!channelId) return;
+  }, [channelId]);
+
+  // The detail, on a channel change and again after each sync of it. Kept
+  // apart from the reset above on purpose: a re-sync must refresh the table
+  // and must not throw away a probe that is parked or a tick somebody made.
+  useEffect(() => {
+    if (!channelId) {
+      setDetail(null);
+      return;
+    }
     let cancelled = false;
     void (async () => {
       try {
@@ -152,7 +184,7 @@ export function ChannelScreen() {
     return () => {
       cancelled = true;
     };
-  }, [channelId]);
+  }, [channelId, syncedAt]);
 
   // The quote is the figure the person sees before the request that starts the
   // run, and it is priced from exactly what would be judged and read. Any of
@@ -164,13 +196,44 @@ export function ChannelScreen() {
     setQuoteFor(null);
   }, [topic, keys, limit, deepLimit]);
 
+  // The probes already parked, recovered from the catalog every time the
+  // catalogue lands — which covers arriving on the screen, changing channel and
+  // re-syncing, and running again after an approval because that re-fetches
+  // the detail. Failure is swallowed: this is a recovery, and a screen that
+  // refused to render because an old run could not be read would be worse than
+  // one that shows the probes of this session alone.
+  useEffect(() => {
+    if (!detail) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const page = await api.runsList({
+          libraryId: detail.libraryId,
+          kinds: "video",
+          limit: PARKED_LIMIT,
+        });
+        if (!cancelled) setParked(parkedRuns(detail.videos, page.runs));
+      } catch {
+        // The import queue is where a run that cannot be read is chased.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [detail]);
+
+  /** Every probe on this channel that is still waiting on somebody: the ones
+   *  this session started and the ones it found already parked. A session
+   *  probe wins a collision, because it is the newer run for that video. */
+  const allRuns = useMemo(() => ({ ...parked, ...runs }), [parked, runs]);
+
   /** Poll the probes until each has parked at its gate.
    *
    *  The same shape as `useImportQueue`: a gate already fetched is not
    *  re-asked, because a run parked for seven days cannot change its report,
    *  and a failure to read one run is swallowed so the rest still arrive. */
   useEffect(() => {
-    const pending = Object.values(runs).filter((id) => !(id in gates));
+    const pending = Object.values(allRuns).filter((id) => !(id in gates));
     if (pending.length === 0) return;
     let stop = false;
     const tick = async () => {
@@ -192,20 +255,29 @@ export function ChannelScreen() {
       stop = true;
       window.clearInterval(timer);
     };
-  }, [runs, gates]);
+  }, [allRuns, gates]);
 
   const rows: Row[] = buildRows(
     detail,
     discovery?.preselection ?? null,
     reading?.topics ?? null,
-    runs,
+    allRuns,
     gates,
   );
   const keywords = useMemo(
-    () => titleKeywords((detail?.videos ?? []).map((v) => v.title)),
+    () =>
+      titleKeywords(
+        (detail?.videos ?? []).map(videoText),
+        new Set(tokens(detail?.channel.title ?? "").map(([key]) => key)),
+      ),
     [detail],
   );
   const visible = filterRows(rows, keys);
+  const drawn = pageRows(visible, shown);
+  // Session probes only. The cap is the caption throttle — consecutive
+  // downloads *now* — and a gate parked yesterday downloaded its captions
+  // yesterday. What the quote bounds is the transcript pass, and `read` caps
+  // itself at `deepLimit` for that.
   const budget = probeBudget(deepLimit, runs);
 
   // Discover's verdicts tick their rows once per discovery, and after that the
@@ -262,10 +334,12 @@ export function ChannelScreen() {
     const next = new Set(keys);
     if (!next.delete(key)) next.add(key);
     setKeys(next);
+    setShown(PAGE_ROWS);
     setTopic(topicOf(keywords.filter((k) => next.has(k.key)).map((k) => k.label)));
   };
   const clearKeys = () => {
     setKeys(new Set());
+    setShown(PAGE_ROWS);
     setTopic("");
   };
 
@@ -349,11 +423,15 @@ export function ChannelScreen() {
 
   const read = () =>
     guard("read", async () => {
-      const started = await api.channelTopics(
-        channelId,
-        topic.trim(),
-        Object.values(runs),
-      );
+      // Capped at `deepLimit`, which is what the quote priced — the parked
+      // probes recovered from the catalog can outnumber it, and reading them
+      // all would spend past the figure somebody approved. In table order, so
+      // what is read is what the preselection put at the top.
+      const readable = rows
+        .filter((r) => r.runId !== null && r.gate !== null)
+        .slice(0, Math.max(0, deepLimit))
+        .map((r) => r.runId!);
+      const started = await api.channelTopics(channelId, topic.trim(), readable);
       setReading(await awaitRun(started.workflowId));
     });
 
@@ -439,6 +517,13 @@ export function ChannelScreen() {
 
       {!detail && !channelId && <p className="muted">{t("channel.none")}</p>}
 
+      {detail && !detail.complete && (
+        /* "The most recent N" and "all of them" are different catalogues,
+           and every catalogue written under the old 500-video cap is the
+           first kind until one sync walks to the end. */
+        <p className="notice">{t("channel.partialCaveat", { count: detail.videoCount })}</p>
+      )}
+
       {detail && (
         <div className="channel-columns">
           {/* Left: the videos. The chips narrow the table, and the table is
@@ -457,11 +542,27 @@ export function ChannelScreen() {
             )}
             <ChannelCandidates
               rows={visible}
+              drawn={drawn}
               keys={keys}
               picked={picked}
               onPicked={setPicked}
               busy={busy}
             />
+            {drawn.length < visible.length && (
+              <div className="actions channel-more">
+                {/* The page is what is painted and nothing else: the chips,
+                    the counts, "Marcar N" and the ids the quote is asked
+                    about all use the whole filtered set. */}
+                <button type="button" onClick={() => setShown((n) => n + PAGE_ROWS)}>
+                  {t("channel.showMore", {
+                    count: Math.min(PAGE_ROWS, visible.length - drawn.length),
+                  })}
+                </button>
+                <span className="muted">
+                  {t("channel.drawn", { drawn: drawn.length, total: visible.length })}
+                </span>
+              </div>
+            )}
             <div className="actions">
               <button type="button" disabled={busy || !approvable} onClick={approve}>
                 {busy && step === "approve"

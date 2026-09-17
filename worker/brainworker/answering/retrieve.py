@@ -11,7 +11,10 @@ discuss.
 from __future__ import annotations
 
 import logging
+from datetime import date
+from typing import Any
 
+from .. import scripture
 from ..config import Settings
 from ..graph import Graph, GraphError
 from ..graph.schema import canonical_concept
@@ -30,7 +33,47 @@ log = logging.getLogger(__name__)
 #: and it is written over whatever arrived just below. Adding it here would turn
 #: the one filter that decides whose corpus is searched into one a request can
 #: name.
-ALLOWED_FILTERS = frozenset({"document_id", "version_id", "kind", "library_id"})
+ALLOWED_FILTERS = frozenset(
+    {"document_id", "version_id", "kind", "library_id", "source_name"}
+)
+
+#: `date(1970, 1, 1).toordinal()`: `recorded_day` on a point is days since the
+#: epoch, and a bound here is turned into the same integer. One constant on
+#: each side, both named, because a filter that computed the day differently
+#: from the writer would narrow to nothing and report it as `off_corpus`.
+EPOCH_ORDINAL = 719163
+
+
+def narrowings(question: Question) -> dict[str, Any]:
+    """The payload filters beyond the scope, from the question's own fields.
+
+    Three shapes, chosen by value for `Qdrant._filter`: an equality for the
+    source, a `range` on the recording day, and a `match any` on whichever
+    scripture list the query normalised to. A date that does not parse or a
+    reference the table cannot vouch for narrows on nothing rather than on a
+    guess — the field's pattern already refused a malformed date at the route,
+    so what reaches here is well-formed or empty.
+    """
+    out: dict[str, Any] = {}
+    if question.source_name:
+        out["source_name"] = question.source_name
+    bounds: dict[str, int] = {}
+    if question.recorded_from:
+        bounds["gte"] = _day(question.recorded_from)
+    if question.recorded_to:
+        bounds["lte"] = _day(question.recorded_to)
+    if bounds:
+        out["recorded_day"] = bounds
+    if question.scripture:
+        matched = scripture.normalise_query(question.scripture)
+        if matched is not None:
+            field_name, value = matched
+            out[field_name] = [value]
+    return out
+
+
+def _day(iso: str) -> int:
+    return date.fromisoformat(iso).toordinal() - EPOCH_ORDINAL
 
 #: Cosine floor on the dense leg. Inherited from the engine, where it was tuned:
 #: `min_score` may only ever be applied to the dense prefetch, never to the
@@ -177,9 +220,10 @@ def search(
             )
         )
 
-    filters = {
+    filters: dict[str, Any] = {
         k: v for k, v in question.filters.items() if k in ALLOWED_FILTERS
     }
+    filters.update(narrowings(question))
     filters["library_id"] = question.library_id
     # Assigned after the allowlist, so a caller who found a way to smuggle the
     # key in still loses it here. Two guards for one property, because this is

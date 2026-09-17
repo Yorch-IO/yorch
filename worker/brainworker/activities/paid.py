@@ -48,7 +48,9 @@ from ..pipeline import (
     Staged,
     TuneOutcome,
 )
-from ..indexing import PAYLOAD_INDEXES, QdrantWriter, StoredChunk, version_scope
+from ..indexing import (
+    INTEGER_INDEXES, PAYLOAD_INDEXES, QdrantWriter, StoredChunk, version_scope,
+)
 from ..indexing import chunk_row as indexing_chunk_row
 from .. import videosource
 from ..providers import CachedEmbedder, Provider, VertexAdapter
@@ -444,6 +446,33 @@ async def chunk_final(
 # ---------------------------------------------------------------------------
 
 
+def _filterable_facts(settings, registered: Registered) -> tuple[int | None, str]:
+    """The document's recording day and source, for every point's payload.
+
+    Read from the catalog rather than threaded through `Registered`, whose
+    fields the paid plane's parity spec compares, and best-effort in the way
+    every bookkeeping read here is: a catalog that is down costs the points
+    their date filter, not the run its index. `None` for the day, never
+    zero — an unknown date is absent from the payload, so no range reaches it.
+    """
+    try:
+        with Catalog(settings.database_url, pooled=False, timeout=RECORD_TIMEOUT) as catalog:
+            document = catalog.document(registered.document_id, tenant_id=registered.tenant_id)
+    except Exception as e:  # noqa: BLE001 - a missing filter, not a failed stage
+        log.warning("could not read the document's dates for %s: %s",
+                    registered.document_id, e)
+        return None, ""
+    if document is None:
+        return None, ""
+    day = document.recorded_at.toordinal() - EPOCH_ORDINAL if document.recorded_at else None
+    return day, document.source_name or ""
+
+
+#: `date(1970, 1, 1).toordinal()`, so `recorded_day` is days since the epoch —
+#: the same arithmetic `retrieve.search` applies to a filter's bounds.
+EPOCH_ORDINAL = 719163
+
+
 @activity.defn(name="embed_and_index")
 async def embed_and_index(
     run_id: str,
@@ -519,10 +548,12 @@ async def embed_and_index(
             if activity.in_activity():
                 activity.heartbeat(progress["done"], progress["total"])
 
+    recorded_day, source_name = _filterable_facts(settings, registered)
     collection = settings.qdrant_collection
     with Qdrant(settings.qdrant_url, collection) as q:
         q.wait_ready()
-        q.create(settings.gemini.embedding_dimensions, PAYLOAD_INDEXES)
+        q.create(settings.gemini.embedding_dimensions, PAYLOAD_INDEXES,
+                 integer_indexes=INTEGER_INDEXES)
         writer = QdrantWriter(
             q,
             tenant_id=registered.tenant_id,
@@ -532,6 +563,8 @@ async def embed_and_index(
             source_title=staged.title,
             model=settings.gemini.embedding_model,
             dimensions=settings.gemini.embedding_dimensions,
+            recorded_day=recorded_day,
+            source_name=source_name,
         )
         beating = asyncio.ensure_future(beat())
         try:

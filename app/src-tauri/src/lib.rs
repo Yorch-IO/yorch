@@ -12,6 +12,7 @@ mod keychain;
 mod ports;
 mod secrets;
 mod stack;
+mod whisper;
 mod ytdlp;
 
 use std::path::{Path, PathBuf};
@@ -37,6 +38,8 @@ use control::{
     RunEventPage, RunListPage, SectionChunks,
     RunState, StageOptions, StagedSource, StartedRun, VersionConcepts, VersionStatistics,
     VideoGateReport, VideoRequest,
+    BucketDetail, BucketForgotten, BucketList, BucketProbeResult, BucketRegistered, BucketSource,
+    MediaLink, TranscriberSwitched, TranscriptUploaded,
 };
 use error::{AppError, Result};
 use ports::Ports;
@@ -948,14 +951,228 @@ async fn set_provider_secret(
     provider_secrets(state).await
 }
 
+/// Catalogue a channel. Free: quota, never money. `limit` absent is the whole
+/// playlist; `full` walks it to the end whatever is known and marks what it
+/// did not meet as unavailable.
 #[tauri::command]
 async fn channel_sync(
     state: State<'_, AppState>,
     url: String,
     limit: Option<u32>,
+    full: Option<bool>,
 ) -> Result<ChannelSummary> {
     let control = state.control().await?;
-    control.channel_sync(&url, limit.unwrap_or(100)).await
+    control.channel_sync(&url, limit, full.unwrap_or(false)).await
+}
+
+// -- buckets ----------------------------------------------------------------
+
+/// Register a customer's S3 bucket and catalogue it. Free, and awaited: the
+/// plane walks the listing and answers with the counts.
+#[tauri::command]
+async fn bucket_register(
+    state: State<'_, AppState>,
+    source: BucketSource,
+    library_name: Option<String>,
+    library_id: Option<String>,
+) -> Result<BucketRegistered> {
+    let control = state.control().await?;
+    control
+        .bucket_register(
+            &source,
+            library_name.as_deref().unwrap_or(""),
+            library_id.as_deref().unwrap_or(""),
+        )
+        .await
+}
+
+#[tauri::command]
+async fn buckets(state: State<'_, AppState>) -> Result<BucketList> {
+    let control = state.control().await?;
+    control.buckets().await
+}
+
+#[tauri::command]
+async fn bucket_detail(
+    state: State<'_, AppState>,
+    bucket_id: String,
+    state_filter: Option<String>,
+) -> Result<BucketDetail> {
+    let control = state.control().await?;
+    control
+        .bucket_detail(&bucket_id, state_filter.as_deref().unwrap_or(""))
+        .await
+}
+
+#[tauri::command]
+async fn bucket_sync(state: State<'_, AppState>, bucket_id: String) -> Result<BucketRegistered> {
+    let control = state.control().await?;
+    control.bucket_sync(&bucket_id).await
+}
+
+/// One `audio` run per ticked object, each parked at its own gate. Free; the
+/// screen sums the quotes and approves through `ingest_approve`, unchanged.
+#[tauri::command]
+async fn bucket_probe(
+    state: State<'_, AppState>,
+    bucket_id: String,
+    keys: Vec<String>,
+    options: StageOptions,
+    reindex: Option<bool>,
+    transcriber: Option<String>,
+) -> Result<BucketProbeResult> {
+    let control = state.control().await?;
+    control
+        .bucket_probe(
+            &bucket_id,
+            &keys,
+            &options,
+            reindex.unwrap_or(false),
+            transcriber.as_deref().unwrap_or("transcribe"),
+        )
+        .await
+}
+
+// -- transcribing here ------------------------------------------------------
+//
+// The same argument as the two YouTube calls next door, arriving from the
+// other direction: there the server cannot make a call this machine can, and
+// here the server has no GPU and this machine may. What moves is one stage of
+// one workflow; everything else stays where the workspace is.
+
+/// What this machine can do about a transcript, before it is asked to.
+#[tauri::command]
+fn whisper_status(state: State<'_, AppState>) -> whisper::WhisperStatus {
+    whisper::status(&state.data_dir)
+}
+
+/// Ask the bundled binary which device it will actually use.
+///
+/// Free and quick: it loads the smallest downloaded model, reads the line
+/// whisper.cpp prints while doing it, and kills the process — no audio is
+/// transcribed. It exists because `whisper_status.backend` is what the *build*
+/// can do and this is what the *machine* does, and on a laptop that parks its
+/// discrete GPU the two differ by an order of magnitude in speed.
+#[tauri::command]
+async fn whisper_probe(state: State<'_, AppState>) -> Result<whisper::DeviceFact> {
+    whisper::probe_device(&state.data_dir).await
+}
+
+/// Fetch a model, verified against the checksum the publisher's own LFS
+/// metadata carries. Idempotent: a model already there costs two reads.
+#[tauri::command]
+async fn whisper_download_model(
+    state: State<'_, AppState>,
+    model: String,
+    on_event: tauri::ipc::Channel<whisper::Progress>,
+) -> Result<String> {
+    whisper::download_model(&state.data_dir, &model, &on_event)
+        .await
+        .map(|p| p.display().to_string())
+}
+
+/// Transcribe one run's recording here, and hand the result to the plane.
+///
+/// The audio comes down through a presigned link the plane mints — the
+/// customer's own bucket, the customer's own role — so the app never holds a
+/// credential, and the transcript goes back to the plane it is signed in to.
+/// One call, because a caller that had to sequence "download, run, upload"
+/// itself would have three ways to leave a run half-transcribed.
+#[tauri::command]
+async fn whisper_transcribe(
+    state: State<'_, AppState>,
+    workflow_id: String,
+    audio_url: String,
+    container: String,
+    model: String,
+    language: Option<String>,
+    audio_seconds: Option<f64>,
+    on_event: tauri::ipc::Channel<whisper::Progress>,
+) -> Result<whisper::Transcribed> {
+    whisper::transcribe(
+        &state.data_dir,
+        &workflow_id,
+        &audio_url,
+        &container,
+        &model,
+        &language.unwrap_or_else(|| "es".to_string()),
+        audio_seconds.unwrap_or(0.0),
+        whisper::threads(),
+        &on_event,
+    )
+    .await
+}
+
+/// Send a transcript this machine made, and delete it once the plane has it.
+///
+/// Separate from `whisper_transcribe` on purpose: the transcript survives on
+/// disk until it has been handed over, so a window closed between the two —
+/// or a plane that was briefly unreachable — costs the wait and not the hours.
+#[tauri::command]
+async fn transcript_upload(
+    state: State<'_, AppState>,
+    workflow_id: String,
+    path: String,
+    engine: Option<String>,
+    model: Option<String>,
+    language: Option<String>,
+) -> Result<TranscriptUploaded> {
+    let control = state.control().await?;
+    let file = PathBuf::from(&path);
+    let sent = control
+        .upload_transcript(
+            &workflow_id,
+            &file,
+            engine.as_deref().unwrap_or("whisper.cpp"),
+            model.as_deref().unwrap_or(""),
+            language.as_deref().unwrap_or(""),
+        )
+        .await?;
+    // Only once it is somewhere else. A failed upload keeps the file, which is
+    // what makes the queue's retry free.
+    let _ = std::fs::remove_file(&file);
+    Ok(sent)
+}
+
+/// Give up on transcribing a run here. It re-quotes on Amazon and parks again
+/// at its gate, so this spends nothing by itself.
+#[tauri::command]
+async fn run_switch_transcriber(
+    state: State<'_, AppState>,
+    workflow_id: String,
+) -> Result<TranscriberSwitched> {
+    let control = state.control().await?;
+    control.switch_transcriber(&workflow_id).await
+}
+
+#[tauri::command]
+async fn bucket_forget(state: State<'_, AppState>, bucket_id: String) -> Result<BucketForgotten> {
+    let control = state.control().await?;
+    control.bucket_forget(&bucket_id).await
+}
+
+/// An audio run's gate — the same report a video publishes, on its own route.
+#[tauri::command]
+async fn audio_gate(
+    state: State<'_, AppState>,
+    workflow_id: String,
+) -> Result<Option<VideoGateReport>> {
+    let control = state.control().await?;
+    control.audio_gate(&workflow_id).await
+}
+
+/// A presigned link to a recording at a second, minted on click.
+#[tauri::command]
+async fn media_link(
+    state: State<'_, AppState>,
+    library_id: String,
+    document_id: String,
+    start_s: Option<u32>,
+) -> Result<MediaLink> {
+    let control = state.control().await?;
+    control
+        .media_link(&library_id, &document_id, start_s.unwrap_or(0))
+        .await
 }
 
 #[tauri::command]
@@ -1584,6 +1801,20 @@ pub fn run() {
             channel_sync,
             channels,
             channel_detail,
+            bucket_register,
+            buckets,
+            bucket_detail,
+            bucket_sync,
+            bucket_probe,
+            bucket_forget,
+            audio_gate,
+            media_link,
+            whisper_status,
+            whisper_probe,
+            whisper_download_model,
+            whisper_transcribe,
+            transcript_upload,
+            run_switch_transcriber,
             channel_quote,
             channel_discover,
             channel_topics,

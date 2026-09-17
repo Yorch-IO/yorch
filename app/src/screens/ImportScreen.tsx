@@ -67,7 +67,7 @@ export function fetchingLabel(
 export function ImportScreen() {
   const { t, i18n } = useTranslation();
 
-  const { selected: libraryId } = useLibraries();
+  const { selected: libraryId, rows: allLibraries } = useLibraries();
   /** Every file chosen, not just the first.
    *
    *  This screen used to keep `[first]` and count the rest as "ignored",
@@ -107,8 +107,17 @@ export function ImportScreen() {
    *  branch below for why this cannot be the `dragging` state. */
   const inside = useRef(false);
 
+  /** Which library the queue is narrowed to, and `null` for every one of them.
+   *
+   *  It starts at `null` rather than at the selected library on purpose: a run
+   *  started from a screen that owns no library picker — every probe the
+   *  Channel tab starts — would otherwise be invisible on the one screen whose
+   *  job is to show what is in flight, which is exactly the defect this
+   *  replaces. Narrowing is then a thing somebody asks for. */
+  const [queueFilter, setQueueFilter] = useState<string | null>(null);
+
   const { items, loaded, error: queueError, refresh, settled } =
-    useImportQueue(libraryId);
+    useImportQueue(queueFilter);
 
   /** Accept paths from either source. Extension is not checked here: the
    *  chooser already filters, a drop cannot be filtered, and the server refuses
@@ -449,6 +458,9 @@ export function ImportScreen() {
         items={items}
         loaded={loaded}
         error={queueError}
+        filter={queueFilter}
+        onFilter={setQueueFilter}
+        libraries={allLibraries}
         stages={stages}
         // Returned, not discarded: the queue row re-enables its buttons
         // when this settles, and `void` here would make that unreachable.

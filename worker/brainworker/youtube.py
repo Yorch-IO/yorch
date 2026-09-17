@@ -48,7 +48,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from .videosource import HOSTS
 
@@ -150,6 +150,12 @@ class ChannelVideo:
     #: `resolve_video` anyway; knowing here saves the probe.
     live_state: str = "none"
     thumbnail: str = ""
+    #: ``False`` once a *complete* re-sync walked the whole uploads playlist
+    #: and did not meet this id — deleted, or made private. Kept rather than
+    #: dropped, because the video may already be indexed and the screen must
+    #: still be able to say so. Appended and defaulted, so a catalogue written
+    #: before the field existed reads every video as available.
+    available: bool = True
 
     @property
     def url(self) -> str:
@@ -269,6 +275,10 @@ def merge_catalogue(
             merged = replace(merged, live_state=current.live_state)
         if not video.description and current.description:
             merged = replace(merged, description=current.description)
+        # A fetched row was just seen on the playlist, so it is available
+        # whatever the store said: `_video_of` builds every row that way and
+        # nothing here has to undo a mark. The mark is only ever *set* by
+        # `channel.sync` after a complete walk, on rows the walk did not meet.
         by_id[video.video_id] = merged
     return sorted(by_id.values(), key=lambda v: (v.published_at, v.video_id), reverse=True)
 
@@ -418,21 +428,31 @@ class Client:
         )
         return replace(ref, url=channel_url(ref))
 
-    def list_uploads(self, uploads_playlist_id: str, limit: int) -> list[ChannelVideo]:
-        """Up to `limit` of a channel's uploads, newest first, without durations.
+    def iter_uploads(
+        self, uploads_playlist_id: str, limit: int | None = None
+    ) -> Iterator[list[ChannelVideo]]:
+        """A channel's uploads, newest first, one page at a time, without durations.
 
-        The API returns the uploads playlist newest-first, so `limit` is "the
-        most recent N" and the caller gets to say how deep to go. Unavailable
-        entries are dropped rather than counted against the limit: a channel with
-        six private videos in its first page should still yield fifty.
+        A generator rather than a list so the caller can act between pages —
+        save what arrived, decide whether the rest is already known, stop. That
+        is what lets a sync of a channel with thousands of videos keep every
+        page it fetched when the quota runs out on the next one, instead of
+        losing all of them to one exception at the end.
+
+        `limit` is "the most recent N" and `None` is the whole playlist.
+        Unavailable entries are dropped rather than counted against the limit: a
+        channel with six private videos in its first page should still yield
+        fifty. The last page may run past `limit`; `list_uploads` trims it and a
+        caller that pages itself trims its own.
         """
-        out: list[ChannelVideo] = []
+        got = 0
         token = ""
-        while len(out) < limit:
+        while limit is None or got < limit:
+            wanted = PAGE_SIZE if limit is None else min(PAGE_SIZE, max(1, limit - got))
             params = {
                 "part": "snippet,contentDetails",
                 "playlistId": uploads_playlist_id,
-                "maxResults": str(min(PAGE_SIZE, max(1, limit - len(out)))),
+                "maxResults": str(wanted),
             }
             if token:
                 params["pageToken"] = token
@@ -440,14 +460,21 @@ class Client:
             items = data.get("items") or []
             if not items:
                 break
-            for item in items:
-                video = _video_of(item)
-                if video is not None:
-                    out.append(video)
+            page = [v for v in (_video_of(item) for item in items) if v is not None]
+            got += len(page)
+            yield page
             token = str(data.get("nextPageToken") or "")
             if not token:
                 break
-        return out[:limit]
+
+    def list_uploads(
+        self, uploads_playlist_id: str, limit: int | None = None
+    ) -> list[ChannelVideo]:
+        """Up to `limit` of a channel's uploads as one list. See `iter_uploads`."""
+        out: list[ChannelVideo] = []
+        for page in self.iter_uploads(uploads_playlist_id, limit):
+            out.extend(page)
+        return out if limit is None else out[:limit]
 
     def hydrate(self, videos: Sequence[ChannelVideo]) -> list[ChannelVideo]:
         """The same videos with their duration and live state filled in.

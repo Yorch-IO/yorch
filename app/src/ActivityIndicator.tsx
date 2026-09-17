@@ -21,6 +21,9 @@ import { useTranslation } from "react-i18next";
 
 import { api } from "./lib/api";
 import { useActiveRuns, type ActiveRun } from "./lib/activeRuns";
+import { useChannels } from "./lib/channels";
+import { useLibraries } from "./lib/libraries";
+import { runDestination } from "./lib/runOpen";
 import type { Tab } from "./App";
 
 /** Two decimals is the wrong precision for these numbers: a run's spend is
@@ -30,7 +33,16 @@ function money(usd: number): string {
   return `$${usd.toFixed(4)}`;
 }
 
-function RunLine({ run, go }: { run: ActiveRun; go?: (tab: Tab) => void }) {
+function RunLine({
+  run,
+  go,
+  open,
+}: {
+  run: ActiveRun;
+  go?: (tab: Tab) => void;
+  /** Select whatever the destination screen needs, then show it. */
+  open?: (run: ActiveRun) => void;
+}) {
   const { t } = useTranslation();
   const [confirming, setConfirming] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -86,8 +98,11 @@ function RunLine({ run, go }: { run: ActiveRun; go?: (tab: Tab) => void }) {
       )}
 
       <span className="activity-actions">
-        {go && (
-          <button type="button" className="link" onClick={() => go("import")}>
+        {/* To the screen that *owns* this run, with its library or its channel
+            selected — not simply to the import tab, which is filtered by a
+            library the person is almost certainly not on. */}
+        {go && open && (
+          <button type="button" className="link" onClick={() => open(run)}>
             {t("activity.view")}
           </button>
         )}
@@ -115,6 +130,19 @@ function RunLine({ run, go }: { run: ActiveRun; go?: (tab: Tab) => void }) {
 export function ActivityIndicator({ go }: { go?: (tab: Tab) => void }) {
   const { t } = useTranslation();
   const runs = useActiveRuns();
+  const libraries = useLibraries();
+  const channels = useChannels();
+
+  const open = (run: ActiveRun) => {
+    if (!go) return;
+    const known = new Set(channels.rows.map((c) => c.channel.channelId));
+    const to = runDestination(run.libraryId, known);
+    // Selected before the tab changes, so the screen mounts already looking at
+    // the right thing rather than fetching the old one first.
+    if (to.channelId !== null) channels.select(to.channelId);
+    if (to.libraryId !== null) libraries.select(to.libraryId);
+    go(to.tab);
+  };
 
   if (runs.length === 0) return null;
 
@@ -123,7 +151,7 @@ export function ActivityIndicator({ go }: { go?: (tab: Tab) => void }) {
       <h2 className="activity-title">{t("activity.title")}</h2>
       <ul className="activity-list">
         {runs.map((run) => (
-          <RunLine key={run.workflowId} run={run} go={go} />
+          <RunLine key={run.workflowId} run={run} go={go} open={open} />
         ))}
       </ul>
     </section>

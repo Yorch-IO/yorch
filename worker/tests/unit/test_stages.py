@@ -20,6 +20,8 @@ ROOT = pathlib.Path(stages.__file__).resolve().parent
 INGEST = (ROOT / "workflows" / "ingest.py").read_text(encoding="utf-8")
 REBUILD = (ROOT / "workflows" / "rebuild.py").read_text(encoding="utf-8")
 VIDEO = (ROOT / "workflows" / "video.py").read_text(encoding="utf-8")
+TIMED = (ROOT / "workflows" / "timed.py").read_text(encoding="utf-8")
+AUDIO = (ROOT / "workflows" / "bucket.py").read_text(encoding="utf-8")
 PAID = (ROOT / "activities" / "paid.py").read_text(encoding="utf-8")
 
 
@@ -52,7 +54,7 @@ def test_every_stage_the_rebuild_workflow_sets_is_in_the_list() -> None:
 
 
 def test_every_stage_the_video_workflow_sets_is_in_the_list() -> None:
-    missing = _assigned(VIDEO) - set(stages.VIDEO_STAGES) - {"starting"}
+    missing = _assigned(VIDEO + TIMED) - set(stages.VIDEO_STAGES) - {"starting"}
     assert missing == set(), (
         f"VideoIngestWorkflow sets {sorted(missing)}, which stages.VIDEO_STAGES "
         "does not name — the audit view cannot order or translate them"
@@ -63,9 +65,28 @@ def test_the_video_list_names_no_stage_the_workflow_never_sets() -> None:
     """The other direction. Two stages here run at different points depending on
     whether the video had captions, but each is still *set* somewhere in the
     source, so this holds for both paths."""
-    unused = set(stages.VIDEO_STAGES) - _assigned(VIDEO)
+    unused = set(stages.VIDEO_STAGES) - _assigned(VIDEO + TIMED)
     assert unused == set(), (
         f"stages.VIDEO_STAGES names {sorted(unused)}, which the workflow never "
+        "enters"
+    )
+
+
+def test_every_stage_the_audio_workflow_sets_is_in_the_list() -> None:
+    """`AudioIngestWorkflow` shares its tail with the video one through
+    `workflows/timed.py`, so both files are scanned: a stage the tail sets is a
+    stage every run through it has."""
+    missing = _assigned(AUDIO + TIMED) - set(stages.AUDIO_STAGES) - {"starting"}
+    assert missing == set(), (
+        f"AudioIngestWorkflow sets {sorted(missing)}, which stages.AUDIO_STAGES "
+        "does not list"
+    )
+
+
+def test_the_audio_list_names_no_stage_the_workflow_never_sets() -> None:
+    unused = set(stages.AUDIO_STAGES) - _assigned(AUDIO + TIMED)
+    assert unused == set(), (
+        f"stages.AUDIO_STAGES names {sorted(unused)}, which the workflow never "
         "enters"
     )
 
@@ -129,6 +150,7 @@ def _every_stage() -> set[str]:
         | set(stages.ACTIVATION_STAGES)
         | set(stages.EPUB_STAGES)
         | set(stages.CHANNEL_STAGES)
+        | set(stages.AUDIO_STAGES)
     )
 
 
@@ -170,6 +192,7 @@ def test_an_override_names_a_stage_the_path_it_overrides_actually_has() -> None:
         "preview": stages.INGEST_STAGES,
         "reindex": stages.INGEST_STAGES,
         "channel": stages.CHANNEL_STAGES,
+        "audio": stages.AUDIO_STAGES,
     }
     for kind, overrides in stages.ARTIFACT_STAGE_OVERRIDES.items():
         assert kind in lists, f"no stage list known for run kind {kind!r}"

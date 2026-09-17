@@ -78,6 +78,13 @@ MIN_FREE_BYTES = 4 * 1024**3
 #: exists to fail fast rather than after a long download.
 MAX_AUDIO_BYTES = 1024**3
 
+#: `AudioRequest.transcriber` for a transcript made on the person's own machine
+#: by the desktop app's bundled whisper.cpp, and the name the estimate records
+#: for it. The archive's sidecar carries whatever the app actually ran, which
+#: the upload names.
+LOCAL_TRANSCRIBER = "local"
+LOCAL_TRANSCRIBER_MODEL = "whisper.cpp (local)"
+
 #: Container formats Amazon Transcribe reads directly.
 #:
 #: The whole point of the list: if yt-dlp can hand us one of these untouched,
@@ -492,8 +499,14 @@ async def group_transcript(
         source = f"captions:{probe.chosen.language}:{probe.chosen.kind}" \
             if probe.chosen else "captions"
     else:
-        cues = dt.parse_transcribe(json.loads(raw.decode("utf-8")))
-        source = "transcribe"
+        # Either engine's document, read by its shape: Amazon's per-word
+        # items or whisper.cpp's segments. The source names which, because the
+        # audit and the archive's sidecar both say so and a reader deciding
+        # whether to trust a name in the transcript wants to know.
+        payload = json.loads(raw.decode("utf-8"))
+        engine = dt.transcript_engine(payload)
+        cues = dt.parse_any(payload)
+        source = "transcribe" if engine == "transcribe" else "whisper"
 
     if not cues:
         raise _fail("transcript_is_empty", "el transcript no contiene texto")
@@ -617,7 +630,28 @@ async def estimate_video(
     document gate uses — a second implementation would eventually quote two
     different bills for one pipeline. Only the transcription row is new, and it
     is the first in this product that is not tokens times a multiplier.
+
+    **The arity is load-bearing.** Temporal drops every type hint when the
+    number of payloads differs from the number of parameters — defaulted or
+    not — and passes raw dicts, which is the recorded `'dict' object has no
+    attribute` failure. A bucket recording, which may name a local engine,
+    quotes through `estimate_audio` next door rather than through a seventh
+    parameter here.
     """
+    return estimate_timed(probe, options, characters, chunk_count, characters_high,
+                          run_id, "transcribe")
+
+
+def estimate_timed(
+    probe: VideoProbe,
+    options: StageOptions,
+    characters: int,
+    chunk_count: int,
+    characters_high: int,
+    run_id: str,
+    transcriber: str,
+) -> Estimate:
+    """The one implementation behind `estimate_video` and `estimate_audio`."""
     settings = _settings()
     estimate = estimate_for(characters, chunk_count, options, None)
 
@@ -650,10 +684,20 @@ async def estimate_video(
         # Captions are free; nothing to add.
         return _persist_estimate(run_id, estimate)
 
-    usd = videosource.transcribe_usd(probe.duration_s, settings.aws.usd_per_minute)
+    if transcriber == LOCAL_TRANSCRIBER:
+        # Transcribed on the person's own machine: no money changes hands, and
+        # the row says so with a real zero rather than an absent price — a
+        # stage that runs for nothing and one that does not run are different
+        # facts. The *hours* it costs are the client's to estimate, from a
+        # speed it measured on that machine; nothing here knows the hardware.
+        usd = 0.0
+        model = LOCAL_TRANSCRIBER_MODEL
+    else:
+        usd = videosource.transcribe_usd(probe.duration_s, settings.aws.usd_per_minute)
+        model = "aws-transcribe-batch"
     row = StageEstimate(
         stage="transcription",
-        model="aws-transcribe-batch",
+        model=model,
         # Zero, and true: Transcribe bills seconds of audio, not tokens. Putting
         # the duration in a token column would make it a term in every total the
         # UI sums.

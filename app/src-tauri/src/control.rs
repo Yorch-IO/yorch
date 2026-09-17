@@ -48,14 +48,26 @@ const EXPLORE_TIMEOUT: Duration = Duration::from_secs(15);
 /// must not be reported as unreachable while it is still working.
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Cataloguing a channel is one Data API round trip per fifty videos, and a
-/// 2,000-video channel is eighty of them. Generous because the failure it
-/// guards against is Google not answering rather than a channel being long —
-/// and because a sync somebody is watching is better slow than restarted.
-const CHANNEL_SYNC_TIMEOUT: Duration = Duration::from_secs(180);
+/// Cataloguing a channel is one Data API round trip per fifty videos plus one
+/// per fifty *new* ones, and there is no cap on the channel any more: a
+/// 10,000-video channel is four hundred calls on its first sync. Ten minutes
+/// covers that at a second a call. Generous because the failure it guards
+/// against is Google not answering rather than a channel being long — and
+/// because the worker saves every page as it goes, so a timeout here loses
+/// only the request, never the pages; the next sync walks on from what is on
+/// disk. A second sync of an unchanged channel is one call.
+const CHANNEL_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Reading a catalogue off the volume and pricing it. No network at all.
 const CHANNEL_TIMEOUT: Duration = Duration::from_secs(20);
+/// Cataloguing a customer's bucket is awaited by the plane — seconds for a
+/// hundred objects, minutes for a hundred thousand — and each object costs two
+/// ranged reads. An hour, because a large bucket on a slow day is a slow sync
+/// and not a failed one; the worker heartbeats throughout.
+const BUCKET_SYNC_TIMEOUT: Duration = Duration::from_secs(3600);
+/// Starting one run per ticked object, sequentially on the server. A hundred
+/// and forty-seven starts is a few seconds; the bound is generous.
+const BUCKET_PROBE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Listing the queue is one indexed, keyset-paged read of the catalog.
 const RUNS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -673,6 +685,253 @@ pub struct Estimate {
     pub unpriced_stages: Vec<String>,
 }
 
+// -- buckets ----------------------------------------------------------------
+//
+// Audio out of a customer's own S3 bucket. Paid plane only: the local plane
+// serves none of these paths, and a call in local mode answers with the 404
+// the proxy already turns into `control_status`.
+
+/// Where a customer's audio lives and how the plane may read it.
+///
+/// Deliberately **not** renamed, like `Question`: it travels *in* from the
+/// webview on a register and *out* inside `StoredBucket` on every read, and
+/// one struct cannot rename in both directions. The TypeScript side spells it
+/// snake_case, as it does `Question`, and says so at its declaration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BucketSource {
+    pub bucket: String,
+    #[serde(default)]
+    pub prefix: String,
+    #[serde(default)]
+    pub role_arn: String,
+    #[serde(default)]
+    pub region: String,
+    #[serde(default = "default_archive_prefix")]
+    pub archive_prefix: String,
+    #[serde(default)]
+    pub manifest_key: String,
+    #[serde(default)]
+    pub manifest_map: std::collections::BTreeMap<String, String>,
+    #[serde(default = "default_language")]
+    pub language: String,
+}
+
+fn default_archive_prefix() -> String {
+    "transcripciones/".to_string()
+}
+
+fn default_language() -> String {
+    "es-US".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct StoredBucket {
+    pub bucket_id: String,
+    pub source: BucketSource,
+    pub library_id: String,
+    pub library_name: String,
+    #[serde(default)]
+    pub synced_at: String,
+    #[serde(default)]
+    pub object_count: u32,
+    #[serde(default)]
+    pub complete: bool,
+    #[serde(default)]
+    pub estimated: u32,
+    #[serde(default)]
+    pub manifest_rows: u32,
+    #[serde(default)]
+    pub unmatched_rows: u32,
+    #[serde(default)]
+    pub unmatched_objects: u32,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+/// One object as the catalogue holds it, joined with what the catalog says.
+///
+/// `state` is derived on the plane from Postgres — `indexed`, `pending` or
+/// `unindexed` — never from the catalogue file, which deliberately does not
+/// record it. `duration_estimated` is the flag the quote is least sure of.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct BucketObjectRow {
+    pub key: String,
+    #[serde(default)]
+    pub etag: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub last_modified: String,
+    #[serde(default)]
+    pub container: String,
+    #[serde(default)]
+    pub duration_s: u32,
+    #[serde(default)]
+    pub duration_estimated: bool,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub recorded_at: String,
+    #[serde(default)]
+    pub published_at: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default = "yes")]
+    pub available: bool,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    pub document_id: Option<String>,
+    pub active_version_id: Option<String>,
+    pub run_id: Option<String>,
+    pub run_state: Option<String>,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct BucketTotals {
+    pub objects: u32,
+    pub seconds: u64,
+    pub indexed: u32,
+    pub pending: u32,
+    pub unindexed: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct BucketDetail {
+    pub bucket: StoredBucket,
+    pub objects: Vec<BucketObjectRow>,
+    pub totals: BucketTotals,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct BucketList {
+    pub buckets: Vec<StoredBucket>,
+}
+
+/// What one sync found.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct BucketSynced {
+    pub bucket_id: String,
+    pub library_id: String,
+    pub objects: u32,
+    pub added: u32,
+    pub changed: u32,
+    pub absent: u32,
+    pub estimated: u32,
+    pub manifest_rows: u32,
+    pub unmatched_rows: u32,
+    pub unmatched_objects: u32,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct BucketRegistered {
+    pub bucket: Option<StoredBucket>,
+    pub synced: BucketSynced,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct BucketProbeStarted {
+    pub key: String,
+    pub workflow_id: String,
+    /// The engine this run actually started on, which is not always the one
+    /// the batch asked for: an object in a container the app's decoder cannot
+    /// read is started on Amazon whatever was ticked. Said per key here rather
+    /// than discovered later as a run parked for a transcript no machine on
+    /// this side can make.
+    #[serde(default = "default_transcriber")]
+    pub transcriber: String,
+}
+
+fn default_transcriber() -> String {
+    "transcribe".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct BucketProbeFailed {
+    pub key: String,
+    pub kind: String,
+    pub message: String,
+}
+
+/// One run per key that could start, and why each of the others could not.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct BucketProbeResult {
+    pub started: Vec<BucketProbeStarted>,
+    pub failed: Vec<BucketProbeFailed>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct BucketForgotten {
+    pub forgotten: bool,
+}
+
+/// A presigned link to a recording, minted on click. It dies with the
+/// assumed-role session that signed it, which is why it is never stored and
+/// why `source_url` — the public feed's own link — rides beside it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct MediaLink {
+    pub url: String,
+    #[serde(default)]
+    pub expires_at: String,
+    #[serde(default)]
+    pub start_s: f64,
+    #[serde(default)]
+    pub source_url: String,
+}
+
+fn bucket_probe_body(
+    keys: &[String],
+    options: &StageOptions,
+    reindex: bool,
+    transcriber: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "keys": keys,
+        "options": options,
+        "reindex": reindex,
+        "transcriber": transcriber,
+    })
+}
+
+/// What the desktop app did with a run it transcribed itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct TranscriptUploaded {
+    pub workflow_id: String,
+    pub state: String,
+}
+
+/// The answer to giving up on a local transcript. `state` is
+/// `awaiting_approval` rather than `running`, because the run re-quotes on
+/// Amazon and parks again — a client that expected it to proceed would wait on
+/// a gate it did not know about.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct TranscriberSwitched {
+    pub workflow_id: String,
+    pub state: String,
+    #[serde(default = "default_transcriber")]
+    pub transcriber: String,
+}
+
 // -- channels ---------------------------------------------------------------
 //
 // Responses, so the rename is on the **serialize** side: these decode from the
@@ -706,8 +965,21 @@ pub struct ChannelSummary {
     /// discovering it at the end of the day.
     #[serde(default)]
     pub units_spent: u32,
+    /// Whether a sync has ever walked the uploads playlist to its end. "The
+    /// most recent 500" and "all 2,000" are different catalogues, and the
+    /// screen says which one it is showing.
+    #[serde(default)]
+    pub complete: bool,
     #[serde(default)]
     pub fetched: u32,
+    /// Only on a sync's own answer: what that sync did, so the bar can say
+    /// "12 new" rather than only "done".
+    #[serde(default)]
+    pub added: u32,
+    #[serde(default)]
+    pub stopped_early: bool,
+    #[serde(default)]
+    pub unavailable: u32,
     /// Filled by the listing only; a sync has no figures from the catalog yet.
     #[serde(default)]
     pub documents: u32,
@@ -740,6 +1012,15 @@ pub struct ChannelVideoRow {
     /// that was cancelled, or an activation withheld over a structural
     /// mismatch. The screen has to tell the two apart.
     pub active_version_id: Option<String>,
+    /// `false` once a complete re-sync did not meet this id on the playlist —
+    /// deleted, or made private. Kept in the list, because it may be indexed.
+    /// Defaults to `true` so a catalogue from before the flag offers everything.
+    #[serde(default = "yes")]
+    pub available: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -751,7 +1032,22 @@ pub struct ChannelDetail {
     pub video_count: u32,
     #[serde(default)]
     pub units_spent: u32,
+    #[serde(default)]
+    pub complete: bool,
     pub videos: Vec<ChannelVideoRow>,
+}
+
+/// The body a sync takes. `limit` is **omitted** when there is none: the
+/// Python dataclass reads an absent key as "the whole playlist", and sending
+/// `null` says the same thing less clearly. `full` always travels, because a
+/// full re-sync is the one thing that marks a video unavailable and the wire
+/// must never leave that to a default.
+fn channel_sync_body(url: &str, limit: Option<u32>, full: bool) -> serde_json::Value {
+    let mut body = serde_json::json!({ "url": url, "full": full });
+    if let Some(n) = limit {
+        body["limit"] = serde_json::json!(n);
+    }
+    body
 }
 
 /// The body both channel query routes take.
@@ -1106,6 +1402,18 @@ pub struct Question {
     /// it always has.
     #[serde(default = "default_effort")]
     pub effort: String,
+    /// The narrowings a recording corpus makes askable, all optional and all
+    /// omitted from the payload when empty — the dataclass default is the one
+    /// copy of "no filter", the same reasoning `effort` records for itself on
+    /// the paid plane.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub recorded_from: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub recorded_to: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scripture: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_name: String,
 }
 
 fn default_floor() -> f64 {
@@ -1260,6 +1568,16 @@ pub struct NewTurn {
     /// other — the same reasoning `ask.service.ts` records for the same field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// The same four narrowings `Question` carries, per turn. Omitted when
+    /// absent, for the same reason as `effort`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scripture: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_name: Option<String>,
 }
 
 /// One server-sent event from a turn in flight.
@@ -1329,6 +1647,13 @@ pub struct EvidenceItem {
     pub source: String,
     #[serde(default)]
     pub locator: String,
+    /// The document the chunk belongs to. Python has always sent it; this
+    /// struct dropped it on the way through — serde discards unknown fields —
+    /// until the media link needed it: a citation on a recording opens the
+    /// audio at its second through `media_link`, which is addressed by
+    /// document. Defaulted, so a plane that omits it still parses.
+    #[serde(default)]
+    pub document_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1406,6 +1731,17 @@ pub struct DocumentRow {
     pub tags: Vec<String>,
     pub active_version_id: Option<String>,
     pub updated_at: Option<String>,
+    /// When a recording was made and published, as its source's manifest said;
+    /// the feed's own link; which feed or folder it came from. All absent for
+    /// a book, and defaulted so a plane from before the columns still parses.
+    #[serde(default)]
+    pub recorded_at: Option<String>,
+    #[serde(default)]
+    pub published_at: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub source_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1495,6 +1831,15 @@ pub struct DocumentDetail {
     pub can_build_epub: bool,
     #[serde(default)]
     pub versions: Vec<VersionRow>,
+    /// See `DocumentRow`: a recording's dates, feed link and source.
+    #[serde(default)]
+    pub recorded_at: Option<String>,
+    #[serde(default)]
+    pub published_at: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub source_name: Option<String>,
 }
 
 /// What a standalone build produced.
@@ -1531,6 +1876,15 @@ pub struct DocumentMetadata {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    /// `YYYY-MM-DD`, or an empty string to clear. Absent means "leave alone".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3040,6 +3394,158 @@ impl Control {
         self.get(&path, EXPLORE_TIMEOUT).await
     }
 
+    // -- buckets -----------------------------------------------------------
+
+    /// Register a bucket and catalogue it, in one awaited call. Free.
+    /// Register a bucket and walk its listing.
+    ///
+    /// `library_id` empty derives `lib_s3_<hash>` from the bucket and prefix,
+    /// which is the default and right for a corpus that stands on its own.
+    /// Naming a library that exists puts the recordings on that shelf: one
+    /// graph and one retrieval scope with whatever is already there, and no
+    /// way to ask the recordings by themselves.
+    pub async fn bucket_register(
+        &self,
+        source: &BucketSource,
+        library_name: &str,
+        library_id: &str,
+    ) -> Result<BucketRegistered> {
+        self.post_json(
+            "/buckets",
+            &serde_json::json!({
+                "source": source,
+                "library_name": library_name,
+                "library_id": library_id,
+            }),
+            BUCKET_SYNC_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn buckets(&self) -> Result<BucketList> {
+        self.get("/buckets", CHANNEL_TIMEOUT).await
+    }
+
+    pub async fn bucket_detail(&self, bucket_id: &str, state: &str) -> Result<BucketDetail> {
+        let query = if state.is_empty() || state == "all" {
+            String::new()
+        } else {
+            format!("?state={state}")
+        };
+        self.get(&format!("/buckets/{bucket_id}{query}"), CHANNEL_TIMEOUT)
+            .await
+    }
+
+    pub async fn bucket_sync(&self, bucket_id: &str) -> Result<BucketRegistered> {
+        self.post_json(
+            &format!("/buckets/{bucket_id}/sync"),
+            &serde_json::json!({}),
+            BUCKET_SYNC_TIMEOUT,
+        )
+        .await
+    }
+
+    /// One `audio` run per key, each parked at its own gate. Free.
+    pub async fn bucket_probe(
+        &self,
+        bucket_id: &str,
+        keys: &[String],
+        options: &StageOptions,
+        reindex: bool,
+        transcriber: &str,
+    ) -> Result<BucketProbeResult> {
+        self.post_json(
+            &format!("/buckets/{bucket_id}/probe"),
+            &bucket_probe_body(keys, options, reindex, transcriber),
+            BUCKET_PROBE_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Hand over a transcript this machine made.
+    ///
+    /// The counterpart of `upload_audio`, and the same shape for the same
+    /// reason: the app cannot write a run artifact and the worker cannot run
+    /// whisper on this GPU, so the file goes to the plane the app is already
+    /// signed in to. The fields ride beside it because the sidecar the worker
+    /// archives records which engine and which model made it — a transcript
+    /// with no model named is one nobody can reproduce.
+    pub async fn upload_transcript(
+        &self,
+        workflow_id: &str,
+        path: &std::path::Path,
+        engine: &str,
+        model: &str,
+        language: &str,
+    ) -> Result<TranscriptUploaded> {
+        let bytes = std::fs::read(path).map_err(|e| AppError::io(path.display(), e))?;
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name("transcript.json")
+            .mime_str("application/json")
+            .map_err(|e| AppError::Config(e.to_string()))?;
+        let form = reqwest::multipart::Form::new()
+            .part("file", part)
+            .text("engine", engine.to_string())
+            .text("model", model.to_string())
+            .text("language", language.to_string());
+        let path_for_error = format!("/runs/{workflow_id}/transcript");
+        self.send(
+            self.http
+                .post(format!("{}{path_for_error}", self.base))
+                .multipart(form),
+            &path_for_error,
+            AUDIO_UPLOAD_TIMEOUT,
+        )
+        .await
+    }
+
+    /// Give up on transcribing a run here and pay Amazon instead.
+    pub async fn switch_transcriber(&self, workflow_id: &str) -> Result<TranscriberSwitched> {
+        self.post_json(
+            &format!("/runs/{workflow_id}/transcriber"),
+            &serde_json::json!({ "engine": "transcribe" }),
+            START_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn bucket_forget(&self, bucket_id: &str) -> Result<BucketForgotten> {
+        let path = format!("/buckets/{bucket_id}");
+        let url = format!("{}{path}", self.base);
+        self.send(self.http.delete(&url), &path, START_TIMEOUT).await
+    }
+
+    /// An audio run's gate: the same report a video publishes, on its own
+    /// route. `Ok(None)` while the object is still being probed.
+    pub async fn audio_gate(&self, workflow_id: &str) -> Result<Option<VideoGateReport>> {
+        match self
+            .get::<VideoGateReport>(
+                &format!("/runs/{workflow_id}/audio-gate"),
+                HEALTH_TIMEOUT,
+            )
+            .await
+        {
+            Ok(report) => Ok(Some(report)),
+            Err(AppError::ControlStatus { status: 409, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// A presigned link to the recording a document was indexed from, at a
+    /// second. Minted on click and never stored.
+    pub async fn media_link(
+        &self,
+        library_id: &str,
+        document_id: &str,
+        start_s: u32,
+    ) -> Result<MediaLink> {
+        self.get(
+            &format!("/libraries/{library_id}/documents/{document_id}/media?t={start_s}"),
+            START_TIMEOUT,
+        )
+        .await
+    }
+
     // -- channels ----------------------------------------------------------
     //
     // Everything here is free except the last two, and those two are the only
@@ -3047,10 +3553,15 @@ impl Control {
     // button is the decision, so the figure has to be on screen before the
     // request that starts the run rather than inside it.
 
-    pub async fn channel_sync(&self, url: &str, limit: u32) -> Result<ChannelSummary> {
+    pub async fn channel_sync(
+        &self,
+        url: &str,
+        limit: Option<u32>,
+        full: bool,
+    ) -> Result<ChannelSummary> {
         self.post_json(
             "/channels/sync",
-            &serde_json::json!({ "url": url, "limit": limit }),
+            &channel_sync_body(url, limit, full),
             CHANNEL_SYNC_TIMEOUT,
         )
         .await
@@ -3180,6 +3691,37 @@ mod tests {
             "section_title": "1.1 De la regla dada por Dios"
         }
     }"#;
+
+    #[test]
+    fn a_channel_sync_omits_the_limit_when_there_is_none_and_always_says_full() {
+        // Absent means "the whole playlist" on the Python side; `full` is the
+        // one switch that marks a video unavailable, so it never rides on a
+        // default.
+        let all = channel_sync_body("@canal", None, false);
+        assert_eq!(all["url"], "@canal");
+        assert_eq!(all["full"], false);
+        assert!(all.get("limit").is_none());
+
+        let some = channel_sync_body("@canal", Some(100), true);
+        assert_eq!(some["limit"], 100);
+        assert_eq!(some["full"], true);
+    }
+
+    #[test]
+    fn a_video_row_from_before_the_availability_flag_reads_as_available() {
+        // Every catalogue written under the 500-video cap has no such key,
+        // and a missing field that deserialised as `false` would grey out a
+        // whole channel with nothing failing anywhere.
+        let row: ChannelVideoRow = serde_json::from_str(
+            r#"{"video_id": "aaaaaaaaaaa", "title": "t", "description": "", "published_at": "",
+                "duration_s": 60, "live_state": "none", "thumbnail": "", "url": "",
+                "document_id": null, "active_version_id": null}"#,
+        )
+        .unwrap();
+        assert!(row.available);
+        let out = serde_json::to_value(&row).unwrap();
+        assert_eq!(out["available"], true);
+    }
 
     #[test]
     fn a_channel_query_carries_the_filter_only_when_there_is_one() {
@@ -3747,6 +4289,30 @@ mod request_direction {
             serde_json::from_str(r#"{"library_id": "lib_1", "text": "¿qué?"}"#).unwrap();
         let out = serde_json::to_value(&parsed).unwrap();
         assert!(out.get("top_k").is_none(), "got {out}");
+    }
+
+    #[test]
+    fn a_question_omits_the_narrowings_it_does_not_set_and_carries_the_ones_it_does() {
+        // Empty is the dataclass's own "no filter", and the key is left out so
+        // both planes see what a curl that never mentioned it would send. A
+        // set one travels verbatim: the normalising — `Rom 8:28` to
+        // `Romanos 8:28` — is the worker's, and a copy here would drift.
+        let plain: Question =
+            serde_json::from_str(r#"{"library_id": "lib_1", "text": "¿qué?"}"#).unwrap();
+        let out = serde_json::to_value(&plain).unwrap();
+        for key in ["recorded_from", "recorded_to", "scripture", "source_name"] {
+            assert!(out.get(key).is_none(), "{key} leaked: {out}");
+        }
+        let narrowed: Question = serde_json::from_str(
+            r#"{"library_id": "lib_1", "text": "¿qué?", "recorded_from": "1993-01-01",
+                "scripture": "Rom 8:28", "source_name": "iVoox"}"#,
+        )
+        .unwrap();
+        let out = serde_json::to_value(&narrowed).unwrap();
+        assert_eq!(out["recorded_from"], "1993-01-01");
+        assert!(out.get("recorded_to").is_none());
+        assert_eq!(out["scripture"], "Rom 8:28");
+        assert_eq!(out["source_name"], "iVoox");
     }
 
     #[test]
@@ -4706,5 +5272,84 @@ mod estimate_range {
             .collect();
         assert_eq!(prose, "ab");
         assert!(got.iter().any(|e| e.event == "stage" && e.text.is_none()));
+    }
+}
+
+#[cfg(test)]
+mod buckets {
+    //! The bucket types cross in both directions, and one of them crosses both
+    //! ways: `BucketSource` arrives from the webview on a register and leaves
+    //! inside every `StoredBucket`. It is therefore snake_case on both sides,
+    //! like `Question`, and this pins that beside the other exception.
+    use super::*;
+
+    #[test]
+    fn a_source_stays_snake_case_on_both_sides_and_defaults_its_archive() {
+        let from_webview = r#"{"bucket": "tenant-bucket", "prefix": "audios/",
+            "role_arn": "arn:aws:iam::123456789012:role/reader",
+            "manifest_key": "metadatos/m.csv", "manifest_map": {"file": "archivo"}}"#;
+        let parsed: BucketSource = serde_json::from_str(from_webview).unwrap();
+        assert_eq!(parsed.archive_prefix, "transcripciones/");
+        assert_eq!(parsed.language, "es-US");
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(out["role_arn"], "arn:aws:iam::123456789012:role/reader");
+        assert_eq!(out["manifest_map"]["file"], "archivo");
+        assert_eq!(out["archive_prefix"], "transcripciones/");
+    }
+
+    #[test]
+    fn an_object_row_arrives_snake_case_and_leaves_camel_case() {
+        let from_plane = r#"{"key": "audios/a.mp3", "etag": "e1", "size": 1000,
+            "last_modified": "", "container": "mp3", "duration_s": 3600,
+            "duration_estimated": false, "title": "A", "author": "", "recorded_at": "1995-04-02",
+            "published_at": "", "source": "iVoox", "url": "https://feed/1", "available": true,
+            "warnings": [], "document_id": "doc_a", "active_version_id": null,
+            "run_id": "audio-1", "run_state": "awaiting_approval", "state": "pending"}"#;
+        let parsed: BucketObjectRow = serde_json::from_str(from_plane).unwrap();
+        assert_eq!(parsed.duration_s, 3600);
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(out["durationS"], 3600);
+        assert_eq!(out["recordedAt"], "1995-04-02");
+        assert_eq!(out["runState"], "awaiting_approval");
+        assert!(out["activeVersionId"].is_null());
+        assert!(out.get("duration_s").is_none());
+    }
+
+    #[test]
+    fn a_stored_bucket_from_before_a_count_existed_still_parses() {
+        // The counts are defaulted: a `bucket.json` written by an older worker
+        // must not take the picker down.
+        let from_plane = r#"{"bucket_id": "ce2d1a0695b0",
+            "source": {"bucket": "b"}, "library_id": "lib_s3_ce2d1a0695b0",
+            "library_name": "s3://b/"}"#;
+        let parsed: StoredBucket = serde_json::from_str(from_plane).unwrap();
+        assert_eq!(parsed.object_count, 0);
+        assert!(!parsed.complete);
+        assert_eq!(parsed.source.prefix, "");
+    }
+
+    #[test]
+    fn the_probe_body_carries_the_switches_python_spells() {
+        let body =
+            bucket_probe_body(&["audios/a.mp3".to_string()], &StageOptions::default(), true, "local");
+        assert_eq!(body["keys"][0], "audios/a.mp3");
+        assert_eq!(body["reindex"], true);
+        assert_eq!(body["options"]["extract_semantics"], true);
+        assert!(body["options"].get("extractSemantics").is_none());
+        // The engine is decided per batch, before quoting, so it travels with
+        // the probe and not with the approval: every gate quotes exactly the
+        // engine its own run is on.
+        assert_eq!(body["transcriber"], "local");
+    }
+
+    /// A probe answer from a plane that predates the local transcriber still
+    /// parses, and reads as Amazon.
+    #[test]
+    fn a_probe_answer_with_no_engine_named_reads_as_amazon() {
+        let parsed: BucketProbeStarted =
+            serde_json::from_str(r#"{"key": "audios/a.mp3", "workflow_id": "audio-1"}"#).unwrap();
+        assert_eq!(parsed.transcriber, "transcribe");
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(out["workflowId"], "audio-1");
     }
 }

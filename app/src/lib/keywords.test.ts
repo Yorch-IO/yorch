@@ -34,12 +34,22 @@ describe("tokens", () => {
 
   it("drops stopwords, short tokens and bare numbers", () => {
     // `bm25.py`'s rules, plus one: a year or a chapter number is not a topic.
+    // `domingo` goes too: a weekday is a date, and a date is not a topic.
     expect(tokens("Culto del domingo 2024 - parte 12 con los jóvenes")).toEqual([
       ["culto", "Culto"],
-      ["domingo", "domingo"],
       ["parte", "parte"],
       ["jovenes", "jóvenes"],
     ]);
+  });
+
+  it("drops links whole, dates and the social boilerplate a description carries", () => {
+    // Measured on the first real channel: `www`, `http`, `com`, `Facebook`,
+    // `Síguenos`, `mayo`, `Viernes` were all in the top forty chips.
+    const text =
+      "Oración de la mañana - Rev. Darío | 16 septiembre 2026 · Más información en casaroca.org · Síguenos en Facebook: https://facebook.com/casaroca www.casaroca.org/eventos info@casaroca.org @casaroca #SeguimosEnCasa";
+    // `información` survives: it is a word, and the list is not a filter on
+    // what a description tends to say. The domain beside it does not.
+    expect(tokens(text).map(([k]) => k)).toEqual(["oracion", "mañana", "rev", "dario", "informacion"]);
   });
 
   it("splits on punctuation and keeps non-Latin letters", () => {
@@ -111,6 +121,17 @@ describe("titleKeywords", () => {
     // "distinta" is on every title and therefore dropped; the cap is filled
     // with the singletons in label order.
     expect(out.map((k) => k.key)).not.toContain("distinta");
+  });
+
+  it("never offers the channel's own name, whatever share of the titles it is on", () => {
+    // `Casa` and `Roca` sat on 20% of the first real channel's titles — well
+    // under the boilerplate share — and were the third and fourth chips.
+    const titles = ["Casa Sobre la Roca · la fe", "Casa Sobre la Roca · la gracia", "El perdón", "La fe hoy", "Gracia y fe"];
+    const exclude = new Set(tokens("Casa Sobre La Roca").map(([k]) => k));
+    const keys = titleKeywords(titles, exclude).map((k) => k.key);
+    expect(keys).not.toContain("casa");
+    expect(keys).not.toContain("roca");
+    expect(keys).toContain("gracia");
   });
 
   it("is empty for an empty catalogue rather than throwing", () => {

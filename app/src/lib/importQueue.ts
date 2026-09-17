@@ -72,7 +72,24 @@ export const unfinished = (run: RunListItem): boolean => run.finishedAt === null
 export const waiting = (run: RunListItem): boolean =>
   run.state === "awaiting_approval";
 
-export function useImportQueue(libraryId: string | null) {
+/**
+ * The queue.
+ *
+ * **`libraryFilter` is a narrowing, and `null` means every library**, which is
+ * the opposite of what this hook's argument used to mean. It took the selected
+ * library and could not be asked for anything else, so a run started from a
+ * screen that does not use the library picker — every probe the Channel tab
+ * starts, whose library is `lib_yt_<channelId>` — was invisible here while the
+ * sidebar, which reads `/project-summary` and is project-wide, showed it going.
+ * Reported as "a video requested from Channel does not appear in Import"; the
+ * 11 runs were parked correctly, in a library the queue was not asking about.
+ *
+ * The filter is a *request parameter* rather than a filter over what arrived:
+ * `QUEUE_LIMIT` is 30, so narrowing after the fetch would show a library the
+ * last 30 runs of *every* library happened to include, which is a different
+ * and much smaller list than "the last 30 of this one".
+ */
+export function useImportQueue(libraryFilter: string | null) {
   const [items, setItems] = useState<QueueItem[]>([]);
   const [error, setError] = useState<unknown>(null);
   const [loaded, setLoaded] = useState(false);
@@ -83,14 +100,14 @@ export function useImportQueue(libraryId: string | null) {
   const gates = useRef(new Map<string, GateReport | VideoGateReport>());
 
   const poll = useCallback(async () => {
-    if (!libraryId) {
-      setItems([]);
-      setLoaded(true);
-      return;
-    }
     let page;
     try {
-      page = await api.runsList({ libraryId, limit: QUEUE_LIMIT });
+      page = await api.runsList({
+        // Omitted rather than sent empty: the route reads an absent
+        // `library_id` as "every library", which is the whole point.
+        ...(libraryFilter ? { libraryId: libraryFilter } : {}),
+        limit: QUEUE_LIMIT,
+      });
     } catch (e) {
       if (alive.current) {
         setError(e);
@@ -120,13 +137,18 @@ export function useImportQueue(libraryId: string | null) {
           }
         }
 
-        const isVideo = run.kind === "video";
+        // A bucket recording publishes the same report a video does, on its
+        // own route; the queue renders both through `VideoGateReview`.
+        const isVideo = run.kind === "video" || run.kind === "audio";
         let cached = gates.current.get(run.workflowId) ?? null;
         if (cached === null && waiting(run)) {
           try {
-            cached = isVideo
-              ? await api.videoGate(run.workflowId)
-              : await api.ingestGate(run.workflowId);
+            cached =
+              run.kind === "audio"
+                ? await api.audioGate(run.workflowId)
+                : isVideo
+                  ? await api.videoGate(run.workflowId)
+                  : await api.ingestGate(run.workflowId);
             if (cached) gates.current.set(run.workflowId, cached);
           } catch {
             // 404 for a rebuild parked at its own gate, which this queue does
@@ -147,7 +169,7 @@ export function useImportQueue(libraryId: string | null) {
       setItems(next);
       setLoaded(true);
     }
-  }, [libraryId]);
+  }, [libraryFilter]);
 
   useEffect(() => {
     alive.current = true;

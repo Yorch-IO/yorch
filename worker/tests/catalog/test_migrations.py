@@ -44,6 +44,9 @@ def test_applying_every_migration_creates_every_table(database_url: str):
         "20260906120000_delta_kind",
         "20260915120000_run_kind_epub",
         "20260916120000_run_kind_channel",
+        "20260916180000_run_kind_audio",
+        "20260916180100_document_dates",
+        "20260917100000_run_state_transcript",
     ]
     assert {
         "library",
@@ -110,6 +113,9 @@ def test_require_schema_accepts_a_catalog_ahead_of_the_code(database_url: str):
         "20260905200000_conversation",
         "20260906120000_delta_kind",
         "20260915120000_run_kind_epub",
+        "20260916120000_run_kind_channel",
+        "20260916180000_run_kind_audio",
+        "20260916180100_document_dates",
         m.REQUIRED_MIGRATION,
     ]
 

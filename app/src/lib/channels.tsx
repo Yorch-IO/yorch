@@ -32,10 +32,15 @@ import { useLibraries } from "./libraries";
 
 const REMEMBERED = "companyBrain.channelId";
 
-/** The catalogue ceiling, not the screen's old 100: the catalogue is a free
- *  artefact worth having in full while the *preselection* is what costs money
- *  and is capped separately. */
-export const SYNC_LIMIT = 500;
+/** What the last sync of this session did, for the bar to say. `null` until
+ *  one has run; never persisted, because it is news and not state. */
+export interface SyncNews {
+  channelId: string;
+  added: number;
+  unavailable: number;
+  complete: boolean;
+  stoppedEarly: boolean;
+}
 
 /** localStorage throws outright in some webview configurations, so every access
  *  is guarded and a failure degrades to "nothing remembered". */
@@ -61,11 +66,19 @@ interface ChannelsState {
   selected: string;
   select: (id: string) => void;
   reload: () => Promise<void>;
-  /** Catalogue a channel and select it. Free: quota, never money. Resolves
-   *  `false` when it failed — the error is in `error`, and the caller keeps
-   *  what the person typed so it can be corrected rather than retyped. */
-  sync: (url: string) => Promise<boolean>;
+  /** Catalogue a channel and select it. Free: quota, never money. No cap:
+   *  the worker saves a page at a time and stops at the first page it
+   *  already knows once the catalogue is complete. `full` walks to the end
+   *  whatever is known and marks what it does not meet as unavailable.
+   *  Resolves `false` when it failed — the error is in `error`, and the
+   *  caller keeps what the person typed so it can be corrected rather than
+   *  retyped. Even then the list is reloaded: the pages that arrived before
+   *  the failure are on disk, and the count has to show them. */
+  sync: (url: string, options?: { full?: boolean }) => Promise<boolean>;
+  /** Sync the selected channel again, by its own link. */
+  refresh: (options?: { full?: boolean }) => Promise<boolean>;
   syncing: boolean;
+  news: SyncNews | null;
   loading: boolean;
   error: unknown;
 }
@@ -79,6 +92,7 @@ export function ChannelsProvider({ children }: { children: ReactNode }) {
   const [selected, setSelected] = useState("");
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [news, setNews] = useState<SyncNews | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const reload = useCallback(async () => {
@@ -122,17 +136,30 @@ export function ChannelsProvider({ children }: { children: ReactNode }) {
   );
 
   const sync = useCallback(
-    async (url: string): Promise<boolean> => {
+    async (url: string, options: { full?: boolean } = {}): Promise<boolean> => {
       setSyncing(true);
       setError(null);
+      setNews(null);
       try {
-        const summary = await api.channelSync(url.trim(), SYNC_LIMIT);
+        const summary = await api.channelSync(url.trim(), { full: options.full ?? false });
         await reload();
         select(summary.channel.channelId);
+        setNews({
+          channelId: summary.channel.channelId,
+          added: summary.added ?? 0,
+          unavailable: summary.unavailable ?? 0,
+          complete: summary.complete,
+          stoppedEarly: summary.stoppedEarly ?? false,
+        });
         // The sync created the channel's library; the shelf has to show it.
         void libraries.reload();
         return true;
       } catch (e) {
+        // The pages that arrived before the failure are on disk. Showing the
+        // old count over a catalogue that grew would read as a sync that did
+        // nothing, and a person would press it again for the same pages.
+        // Reloaded *before* the error is set, because `reload` clears it.
+        await reload();
         setError(e);
         return false;
       } finally {
@@ -142,9 +169,18 @@ export function ChannelsProvider({ children }: { children: ReactNode }) {
     [reload, select, libraries],
   );
 
+  const refresh = useCallback(
+    async (options: { full?: boolean } = {}): Promise<boolean> => {
+      const current = rows.find((c) => c.channel.channelId === selected);
+      if (!current) return false;
+      return sync(current.channel.url, options);
+    },
+    [rows, selected, sync],
+  );
+
   const value = useMemo<ChannelsState>(
-    () => ({ rows, selected, select, reload, sync, syncing, loading, error }),
-    [rows, selected, select, reload, sync, syncing, loading, error],
+    () => ({ rows, selected, select, reload, sync, refresh, syncing, news, loading, error }),
+    [rows, selected, select, reload, sync, refresh, syncing, news, loading, error],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -174,13 +210,16 @@ export function useChannels(): ChannelsState {
  */
 export function ChannelPicker() {
   const { t } = useTranslation();
-  const { rows, selected, select, reload, sync, syncing, loading, error } = useChannels();
+  const { rows, selected, select, reload, sync, refresh, syncing, news, loading, error } =
+    useChannels();
   const [url, setUrl] = useState("");
 
   const submit = async () => {
     if (url.trim() === "") return;
     if (await sync(url)) setUrl("");
   };
+
+  const current = rows.find((c) => c.channel.channelId === selected);
 
   return (
     <div className="channel-bar">
@@ -195,6 +234,30 @@ export function ChannelPicker() {
             ))}
           </select>
         </label>
+      )}
+      {current && (
+        <span className="channel-refresh">
+          {/* Incremental: one call for a channel that has not uploaded, and
+              only the new videos hydrated. The full one is the only thing that
+              marks a deleted video, and walks the whole playlist to do it. */}
+          <button
+            type="button"
+            disabled={syncing}
+            title={t("channel.refreshCaveat")}
+            onClick={() => void refresh()}
+          >
+            {syncing ? t("channel.syncing") : t("channel.refresh")}
+          </button>
+          <button
+            type="button"
+            className="link"
+            disabled={syncing}
+            title={t("channel.refreshFullCaveat")}
+            onClick={() => void refresh({ full: true })}
+          >
+            {t("channel.refreshFull")}
+          </button>
+        </span>
       )}
       {loading && rows.length === 0 && error === null && (
         <span className="muted">{t("channel.loading")}</span>
@@ -226,6 +289,17 @@ export function ChannelPicker() {
             {t("libraries.retry")}
           </button>
         </p>
+      )}
+      {error === null && news !== null && news.channelId === selected && (
+        /* A span, not a paragraph: it takes the room left on the line and
+           wraps only when there is none, so the bar keeps its height on the
+           tab where it can. */
+        <span className="muted channel-news">
+          {t("channel.synced", { added: news.added })}
+          {news.unavailable > 0 && ` · ${t("channel.syncedUnavailable", { count: news.unavailable })}`}
+          {" · "}
+          {t(news.complete ? "channel.complete" : "channel.partial")}
+        </span>
       )}
     </div>
   );

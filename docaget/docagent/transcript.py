@@ -181,6 +181,67 @@ def parse_transcribe(payload: dict) -> list[Cue]:
     return cues
 
 
+def parse_whisper(payload: dict) -> list[Cue]:
+    """Parse a ``whisper-cli -oj`` document into one cue per segment.
+
+    whisper.cpp writes ``transcription: [{offsets: {from, to}, text}]`` with
+    the offsets in **milliseconds** — segments of a few seconds each, not
+    words. That is coarser than Amazon's per-word items and it does not matter
+    here: the grouper decides paragraph boundaries and a chunk's ``start_s``
+    is the first cue's start either way, so a citation still lands within the
+    segment that was spoken. Token-level timings (``-ojf``) are deliberately
+    not read — they are experimental on the whisper.cpp side and a citation
+    to the second is what the product promises, not to the word.
+
+    Read by the *shape*, not by who wrote it: ``transcription`` is the key
+    whisper.cpp has used since its JSON output existed, and ``offsets`` is
+    what carries the clock. A document with neither is refused, never
+    guessed at.
+    """
+    segments = payload.get("transcription") if isinstance(payload, dict) else None
+    if not isinstance(segments, list):
+        raise TranscriptError("no transcription segments in the whisper document")
+    cues: list[Cue] = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        text = _clean(str(segment.get("text") or ""))
+        if not text:
+            continue
+        offsets = segment.get("offsets") or {}
+        try:
+            start = float(offsets["from"]) / 1000.0
+            end = float(offsets["to"]) / 1000.0
+        except (KeyError, TypeError, ValueError):
+            if cues:
+                last = cues[-1]
+                cues[-1] = Cue(last.start_s, last.end_s, f"{last.text} {text}")
+            continue
+        cues.append(Cue(start, end, text))
+    return cues
+
+
+def transcript_engine(payload: dict) -> str:
+    """Which engine wrote a transcript document: ``transcribe`` or ``whisper``.
+
+    Decided by shape so a caller that only holds the bytes — the archive
+    reader, the grouper — can dispatch without a sidecar. A document that is
+    neither raises, which is the answer for a file that is not a transcript.
+    """
+    if isinstance(payload, dict):
+        if isinstance(payload.get("results"), dict) and "items" in payload["results"]:
+            return "transcribe"
+        if isinstance(payload.get("transcription"), list):
+            return "whisper"
+    raise TranscriptError("not a transcript document this reader knows")
+
+
+def parse_any(payload: dict) -> list[Cue]:
+    """Cues from either engine's document, dispatched on its shape."""
+    engine = transcript_engine(payload)
+    return parse_transcribe(payload) if engine == "transcribe" else parse_whisper(payload)
+
+
 def _seconds(m: re.Match[str], group: int) -> float:
     """Read one ``[HH:]MM:SS.mmm`` timestamp out of a ``-->`` match."""
     hours = int(m.group(group) or 0)

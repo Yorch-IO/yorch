@@ -100,6 +100,21 @@ pub enum AppError {
         message: String,
     },
 
+    /// The bundled `whisper.cpp` refused, could not be found, or its model
+    /// could not be fetched.
+    ///
+    /// It carries its kind for the same reason `YouTube` does: the useful
+    /// distinctions already have names the rest of the product uses, and
+    /// minting a second vocabulary for them would mean two guidance maps
+    /// saying the same sentences. `whisper_missing` wants "run fetch-whisper";
+    /// `whisper_model_missing` wants "download the model"; and
+    /// `whisper_model_corrupt` wants "try again" — three different buttons.
+    #[error("{message}")]
+    Whisper {
+        kind: &'static str,
+        message: String,
+    },
+
     #[error("{0}")]
     Config(String),
 }
@@ -120,6 +135,7 @@ impl AppError {
             Self::Io { .. } => "io",
             Self::NotSignedIn => "not_signed_in",
             Self::YouTube { kind, .. } => kind,
+            Self::Whisper { kind, .. } => kind,
             Self::Config(_) => "config",
         }
     }

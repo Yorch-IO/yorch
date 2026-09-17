@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Locator } from "../Locator";
+import { MediaLocator } from "../MediaLocator";
+import { Narrowings, activeNarrowings } from "../Narrowings";
+import { bucketIdFor } from "../lib/bucket";
 import { Passage } from "./AskScreen";
 import {
   api,
@@ -9,6 +11,7 @@ import {
   errorGuidanceKey,
   errorMessage,
   isAppError,
+  type AskNarrowings,
   type Conversation,
   type ConversationTurn,
 } from "../lib/api";
@@ -74,6 +77,10 @@ export function ChatScreen() {
 
   const [state, dispatch] = useReducer(chatReducer, emptyChat);
   const [effort, setEffort] = useState<AskEffort>(() => loadEffort(identity));
+  // Per turn and not persisted: a filter is what the person narrows this
+  // question by, and one that outlived the turn that set it would be silent.
+  const [narrowings, setNarrowings] = useState<AskNarrowings>({});
+  const isBucket = bucketIdFor(libraryId) !== null;
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -193,7 +200,12 @@ export function ChatScreen() {
         dispatch({ type: "select", conversationId });
         dispatch({ type: "open", conversationId, turns: [] });
       }
-      const { turnSeq } = await api.chatTurn(conversationId, text, effort);
+      const { turnSeq } = await api.chatTurn(
+        conversationId,
+        text,
+        effort,
+        isBucket ? activeNarrowings(narrowings) : {},
+      );
       dispatch({ type: "submit", seq: turnSeq, question: text, effort });
       await follow(conversationId, turnSeq);
     } catch (e) {
@@ -201,7 +213,7 @@ export function ChatScreen() {
       // Put the question back rather than losing what somebody typed.
       setDraft(text);
     }
-  }, [draft, busy, libraryId, state.selected, effort, follow]);
+  }, [draft, busy, libraryId, state.selected, effort, follow, narrowings, isBucket]);
 
   const startNew = useCallback(() => {
     dispatch({ type: "select", conversationId: null });
@@ -347,6 +359,10 @@ export function ChatScreen() {
             ))}
           </fieldset>
 
+          {isBucket && (
+            <Narrowings value={narrowings} onChange={setNarrowings} disabled={busy} />
+          )}
+
           <button type="button" onClick={() => void send()} disabled={busy || !draft.trim() || !libraryId}>
             {busy ? t("chat.sending") : t("chat.send")}
           </button>
@@ -368,11 +384,19 @@ export function ChatScreen() {
                     >
                       {c.claim}
                     </button>
-                    <Locator text={c.locator} className="locator" />
+                    <MediaLocator
+                      locator={c.locator}
+                      libraryId={libraryId}
+                      documentId={cited.citedEvidence.find((e) => e.chunkId === c.chunkId)?.documentId}
+                    />
                   </li>
                 ))}
               </ol>
-              {passage ? <Passage item={passage} /> : <p className="notice">{t("chat.noPassage")}</p>}
+              {passage ? (
+                <Passage item={passage} libraryId={libraryId} />
+              ) : (
+                <p className="notice">{t("chat.noPassage")}</p>
+              )}
             </>
           )}
         </div>

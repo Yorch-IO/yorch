@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "../i18n";
 import type { ChannelSummary } from "./api";
 import { BackendProvider } from "./backend";
-import { ChannelPicker, ChannelsProvider, SYNC_LIMIT, useChannels } from "./channels";
+import { ChannelPicker, ChannelsProvider, useChannels } from "./channels";
 import { LibrariesProvider } from "./libraries";
 
 /**
@@ -39,6 +39,7 @@ const summary = (channelId: string, title: string): ChannelSummary => ({
   syncedAt: "2026-09-16T00:00:00+00:00",
   videoCount: 3,
   unitsSpent: 3,
+  complete: true,
 });
 
 const A = summary("UCaaaaaaaaaaaaaaaaaaaaaa", "Alfa");
@@ -108,7 +109,7 @@ describe("ChannelsProvider", () => {
     await waitFor(() => expect(screen.getByTestId("selected").textContent).toBe(A.channel.channelId));
   });
 
-  it("syncs at the catalogue ceiling, selects the new channel and reloads the shelf", async () => {
+  it("syncs with no cap, selects the new channel and reloads the shelf", async () => {
     // A sync creates the channel's library on the server, so the library
     // picker on the other tabs has to see it without a relaunch.
     channelSync.mockImplementation(async () => {
@@ -126,7 +127,11 @@ describe("ChannelsProvider", () => {
     expect(button.disabled).toBe(false);
     fireEvent.click(button);
 
-    await waitFor(() => expect(channelSync).toHaveBeenCalledWith("https://www.youtube.com/@Beta", SYNC_LIMIT));
+    // No limit and not a full walk: the worker saves page by page and stops at
+    // the first page it already knows.
+    await waitFor(() =>
+      expect(channelSync).toHaveBeenCalledWith("https://www.youtube.com/@Beta", { full: false }),
+    );
     await waitFor(() =>
       expect(screen.getByTestId("selected").textContent).toBe(B.channel.channelId),
     );
@@ -146,6 +151,38 @@ describe("ChannelsProvider", () => {
     await waitFor(() =>
       expect(screen.getByTestId("selected").textContent).toBe(A.channel.channelId),
     );
+  });
+
+  it("refreshes the selected channel by its own link, incrementally or in full", async () => {
+    channelSync.mockResolvedValue({ ...A, added: 2, unavailable: 1, complete: true });
+    const { container } = mount();
+    await waitFor(() => expect(channels).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(t("channel.refresh"))).toBeTruthy());
+
+    fireEvent.click(screen.getByText(t("channel.refresh")));
+    await waitFor(() =>
+      expect(channelSync).toHaveBeenCalledWith(A.channel.url, { full: false }),
+    );
+    // What the sync did, said in the bar: new videos, marked ones, complete.
+    await waitFor(() =>
+      expect(container.textContent).toContain(t("channel.synced", { added: 2 })),
+    );
+    expect(container.textContent).toContain(t("channel.syncedUnavailable", { count: 1 }));
+    expect(container.textContent).toContain(t("channel.complete"));
+
+    fireEvent.click(screen.getByText(t("channel.refreshFull")));
+    await waitFor(() =>
+      expect(channelSync).toHaveBeenLastCalledWith(A.channel.url, { full: true }),
+    );
+  });
+
+  it("reloads the list after a failed sync, because the pages before the failure are on disk", async () => {
+    channelSync.mockRejectedValue({ kind: "youtube_quota_exceeded", message: "cuota" });
+    mount();
+    await waitFor(() => expect(channels).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByText(t("channel.refresh")));
+    await waitFor(() => expect(channelSync).toHaveBeenCalled());
+    await waitFor(() => expect(channels).toHaveBeenCalledTimes(2));
   });
 
   it("reports a failed sync in the bar and keeps the field", async () => {

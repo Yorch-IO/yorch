@@ -294,3 +294,57 @@ def test_a_group_exceeds_the_cap_only_when_one_cue_does():
     groups = t.group_cues(cues, target_chars=50, hard_cap_chars=50, max_gap_s=99)
     over = [g for g in groups if len(g.text) > 50]
     assert [g.cues for g in over] == [1]
+
+
+# --- whisper.cpp -------------------------------------------------------------
+
+
+def _whisper(segments):
+    return {
+        "systeminfo": "x", "model": {"type": "large-v3-turbo"},
+        "params": {"model": "ggml-large-v3-turbo.bin", "language": "es", "translate": False},
+        "result": {"language": "es"},
+        "transcription": segments,
+    }
+
+
+def test_whisper_segments_become_cues_with_millisecond_offsets_in_seconds():
+    from docagent.transcript import parse_any, parse_whisper, transcript_engine
+
+    doc = _whisper([
+        {"timestamps": {"from": "00:00:00,000", "to": "00:00:04,500"},
+         "offsets": {"from": 0, "to": 4500}, "text": " Hermanos, buenas noches."},
+        {"timestamps": {"from": "00:00:04,500", "to": "00:00:09,000"},
+         "offsets": {"from": 4500, "to": 9000}, "text": "   "},
+        {"timestamps": {"from": "00:00:09,000", "to": "00:00:12,250"},
+         "offsets": {"from": 9000, "to": 12250}, "text": " Abramos en Juan 3:16."},
+    ])
+    cues = parse_whisper(doc)
+    assert [(c.start_s, c.end_s, c.text) for c in cues] == [
+        (0.0, 4.5, "Hermanos, buenas noches."),
+        (9.0, 12.25, "Abramos en Juan 3:16."),
+    ]
+    assert transcript_engine(doc) == "whisper"
+    assert parse_any(doc) == cues
+
+
+def test_a_segment_with_no_offsets_keeps_its_words_on_the_previous_cue():
+    from docagent.transcript import parse_whisper
+
+    doc = _whisper([
+        {"offsets": {"from": 0, "to": 1000}, "text": "uno"},
+        {"text": "dos"},
+    ])
+    assert [c.text for c in parse_whisper(doc)] == ["uno dos"]
+
+
+def test_the_engine_is_read_off_the_shape_and_neither_is_refused():
+    import pytest
+
+    from docagent.transcript import TranscriptError, transcript_engine
+
+    assert transcript_engine({"results": {"items": []}}) == "transcribe"
+    with pytest.raises(TranscriptError):
+        transcript_engine({"hello": "world"})
+    with pytest.raises(TranscriptError):
+        transcript_engine([])

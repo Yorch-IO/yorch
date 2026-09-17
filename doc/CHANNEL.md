@@ -81,6 +81,103 @@ silence. `GET /channels/{id}` joins the two on every read instead. The
 consequence is the only migration this feature needed: `run.kind = 'channel'`,
 in `../yorch-tauri-backend/prisma/migrations/20260916120000_run_kind_channel`.
 
+## Cataloguing without a cap, and what had to be true first
+
+The sync was capped at 500 videos until 2026-09-16, on the reasoning that the
+catalogue is free and the preselection is what costs money. The cap was still a
+cap: a channel of two thousand sermons was catalogued to its five hundredth and
+the keyword chips were built from a quarter of it. Removing the number was one
+line; what made it *safe* to remove is `channel/sync.py`, because the shape
+the sync had — fetch everything, then hydrate everything, then save — fails
+in the expensive direction the moment a channel is big:
+
+- **Every page is on disk before the next is asked for.** Two hundred calls in
+  one request, and a quota that ran out on the hundredth used to throw away the
+  ninety-nine before it — the `save` was after the `raise`. Now the 429 is about
+  the pages that did not arrive, the ones that did are in `videos.json`, and
+  `channel.json` says the catalogue is incomplete so the next sync walks on.
+  `ChannelStore.write` exists for this: `save` re-reads and re-parses the file
+  to merge, which is a hundred parses of a three-megabyte file on a channel of
+  five thousand; the loop keeps the merged list in memory and writes.
+- **Only new videos are hydrated.** A known duration is already paid for, and
+  `merge_catalogue` never overwrites a hydrated one with an unhydrated zero,
+  so `videos.list` is called for the new ids of each page and no others. A
+  channel that has not uploaded since the last sync costs **one unit**.
+- **The walk stops at the first fully-known page — only once the catalogue is
+  complete.** The playlist is newest-first, so a page with no new id means
+  nothing after it is new either. The condition is the whole point:
+  `StoredChannel.complete` is set only by a walk that reached the end, and
+  every catalogue written under the old cap reads `False` (the field is
+  appended and defaulted), so its next sync walks past the five hundred it
+  knows instead of stopping at them for ever. Verified by reverting the
+  condition: two tests go red.
+- **Absences are marked by a full re-sync that reached the end, and by nothing
+  else.** `full=True` ignores the early stop, walks the playlist, and sets
+  `available=False` on every known id it did not meet — deleted, or made
+  private. Never dropped: the video may be indexed, and the screen must still
+  say so; it is greyed and cannot be ticked. A walk cut short by a limit or an
+  error marks nothing, because a partial answer is not a statement about the
+  videos it did not mention — the same rule `merge_catalogue` already stated.
+  A video seen again becomes available again; the playlist is the authority.
+- **The screen paints a page and reasons over the whole.** With no cap the
+  table can hold thousands of rows, and ~50,000 DOM nodes in WebKitGTK is
+  unmeasured. `pageRows` draws the first 100 of the filtered set plus every row
+  that carries a run — a parked gate is a pending decision and a page boundary
+  must not hide one — and "Ver 100 más" extends it. The chips, the counts,
+  "Marcar N" and the ids the quote is asked about all use the whole filtered
+  set. The chips also read the description now, by decision: a sermon's title
+  is often a verse and its description the subject. The listing carries the
+  first 400 characters of it, which is the summary end, and the boilerplate
+  rule is what keeps the paragraph a channel pastes under every video out.
+- **The bar says what a sync did.** *Actualizar* is the incremental sync of
+  the selected channel by its own link; *Resincronizar todo* is the full one,
+  set as a link because it is the rare one and the one that marks. After
+  either, one line: new videos, marked ones, complete or partial. The Rust
+  timeout for a sync is ten minutes, and the worker's per-page save is what
+  makes a timeout cost only the request.
+
+Quota was never the constraint — 10,000 units a day, and a 10,000-video
+channel is ~400 on its first sync. Time per request and losing what was
+fetched were, and both are gone.
+
+**Measured on the first real channel, 2026-09-16: Casa Sobre La Roca, 2,983
+videos, complete, 121 units for the first walk and 61 for a full re-sync
+(60 pages, nothing to hydrate).** 2,982 of 2,983 hydrated; the one that is
+not is an `upcoming` premiere, hydrated by definition. What the chips did on
+it is the finding worth keeping, because every one of these was invisible on
+a synthetic catalogue:
+
+- The top forty held `www 858`, `http 320`, `https 316`, `com 358` from the
+  descriptions' links; `famil 479` and `fami 430`, which are "familia" cut at
+  the 400th character of the preview; `mayo`, `agosto`, `julio`, `Viernes`
+  from the dates the titles carry; `Facebook`, `Síguenos`, `Suscríbete`; and
+  `Casa 588` and `Roca 613` — the channel's own name, on 20% of the titles
+  and therefore untouched by the 50% boilerplate rule, which *did* catch the
+  pasted paragraph (`iglesia 2191`, `invitamos 1954`, `acompañanos 1882`…).
+- So: links, mail addresses, handles and hashtags are removed whole before
+  tokenising (bare domains too — "Más información en casaroca.org" appears
+  1,268 times with no `www.` to catch, and once the links were gone
+  `#CasaRocaNoPara` was the most frequent "word" of all); months, weekdays
+  and the vocabulary a YouTube description carries because it is one
+  (`suscribete`, `canal`, `programa`, `pbx`…) are a `NOISE` list beside the
+  stopwords; the channel's own title is tokenised and excluded whatever share
+  it is on; and the server cuts the preview at the last space before the
+  limit, with the client dropping the tail of a truncated description as well,
+  so neither side depends on which version of the other is running.
+- After that the top of the list is `Oración 1089 · Dios 485 · mañana 420 ·
+  Tiempo 371 · Cristiana 350 · Rev 345 · Prédica 338 · Espíndola 306 · Pastor
+  300 · Hechos 240 · Crónicas 238 · … · Jesús 139 · amor 98 · familia 96`: a
+  mix of subjects, series and preachers' names, which is what a person filters
+  a channel by. `nuestra`, `pasando`, `soy`, `ejemplo` are still there — a
+  stopword list cannot chase every word a description tends to say, and the
+  list is ranked so the noise sits where it can be ignored.
+
+And one defect that only a second sync of the same channel could show: the
+screen fetched the detail on a channel *change* only, so a re-sync that brought
+new videos showed them in the bar's count and nowhere else. The fetch is keyed
+on `syncedAt` now, apart from the reset, so a re-sync refreshes the table and
+keeps every tick and parked probe.
+
 ## The Data API, and what the script it replaces got wrong
 
 `youtube.py` is stdlib `urllib` over the Data API v3. Why that and not the
@@ -108,8 +205,9 @@ Three things this does that `youtube_explorer.py` did not:
   playlist item the second is when the video entered the playlist.
 
 `Client.units` reports what a sync spent. The default allowance is 10,000 a
-day; a 2,000-video channel is about 81. It is the one resource here that runs
-out, and saying what a sync cost beats discovering it at the end of the day.
+day; a 2,000-video channel is about 81 on its first sync and one afterwards.
+It is the one resource here that runs out, and saying what a sync cost beats
+discovering it at the end of the day.
 
 Quota kinds are told apart by the reason in the body, not the status: a 403
 `quotaExceeded` is fixed by waiting until midnight Pacific and a 403 `forbidden`
@@ -367,6 +465,69 @@ spending its whole allowance for no text at $0.497373.
 synthesis compares sermons, so it needs evidence from several of them, and the
 measured curve puts the citation peak at 48 chunks. It is still a level name on
 the wire and never numbers.
+
+## A probe is reachable from the screen that started it, and from the queue
+
+Added 2026-09-16, after a person reported that a video requested from the
+Channel tab did not appear in the import queue. It was parked correctly — 11
+gates, seven days each, nothing spent — and **two separate things hid it**,
+both in the client, both of a class this repository already has written down.
+
+- **The import queue was filtered by the library picker, and a channel's runs
+  live in `lib_yt_<channelId>`, which that picker is never on**, because the
+  Channel tab does not use it. So the sidebar, which reads `/project-summary`
+  and is project-wide, showed the run going while the one screen whose job is
+  to show what is in flight had never asked about it. The queue spans every
+  library now and names each run's library on its row, with the library as an
+  *optional narrowing* rather than its scope. The narrowing is a request
+  parameter and not a filter over what arrived: `QUEUE_LIMIT` is 30, so
+  narrowing afterwards would show whichever of a library's runs the last 30 of
+  *every* library happened to include.
+- **The sidebar's "Abrir" went to the import tab and touched no selection**, so
+  the only affordance the product offered for looking at a parked run landed on
+  a list that could not hold it. It opens the screen that *owns* the run now: a
+  `lib_yt_*` run opens the Channel tab with that channel selected — its row,
+  its cost and its checkbox are there — and everything else opens the queue
+  with its library selected. A channel this installation never synced falls
+  back to the queue, which can show the run from its library id alone rather
+  than sending the Channel screen to a `channel_not_synced` 404.
+  `lib/runOpen.ts` is that decision, pure, for the reason `force.ts` is: what
+  needed asserting was the routing, and a rendered test can only say a button
+  exists — which was never the problem.
+- **And the Channel screen held its probes in `useState` and nothing else**, so
+  a relaunch, a plane switch or a second channel lost every gate it had opened.
+  Measured on the first real channel: **10 of the 11 parked probes were from a
+  previous session and invisible on the screen that started them**. It is the
+  same failure `ImportScreen` had with one run in `useState`, and it gets the
+  same fix — the catalog is the source of truth, so `parkedRuns` derives them
+  from `GET /runs` and joins each to its video by `document_id`, which both
+  payloads already carry. Nothing new crosses the wire for it.
+
+Three things about that recovery that are decisions rather than details:
+
+- **The session's probes and the recovered ones are kept apart.** The probe cap
+  is the *caption throttle* — consecutive downloads now — and a gate parked
+  yesterday downloaded its captions yesterday, so `probeBudget` counts only
+  this session. What the **quote** bounds is the transcript pass, so `read`
+  caps itself at `deep_limit` instead: the recovered probes can outnumber it,
+  and reading them all would spend past the figure somebody approved.
+- **A finished run is not re-attached.** It was approved, rejected or
+  cancelled, and hanging a dead gate on its row would offer a decision that has
+  already been made on a video that is either indexed or free to probe again.
+- **A run whose document this channel's catalogue does not list is dropped**
+  rather than guessed at — it is a video the last sync did not mention, and
+  inventing a row for it would put something on the table the channel does not
+  say it has.
+
+One gap left on purpose: a relaunch *during* a probe, before it has parked,
+does not recover it until the catalogue is fetched again — the derivation runs
+on the detail, not on a timer. Pressing Sondear again costs **$0**, because the
+worker short-circuits at `registering`, so it self-heals at no price.
+
+Nothing crossed the wire for any of this: `/runs` already accepted no library
+filter and already returned `library_id`, and Rust's `RunSummary` already
+declared it. The only thing dropping it was the `ActiveRun` interface, which is
+the `control.rs` `Answer` defect this repository records, one layer up.
 
 ## Export
 

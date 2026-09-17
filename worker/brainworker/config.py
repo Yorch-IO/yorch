@@ -154,6 +154,17 @@ class Paths:
         return self.root / "channels"
 
     @property
+    def buckets(self) -> pathlib.Path:
+        """A customer S3 bucket's catalogue: what it holds, not what is indexed.
+
+        `channels`' twin, and scoped by `for_tenant` for the same reason. The
+        file carries a role ARN — not a secret, but another organisation's
+        configuration — and the one thing the catalogue must never be is
+        readable across the `tenants/` boundary.
+        """
+        return self.root / "buckets"
+
+    @property
     def snapshots(self) -> pathlib.Path:
         return self.root / "snapshots"
 

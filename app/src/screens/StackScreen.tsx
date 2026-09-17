@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { AnswerStyles } from "./AnswerStyles";
+import { LocalTranscriber } from "./LocalTranscriber";
 
 import { useBackend } from "../lib/backend";
 import {
@@ -677,6 +678,11 @@ export function StackScreen() {
       ))}
 
       <AnswerStyles />
+
+      {/* Below the providers and above the ping: it is a capability of *this*
+          machine rather than a setting of the service, and the ping is the
+          screen's last word either way. */}
+      <LocalTranscriber />
 
       <h3>{t("ping.title")}</h3>
       <p>{t("ping.intro")}</p>

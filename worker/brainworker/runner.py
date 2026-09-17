@@ -12,11 +12,18 @@ from . import config
 from .activities import (
     activating, asking, chatting, exporting, ingest, paid, rebuild, removing,
 )
+from .activities import bucket as bucketacts
 from .activities import channel as channelacts
 from .activities import video as videoacts
 from .activities.health import probe_provider, probe_services
 from .workflows.activation import ActivationWorkflow
 from .workflows.ask import AskWorkflow
+from .workflows.bucket import (
+    AudioIngestWorkflow,
+    BucketSyncWorkflow,
+    MediaLinkWorkflow,
+    fetch_queue_for,
+)
 from .workflows.channel import (
     ChannelAskWorkflow,
     ChannelDiscoverWorkflow,
@@ -47,6 +54,9 @@ WORKFLOWS = [
     ChannelDiscoverWorkflow,
     ChannelTopicsWorkflow,
     ChannelAskWorkflow,
+    BucketSyncWorkflow,
+    AudioIngestWorkflow,
+    MediaLinkWorkflow,
 ]
 
 # Every activity the workflows reference must be registered here or the worker
@@ -112,7 +122,34 @@ ACTIVITIES = [
     channelacts.synthesise_channel,
     rebuild.load_rebuild_inputs,
     rebuild.replay_semantics,
+    bucketacts.sync_bucket,
+    bucketacts.estimate_audio,
+    bucketacts.probe_object,
+    bucketacts.stage_transcript,
+    bucketacts.check_archive,
+    bucketacts.archive_transcript,
+    bucketacts.set_document_dates,
+    bucketacts.presign_object,
 ]
+
+#: Served on `<task_queue>-audio-fetch` by a second worker in this process,
+#: with a small concurrency bound — see `FETCH_CONCURRENCY`.
+FETCH_ACTIVITIES = [
+    bucketacts.fetch_object,
+]
+
+#: How many bucket objects stream through this container at once.
+#:
+#: The main worker's default is a hundred concurrent activities, and a batch
+#: of a hundred and forty-seven approvals in one sweep would open a hundred
+#: streams into a 2 GiB container that is offered to the OOM killer first. A
+#: second `Worker` on its own queue is the same shape `fetch_queue` already
+#: has for YouTube, and a queue is exactly the right thing for the rest to
+#: wait in: Temporal holds them, the workflows stay parked in `fetching`, and
+#: nothing times out — the fetch is scheduled with no schedule-to-start
+#: timeout for precisely that reason. Four is a guess until the pilot
+#: measures it.
+FETCH_CONCURRENCY = 4
 
 
 async def connect(settings: config.Settings, attempts: int = 30) -> Client:
@@ -188,7 +225,13 @@ async def main() -> None:
         workflows=WORKFLOWS,
         activities=ACTIVITIES,
     )
-    await worker.run()
+    fetcher = Worker(
+        client,
+        task_queue=fetch_queue_for(settings.task_queue),
+        activities=FETCH_ACTIVITIES,
+        max_concurrent_activities=FETCH_CONCURRENCY,
+    )
+    await asyncio.gather(worker.run(), fetcher.run())
 
 
 def run() -> None:

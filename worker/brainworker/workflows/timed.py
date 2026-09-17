@@ -101,6 +101,10 @@ class TimedIngest:
         self._registered = False
         self._pending = []
 
+    async def _after_index(self, run_id: str, registered, options) -> None:
+        """A last step, while the run is still open. Nothing, by default."""
+        return None
+
     # -- from a transcript to an index --------------------------------------
 
     async def _index_transcript(
@@ -200,6 +204,17 @@ class TimedIngest:
                 start_to_close_timeout=WRITE_TIMEOUT,
                 retry_policy=_RETRY,
             )
+
+        # Anything a path wants to do with what it just indexed, while the run
+        # is still open. A bucket run writes the corrected transcript back to
+        # the customer here; a video has nowhere to write one.
+        #
+        # **Before `_finish`, and that is the point.** Called after it, the
+        # step's own `_enter` reopened a run the outcome had already closed —
+        # measured on eight real runs, which ended `state=running`,
+        # `stage=archiving` with `finished_at` already set, so every one of
+        # them read as still going for ever in the queue.
+        await self._after_index(run_id, registered, options)
 
         await self._enter(run_id, "done")
         await self._finish(run_id, "succeeded")

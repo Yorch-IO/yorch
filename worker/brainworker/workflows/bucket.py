@@ -139,6 +139,9 @@ class AudioIngestWorkflow(TimedIngest):
     def __init__(self) -> None:
         self._init_state()
         self._upload: LocalTranscript | None = None
+        #: Held for `_after_index`, which the shared tail calls with only what
+        #: every path has — this one also needs the bucket it came from.
+        self._request: AudioRequest | None = None
         self._switch: bool = False
         self._transcriber: str = ""
 
@@ -305,29 +308,36 @@ class AudioIngestWorkflow(TimedIngest):
         # follows — `_approval` always holds the latest answer.
         if self._approval is not None:
             options = self._approval.options
-        result = await self._index_transcript(
+        self._request = request
+        return await self._index_transcript(
             run_id, request.library_id, ingest_request, staged, registered,
             probe, transcribed, options,
         )
-        # The corrected transcript goes back to the customer, after the index
-        # exists and not before: it is written *from* what was indexed, so a
-        # run that failed at chunking has nothing honest to archive. Appended
-        # after `_index_transcript` rather than inside it because the shared
-        # tail serves videos too, and a video has no bucket to write to.
-        #
-        # Conditional on `correction_prefix`, which is empty by default, so a
-        # history in flight — a gate parked for seven days — decodes a payload
-        # that never carried the field as "off" and issues no command at all.
-        # That is what keeps this replay-safe without a `workflow.patched`.
-        if request.source.correction_prefix and options.correct:
-            await self._enter(run_id, "archiving", detail="corrección")
-            await workflow.execute_activity(
-                bkt.archive_correction,
-                args=[request, registered, run_id],
-                start_to_close_timeout=WRITE_TIMEOUT,
-                retry_policy=RetryPolicy(maximum_attempts=2),
-            )
-        return result
+
+    async def _after_index(self, run_id: str, registered, options) -> None:
+        """Write the corrected transcript back into the customer's bucket.
+
+        After the index exists and not before: it is written *from* what was
+        indexed, so a run that failed at chunking has nothing honest to
+        archive. And inside the shared tail's hook rather than after it,
+        because a step that runs past `_finish` reopens a closed run — eight
+        real runs ended `running`/`archiving` that way, terminal state lost.
+
+        Conditional on `correction_prefix`, which is empty by default, so a
+        history in flight — a gate parked for seven days — decodes a payload
+        that never carried the field as "off" and issues no command at all.
+        That is what keeps this replay-safe without a `workflow.patched`.
+        """
+        request = self._request
+        if request is None or not request.source.correction_prefix or not options.correct:
+            return
+        await self._enter(run_id, "archiving", detail="corrección")
+        await workflow.execute_activity(
+            bkt.archive_correction,
+            args=[request, registered, run_id],
+            start_to_close_timeout=WRITE_TIMEOUT,
+            retry_policy=RetryPolicy(maximum_attempts=2),
+        )
 
     async def _quote(
         self,

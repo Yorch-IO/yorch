@@ -12,6 +12,7 @@ could not happen is a line on the trail rather than a failed run.
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 
 import pytest
 from temporalio import activity
@@ -240,6 +241,14 @@ ARCHIVED_ENGINES: list[str] = []
 STAGED_UPLOADS: list[LocalTranscript] = []
 
 
+@activity.defn(name="archive_correction")
+async def archive_correction(req: AudioRequest, registered: Registered, run_id: str) -> bool:
+    CALLED.append("archive_correction")
+    assert req.source.correction_prefix, "it must not be called with the switch off"
+    assert registered.version_id == "ver_a"
+    return True
+
+
 @activity.defn(name="archive_transcript")
 async def archive_transcript(req: AudioRequest, p: VideoProbe, audio: AudioStaged,
                              job: TranscriptionJob, result: ArtifactRef, run_id: str,
@@ -297,8 +306,29 @@ async def activate_version(req: IngestRequest, staged: Staged, registered: Regis
 
 
 @activity.defn(name="correct_text")
-async def correct_text(run_id: str, extraction) -> None:
-    raise AssertionError("correction is off by default for Transcribe output")
+async def correct_text(run_id: str, extraction):
+    """Off by default for a machine transcript, and reachable when asked for.
+
+    It used to refuse outright, which was right while the workflow *forced*
+    correction off — and wrong from the moment the switch started travelling
+    with the quote, because then "the caller asked for it" is a real case and
+    the only one that reaches the archive.
+    """
+    CALLED.append("correct_text")
+    from brainworker.pipeline import Correction, Spend
+    return Correction(
+        # An `ArtifactRef`, not a string: the corrected stream is bulk data and
+        # never travels in a payload. A double that returned prose here failed
+        # the *workflow task*, which Temporal retries for ever — the suite hung
+        # rather than failing, which is the recorded shape of this mistake.
+        text=ArtifactRef(kind="corrected_text", path="runs/r/corrected.txt",
+                         sha256="6" * 64, bytes=120),
+        report=ArtifactRef(kind="correction_report", path="runs/r/correction-report.json",
+                           sha256="5" * 64, bytes=40),
+        paragraphs=1, changed=1, rejected=0, missing=0, cache_hits=0,
+        spend=Spend(stage="correction", model="gemini", input_tokens=10,
+                    output_tokens=10, usd=0.01),
+    )
 
 
 @activity.defn(name="extract_semantics")
@@ -312,7 +342,8 @@ def activities(*, already_indexed=False):
         probe_object, register(already_indexed), link_duplicate, set_document_dates,
         record_video_artifacts, estimate_video, check_archive, start_transcription,
         poll_transcription, collect_transcript, abandon_transcription,
-        archive_transcript, stage_transcript, group_transcript, chunk_transcript,
+        archive_transcript,
+        archive_correction, stage_transcript, group_transcript, chunk_transcript,
         project_structure, embed_and_index, activate_version, correct_text,
         extract_semantics,
     ]
@@ -366,6 +397,36 @@ async def _start(env, req: AudioRequest, opts: StageOptions | None = None):
 
 
 # -- the gate ----------------------------------------------------------------
+
+
+async def test_the_correction_is_archived_before_the_run_is_closed(env):
+    """A step that runs past `_finish` reopens a run the outcome already
+    closed.
+
+    Measured on eight real runs in production: the archive was appended after
+    `_index_transcript`, its own `_enter` wrote `stage = archiving` and
+    `state = running` over a row that already had `finished_at`, and every one
+    of them read as still going for ever in the queue. The trail is ordered, so
+    the test is about *order*: the write-back has to appear before the terminal
+    row, not after it.
+    """
+    main, fetcher = _workers(env, activities())
+    async with main, fetcher:
+        handle = await _start(
+            env, request(source=source(correction_prefix="correcciones/")),
+            StageOptions(extract_semantics=False, correct=True),
+        )
+        await _wait_for_gate(handle)
+        await handle.signal(
+            AudioIngestWorkflow.approve,
+            Approval(approved=True, options=StageOptions(extract_semantics=False, correct=True)),
+        )
+        result = await handle.result()
+    assert result.state == "indexed"
+    assert "archive_correction" in CALLED
+    # The order on the trail is the property: archived, then closed.
+    assert CALLED.index("archive_correction") < CALLED.index("outcome:succeeded"), CALLED
+
 
 
 async def test_correction_asked_for_before_quoting_is_priced_at_the_gate(env):

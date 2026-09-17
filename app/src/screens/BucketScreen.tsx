@@ -71,6 +71,7 @@ const EMPTY_SOURCE: BucketSource = {
   role_arn: "",
   region: "",
   archive_prefix: "transcripciones/",
+  correction_prefix: "",
   manifest_key: "",
   manifest_map: {},
   language: "es-US",
@@ -854,6 +855,16 @@ export function RegisterForm({
         />
       </label>
       <p className="caveat">{t("bucket.libraryIdCaveat")}</p>
+      <label className="field">
+        <span>{t("bucket.correctionPrefix")}</span>
+        <input
+          type="text"
+          value={source.correction_prefix}
+          placeholder="correcciones/"
+          onChange={(e) => set({ correction_prefix: e.target.value })}
+        />
+      </label>
+      <p className="caveat">{t("bucket.correctionCaveat")}</p>
       <label className="field">
         <span>{t("bucket.language")}</span>
         <select value={source.language} onChange={(e) => set({ language: e.target.value })}>

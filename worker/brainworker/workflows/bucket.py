@@ -305,10 +305,29 @@ class AudioIngestWorkflow(TimedIngest):
         # follows — `_approval` always holds the latest answer.
         if self._approval is not None:
             options = self._approval.options
-        return await self._index_transcript(
+        result = await self._index_transcript(
             run_id, request.library_id, ingest_request, staged, registered,
             probe, transcribed, options,
         )
+        # The corrected transcript goes back to the customer, after the index
+        # exists and not before: it is written *from* what was indexed, so a
+        # run that failed at chunking has nothing honest to archive. Appended
+        # after `_index_transcript` rather than inside it because the shared
+        # tail serves videos too, and a video has no bucket to write to.
+        #
+        # Conditional on `correction_prefix`, which is empty by default, so a
+        # history in flight — a gate parked for seven days — decodes a payload
+        # that never carried the field as "off" and issues no command at all.
+        # That is what keeps this replay-safe without a `workflow.patched`.
+        if request.source.correction_prefix and options.correct:
+            await self._enter(run_id, "archiving", detail="corrección")
+            await workflow.execute_activity(
+                bkt.archive_correction,
+                args=[request, registered, run_id],
+                start_to_close_timeout=WRITE_TIMEOUT,
+                retry_policy=RetryPolicy(maximum_attempts=2),
+            )
+        return result
 
     async def _quote(
         self,

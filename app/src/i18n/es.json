@@ -1095,7 +1095,9 @@
     "libraryIdPlaceholder": "vacío: biblioteca propia",
     "libraryIdCaveat": "Si lo dejas vacío, estas grabaciones forman su propia biblioteca, con el nombre del bucket. Si nombras una que ya existe, se suman a ella: un solo grafo y unas mismas respuestas junto con lo que haya en ese estante, y después no habrá forma de preguntar solo a las grabaciones, porque la biblioteca es la unidad de filtrado.",
     "stageCorrect": "Corregir la transcripción (de pago)",
-    "stageCorrectCaveat": "La corrección es la etapa más cara del pipeline y su valor sobre una transcripción automática está sin medir: el motor ya puntúa. Rinde más en cintas viejas y ruidosas. Se cotiza junto con el resto, así que lo que muestra la puerta es lo que gasta la ejecución; y `verify` rechaza una corrección que pierda un nombre propio, una cifra o una referencia bíblica, de modo que un nombre mal oído suele conservarse en vez de repararse."
+    "stageCorrectCaveat": "La corrección es la etapa más cara del pipeline y su valor sobre una transcripción automática está sin medir: el motor ya puntúa. Rinde más en cintas viejas y ruidosas. Se cotiza junto con el resto, así que lo que muestra la puerta es lo que gasta la ejecución; y `verify` rechaza una corrección que pierda un nombre propio, una cifra o una referencia bíblica, de modo que un nombre mal oído suele conservarse en vez de repararse.",
+    "correctionPrefix": "Dónde se escriben las transcripciones corregidas",
+    "correctionCaveat": "Vacío lo apaga, que es lo predeterminado. Campo aparte del anterior porque son cosas distintas: la transcripción cruda es lo que oyó el motor, y la corrección es salida de un modelo que solo se conserva porque un verificador juzgó que no perdía un nombre propio, una cifra ni una referencia bíblica. Cada versión se escribe con su propio nombre, así que reindexar añade al lado y no encima."
   },
   "whisper": {
     "title": "Transcribir en esta máquina",

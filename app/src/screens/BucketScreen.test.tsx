@@ -69,7 +69,8 @@ const button = (c: HTMLElement, key: string, o?: Record<string, unknown>) =>
 
 const SOURCE = {
   bucket: "tenant-bucket", prefix: "audios/", role_arn: "arn:aws:iam::123456789012:role/reader",
-  region: "", archive_prefix: "transcripciones/", manifest_key: "metadatos/m.csv",
+  region: "", archive_prefix: "transcripciones/", correction_prefix: "",
+  manifest_key: "metadatos/m.csv",
   manifest_map: { file: "archivo", title: "titulo" }, language: "es-US",
 };
 

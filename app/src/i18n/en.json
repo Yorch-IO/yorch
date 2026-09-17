@@ -1095,7 +1095,9 @@
     "libraryIdPlaceholder": "empty: a library of its own",
     "libraryIdCaveat": "Leave it empty and these recordings become their own library, named after the bucket. Name a library that already exists and they join it: one graph and one set of answers with whatever is on that shelf — and no way to ask the recordings on their own afterwards, because a library is the unit of narrowing.",
     "stageCorrect": "Correct the transcript (paid)",
-    "stageCorrectCaveat": "Correction is the most expensive stage in the pipeline and its value on a machine transcript is unmeasured — the engine already punctuates. It is worth most on old, noisy tape. It is priced with the quote, so what the gate shows is what the run spends; and `verify` refuses a correction that drops a proper noun, a figure or a scripture reference, so a mis-heard name is usually kept rather than repaired."
+    "stageCorrectCaveat": "Correction is the most expensive stage in the pipeline and its value on a machine transcript is unmeasured — the engine already punctuates. It is worth most on old, noisy tape. It is priced with the quote, so what the gate shows is what the run spends; and `verify` refuses a correction that drops a proper noun, a figure or a scripture reference, so a mis-heard name is usually kept rather than repaired.",
+    "correctionPrefix": "Where corrected transcripts are written back",
+    "correctionCaveat": "Empty switches it off, which is the default. Its own field rather than the one above because the two are different things: the raw transcript is what the engine heard, and a correction is model output kept only because a verifier judged it did not drop a proper noun, a figure or a scripture reference. Each version is written under its own name, so re-indexing adds beside rather than over."
   },
   "whisper": {
     "title": "Transcribe on this machine",

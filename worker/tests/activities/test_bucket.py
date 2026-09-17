@@ -417,3 +417,157 @@ def test_presign_carries_the_offset_as_a_fragment(workspace, s3):
         asyncio.run(bkt.presign_object(MediaLinkRequest(
             source=source(), key="audios/none.mp3", tenant_id=TNT)))
     assert e.value.type == "object_not_found"
+
+
+# --- writing the correction back ---------------------------------------------
+
+
+def test_the_correction_is_named_by_version_and_the_raw_transcript_is_not():
+    """Two different facts, named two different ways.
+
+    A raw transcript is a fact about the audio: the same bytes give the same
+    transcript, which is why its key carries no version and why a re-import can
+    reuse it. A correction depends on the model, the prompt version and what
+    `verify` refused, so two runs over one recording can legitimately differ —
+    and overwriting would throw the comparison away.
+    """
+    from brainworker.activities.bucket import archive_keys, correction_keys
+
+    source = BucketSource(bucket="b", prefix="audios/",
+                          archive_prefix="transcripciones/",
+                          correction_prefix="correcciones/")
+    raw, meta = archive_keys(source, "audios/1994/sermon.mp3")
+    assert raw == "transcripciones/1994/sermon.mp3.transcribe.json"
+    assert meta == "transcripciones/1994/sermon.mp3.meta.json"
+
+    timed, text, report = correction_keys(source, "audios/1994/sermon.mp3", "ver_a1")
+    assert timed == "correcciones/1994/sermon.mp3.corregido.ver_a1.json"
+    assert text == "correcciones/1994/sermon.mp3.corregido.ver_a1.txt"
+    assert report == "correcciones/1994/sermon.mp3.correccion.ver_a1.json"
+    # A second version lands beside the first rather than over it.
+    again, _, _ = correction_keys(source, "audios/1994/sermon.mp3", "ver_b2")
+    assert again != timed
+
+
+def test_the_archived_correction_carries_the_times_the_flat_text_has_not():
+    """`corrected.txt` is one stream of prose with no times in it.
+
+    The times live in `chunks.jsonl`, which is also the unit a citation points
+    at — so the archived paragraphs are composed from the chunks rather than
+    copied from the text. Without this the customer's bucket would hold a wall
+    of words nobody can take back to the recording, which is the one thing an
+    audio archive is for.
+    """
+    from brainworker.activities.bucket import timed_paragraphs
+
+    rows = [
+        {"index": 0, "start_s": 6.82, "end_s": 86.24, "char_from": 0,
+         "char_to": 1071, "text": " volver a decir lo que el domingo se dijo ",
+         "overlap": "NO DEBE SALIR", "embed_text": "TAMPOCO"},
+        {"index": 1, "start_s": 86.24, "end_s": 120.0, "char_from": 1071,
+         "char_to": 1500, "text": ""},
+    ]
+    out = timed_paragraphs(rows)
+    assert len(out) == 1, "a chunk with no text is not a paragraph"
+    assert out[0]["start_s"] == 6.82 and out[0]["end_s"] == 86.24
+    assert out[0]["text"] == "volver a decir lo que el domingo se dijo"
+    # The two fields that must never reach a reader: the previous chunk's tail,
+    # and the breadcrumb-prefixed string that exists only to be embedded.
+    assert "overlap" not in out[0] and "embed_text" not in out[0]
+
+
+def test_nothing_is_written_when_the_customer_asked_for_no_corrections(monkeypatch):
+    """`correction_prefix` empty is a refusal, and it is the default.
+
+    The raw transcript and the correction have separate switches because they
+    are different kinds of thing — one is what a machine heard, the other is
+    model output a verifier judged — and a customer can want the first in their
+    bucket and not the second.
+    """
+    from brainworker.activities.bucket import archive_correction
+
+    from brainworker.pipeline import Registered
+
+    fake = FakeS3({})
+    monkeypatch.setattr(s3source, "s3_client", lambda *a, **k: fake)
+    source = BucketSource(bucket="b", prefix="audios/")
+    assert source.correction_prefix == ""
+    request = AudioRequest(library_id="lib", source=source, key="audios/a.mp3",
+                           tenant_id="tnt_x")
+    registered = Registered(document_id="doc_a", version_id="ver_a", created=True,
+                            already_indexed=False)
+    wrote = asyncio.run(archive_correction(request, registered, "audio-1"))
+    assert wrote is False
+    assert fake.puts == [], "an empty prefix must not reach the bucket at all"
+
+
+def test_the_correction_reaches_the_bucket_with_its_times_and_its_report(
+    tmp_path, monkeypatch
+):
+    """The *writing* path, end to end against a fake bucket and a real store.
+
+    Its own test because the refusal above returns before a single artifact is
+    read, so it exercises none of this — which is how a store built without a
+    run id passed a green suite and would have failed on the first real
+    recording.
+    """
+    from brainworker.activities.bucket import archive_correction
+    from brainworker.pipeline import Registered
+
+    run_id = "audio-777"
+    store = ArtifactStore(tmp_path, run_id)
+    text = store.write_text("corrected_text", "Primer párrafo.\n\nSegundo párrafo.")
+    chunks = store.write_jsonl("chunks", [
+        {"index": 0, "start_s": 1.5, "end_s": 9.0, "char_from": 0, "char_to": 16,
+         "text": "Primer párrafo.", "overlap": "NO SALE"},
+        {"index": 1, "start_s": 9.0, "end_s": 20.0, "char_from": 17, "char_to": 34,
+         "text": "Segundo párrafo."},
+    ])
+    report = store.write_json("correction_report",
+                              {"paragraphs": 2, "rejected": [{"reason": "proper_noun"}]})
+
+    class FakeCatalog:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def artifacts(self, rid):
+            assert rid == run_id
+            return [
+                {"name": "corrected_text", "rel_path": text.path,
+                 "sha256": text.sha256, "size_bytes": text.bytes},
+                {"name": "chunks", "rel_path": chunks.path,
+                 "sha256": chunks.sha256, "size_bytes": chunks.bytes},
+                {"name": "correction_report", "rel_path": report.path,
+                 "sha256": report.sha256, "size_bytes": report.bytes},
+            ]
+
+    monkeypatch.setattr(bkt, "Catalog", FakeCatalog)
+    monkeypatch.setattr(bkt, "_settings", lambda: type(
+        "S", (), {"workspace": tmp_path, "database_url": "postgresql:///x"})())
+    fake = FakeS3({})
+    # The real arity, deliberately: a double that takes `*args` accepted the
+    # call that forgot the assumed-role session, and the first real recording
+    # is where that would have surfaced.
+    monkeypatch.setattr(s3source, "s3_client", lambda session, source: fake)
+    monkeypatch.setattr(s3source, "customer_session", lambda source, external_id: object())
+
+    source = BucketSource(bucket="b", prefix="audios/", correction_prefix="correcciones/")
+    request = AudioRequest(library_id="lib", source=source,
+                           key="audios/1994/sermon.mp3", tenant_id="tnt_x")
+    registered = Registered(document_id="doc_a", version_id="ver_a1",
+                            created=True, already_indexed=False)
+    assert asyncio.run(archive_correction(request, registered, run_id)) is True
+
+    assert fake.puts == [
+        "correcciones/1994/sermon.mp3.corregido.ver_a1.json",
+        "correcciones/1994/sermon.mp3.corregido.ver_a1.txt",
+        "correcciones/1994/sermon.mp3.correccion.ver_a1.json",
+    ]
+    timed = json.loads(fake.objects[fake.puts[0]])
+    assert timed["version_id"] == "ver_a1" and timed["run_id"] == run_id
+    assert [p["start_s"] for p in timed["paragraphs_timed"]] == [1.5, 9.0]
+    # The previous chunk's tail must never reach a reader.
+    assert "NO SALE" not in fake.objects[fake.puts[0]].decode()
+    assert fake.objects[fake.puts[1]].decode().startswith("Primer párrafo.")
+    told = json.loads(fake.objects[fake.puts[2]])
+    assert told["report"]["rejected"][0]["reason"] == "proper_noun"

@@ -1784,6 +1784,11 @@ export interface BucketSource {
   /** Where the raw transcript is written back into the customer's bucket.
    *  Empty switches the write-back off. */
   archive_prefix: string;
+  /** Where the *corrected* transcript is written back. Empty is off, and off
+   *  is the default: the raw transcript is what a machine heard, a correction
+   *  is model output a verifier judged, and a customer can want one and not
+   *  the other. */
+  correction_prefix: string;
   manifest_key: string;
   /** Which manifest column means what: `file`, `title`, `author`, `recorded`,
    *  `published`, `source`, `url` → column name, or for `file` a template

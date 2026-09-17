@@ -1027,6 +1027,16 @@ class BucketSource:
     #: follows. Kept so a caller who knows can save the round trip.
     region: str = ""
     archive_prefix: str = "transcripciones/"
+    #: Where the *corrected* transcript is written back, if anywhere. Empty
+    #: switches it off, and it is off by default.
+    #:
+    #: A switch of its own rather than `archive_prefix`'s, because the two are
+    #: different kinds of thing. The raw transcript is what a machine heard;
+    #: the correction is output from a *model*, kept only because a verifier
+    #: judged it did not drop a proper noun, a figure or a scripture
+    #: reference. A customer can reasonably want the first in their bucket and
+    #: not the second, and one switch could not say so.
+    correction_prefix: str = ""
     #: The manifest's key inside the bucket, and which of its columns mean
     #: what. Both optional; a bucket with no manifest is catalogued from its
     #: keys alone. Recognised mapping names: ``file``, ``title``, ``author``,

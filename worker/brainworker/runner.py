@@ -128,6 +128,7 @@ ACTIVITIES = [
     bucketacts.stage_transcript,
     bucketacts.check_archive,
     bucketacts.archive_transcript,
+    bucketacts.archive_correction,
     bucketacts.set_document_dates,
     bucketacts.presign_object,
 ]

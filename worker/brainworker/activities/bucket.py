@@ -417,6 +417,133 @@ def archive_keys(source, key: str) -> tuple[str, str]:
     return f"{base}.transcribe.json", f"{base}.meta.json"
 
 
+def correction_keys(source, key: str, version_id: str) -> tuple[str, str, str]:
+    """Where a version's corrected transcript lives in the customer's bucket.
+
+    **The version is in the name, and that is the decision.** A raw transcript
+    is a fact about the audio — the same bytes give the same transcript, which
+    is why `archive_keys` needs no version and why a re-import can reuse what
+    is there. A *correction* is not: it depends on the model, on the prompt
+    version and on what `verify` refused that day, so two runs over one
+    recording can legitimately differ. Overwriting would throw away the
+    comparison; naming them apart keeps both, and each sidecar says which run
+    and which version produced it.
+    """
+    rel = s3source.relative_key(key, source.prefix)
+    base = f"{s3source.normalise_prefix(source.correction_prefix)}{rel}"
+    return (
+        f"{base}.corregido.{version_id}.json",
+        f"{base}.corregido.{version_id}.txt",
+        f"{base}.correccion.{version_id}.json",
+    )
+
+
+def timed_paragraphs(chunks: list[dict]) -> list[dict]:
+    """The corrected text as paragraphs that know when they were said.
+
+    Composed rather than copied: `corrected.txt` is one stream of prose with no
+    times in it, and the times live in `chunks.jsonl` — which is the *indexed*
+    unit, so this is also exactly what a citation points at. Without it the
+    archive would hold a wall of text nobody can take back to the recording,
+    which is the one thing an audio corpus is for.
+    """
+    out = []
+    for row in chunks:
+        text = (row.get("text") or "").strip()
+        if not text:
+            continue
+        out.append({
+            "index": row.get("index"),
+            "start_s": row.get("start_s"),
+            "end_s": row.get("end_s"),
+            "char_from": row.get("char_from"),
+            "char_to": row.get("char_to"),
+            "text": text,
+        })
+    return out
+
+
+@activity.defn(name="archive_correction")
+async def archive_correction(
+    request: AudioRequest, registered: Registered, run_id: str
+) -> bool:
+    """Write the corrected transcript back into the customer's bucket.
+
+    Best-effort, exactly like `archive_transcript`: the index is already built
+    and paid for, so a bucket that refuses a write is a line on the trail and
+    never a failed run.
+
+    The three files are read back through the *catalog's* record of what this
+    run wrote, and `read_bytes` verifies each digest — the same rule the EPUB
+    download follows. A file that no longer hashes to what the run recorded is
+    not the thing being described, and shipping it to a customer's bucket
+    under that name would be worse than shipping nothing.
+    """
+    settings = _settings()
+    source = request.source
+    if not source.correction_prefix:
+        return False
+    store = ArtifactStore(settings.workspace, run_id)
+    wanted = {"corrected_text", "chunks", "correction_report"}
+    refs: dict[str, ArtifactRef] = {}
+    try:
+        with Catalog(settings.database_url, pooled=False, timeout=RECORD_TIMEOUT) as catalog:
+            for row in catalog.artifacts(run_id):
+                if row["name"] in wanted:
+                    refs[row["name"]] = ArtifactRef(
+                        kind=row["name"], path=row["rel_path"],
+                        sha256=row["sha256"], bytes=row["size_bytes"],
+                    )
+    except Exception as e:  # noqa: BLE001 - bookkeeping must not fail a stage
+        activity.logger.warning("could not read this run's artifacts: %s", e)
+        return False
+    if "corrected_text" not in refs or "chunks" not in refs:
+        # Correction was off, or this run never chunked. Nothing to archive,
+        # and that is not a failure.
+        return False
+
+    try:
+        corrected = store.read_text(refs["corrected_text"])
+        chunks = store.read_jsonl(refs["chunks"])
+        report = store.read_json(refs["correction_report"]) if "correction_report" in refs else {}
+    except Exception as e:  # noqa: BLE001
+        activity.logger.warning("could not read the corrected text: %s", e)
+        return False
+
+    timed = timed_paragraphs(chunks)
+    provenance = {
+        "schema": 1,
+        "bucket": source.bucket,
+        "key": request.key,
+        "document_id": registered.document_id,
+        "version_id": registered.version_id,
+        "run_id": run_id,
+        "corrected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "paragraphs": len(timed),
+        "characters": len(corrected),
+    }
+    timed_key, text_key, report_key = correction_keys(
+        source, request.key, registered.version_id
+    )
+    body = json.dumps({**provenance, "paragraphs_timed": timed},
+                      ensure_ascii=False, indent=1).encode("utf-8")
+    # The report carries the provenance too, so a reader who opens only the
+    # file about *rejections* still knows which run and model to blame.
+    report_body = json.dumps({**provenance, "report": report},
+                             ensure_ascii=False, indent=1).encode("utf-8")
+    try:
+        session = s3source.customer_session(source, request.tenant_id)
+        s3 = s3source.s3_client(session, source)
+        s3source.put_bytes(s3, source.bucket, timed_key, body, "application/json")
+        s3source.put_bytes(s3, source.bucket, text_key, corrected.encode("utf-8"),
+                           "text/plain; charset=utf-8")
+        s3source.put_bytes(s3, source.bucket, report_key, report_body, "application/json")
+    except BucketAccessError as e:
+        activity.logger.warning("could not write the correction back: %s", e)
+        return False
+    return True
+
+
 @activity.defn(name="check_archive")
 async def check_archive(
     request: AudioRequest, probe: VideoProbe, run_id: str

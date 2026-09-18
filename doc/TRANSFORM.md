@@ -243,10 +243,21 @@ original reference is a string `reading.references_of` found in the source's own
 bytes. `epub.py`'s decision applied to the one part of a generated work a reader
 is most entitled to trust.
 
-**Two lists, never merged.** A work the source cited (which this work has never
-read) and a work this work actually quoted are different things, and an
-alphabetical merge would put them under one heading with nothing saying which is
-which. `synthesis.py`'s split applied to provenance.
+**Three lists, never merged, and the first is the work this is a recasting of.**
+That one was missing until somebody read a finished essay and noticed it named
+every source except the one it was made from. The document is not "consulted"
+and it is not a reference the original carries — it is the substance — so it
+gets its own heading, first, in every genre including the ones whose bodies
+carry no citation marks. A reader who cannot tell what a recasting recasts has
+been handed an orphan. Its title and author come from the catalog, which is what
+a person edits and what `fill_document_metadata` may have corrected: the same
+standard every library entry is held to, a row and never a guess.
+
+The other two stay apart for the reason they always did. A work the source cited
+(which this work has never read) and a work this work actually quoted are
+different things, and an alphabetical merge would put them under one heading
+with nothing saying which is which. `synthesis.py`'s split applied to
+provenance.
 
 **An empty list renders its heading and a sentence.** An absent section and
 "there were none" are different facts — `/project-summary`'s `available` rule in

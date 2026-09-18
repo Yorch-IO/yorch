@@ -60,6 +60,8 @@ def assemble(
     language: str,
     work_title: str,
     references: list[str],
+    source_title: str = "",
+    source_author: str = "",
 ) -> str:
     """The finished work, as Markdown, bibliography included.
 
@@ -95,6 +97,8 @@ def assemble(
             language=language,
             references=references,
             sources=cited,
+            source_title=source_title,
+            source_author=source_author,
         )
     )
     return "\n".join(out).strip() + "\n"

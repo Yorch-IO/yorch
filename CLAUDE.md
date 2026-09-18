@@ -143,7 +143,7 @@ uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # stack up: 1613 passed
+cd worker && uv sync && uv run pytest -q           # stack up: 1627 passed
 # Measured 2026-09-18 with the stack **up** and BRAIN_MEMGRAPH_URL pointed at
 # the port `docker` publishes (below). Without that variable 92 graph and
 # retrieval tests skip against the default 7788 — measured again the same day:

@@ -601,6 +601,11 @@ async def bind_document(
             language=source.language,
             work_title=plan.title or source.title,
             references=references,
+            # The work this is a recasting *of*, named from the catalog. It is
+            # not one source among others and it is not "consulted" — it is the
+            # substance — so the bibliography gives it its own heading, first.
+            source_title=source.title,
+            source_author=source.author,
         )
         return _record(
             run_id, "transform", store.write_bytes("transform", text.encode("utf-8"))

@@ -148,3 +148,58 @@ def test_first_appearance_order_is_kept():
     """The order the work cited them in, which is the order a reader met them."""
     rows = bibliography.group(list(reversed(SOURCES)))
     assert [title for title, _, _ in rows] == ["Otro Libro", "Teología Integral"]
+
+
+@pytest.mark.parametrize("name", GENRE_NAMES)
+def test_every_genre_names_the_work_it_is_a_recasting_of(name: str):
+    """Reported after reading a finished essay: it named every source except the
+    one it was made from.
+
+    The document is not "consulted" and it is not a reference the original
+    carries — it is the substance. A reader who cannot tell what a recasting
+    recasts has been handed an orphan, so it gets its own heading, first, in
+    every genre including the ones whose bodies carry no citation marks.
+    """
+    text = bibliography.render(
+        style=GENRES[name].bibliography,
+        language="es",
+        references=["Smith, J. Una obra. 1999."],
+        sources=SOURCES,
+        source_title="4.-Doctrina-de-la-Regeneración",
+        source_author="Darío Silva-Silva",
+    )
+    source_at = text.index("Obra de origen")
+    original_at = text.index("Referencias de la obra original")
+    library_at = text.index("Obras de esta biblioteca consultadas")
+    assert source_at < original_at < library_at
+    assert "4.-Doctrina-de-la-Regeneración — Darío Silva-Silva" in text
+
+
+def test_a_source_with_no_author_is_named_without_one():
+    text = bibliography.render(
+        style=GENRES["essay"].bibliography, language="es", references=[],
+        sources=[], source_title="Un Documento", source_author="",
+    )
+    assert "- Un Documento\n" in text
+    assert "—" not in text.split("Referencias de la obra original")[0].split("###")[1]
+
+
+def test_a_source_the_catalog_could_not_name_says_so_rather_than_inventing():
+    """The heading stays and the sentence says what happened, which is the
+    `/project-summary` `available` rule: an absent section and "there was none"
+    are different facts."""
+    text = bibliography.render(
+        style=GENRES["essay"].bibliography, language="es", references=[],
+        sources=[], source_title="", source_author="",
+    )
+    assert "Obra de origen" in text
+    assert "No consta de qué obra procede este texto." in text
+
+
+def test_the_source_is_named_in_english_too():
+    text = bibliography.render(
+        style=GENRES["study"].bibliography, language="en", references=[],
+        sources=[], source_title="A Document", source_author="R. Writer",
+    )
+    assert "The work this is a recasting of" in text
+    assert "A Document — R. Writer" in text

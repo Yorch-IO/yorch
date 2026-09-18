@@ -9,12 +9,20 @@ that survived `answer._verify`; every original reference is a string
 them. It is `epub.py`'s decision — a pure renderer, stdlib only — applied to the
 one part of a generated work that a reader is most entitled to trust.
 
-**Two lists, never merged.** A work the source cited (which this work has never
-read) and a work this work actually quoted are different things, and an
-alphabetical merge would put them under one heading with nothing saying which is
-which. That is `synthesis.py`'s split applied to provenance: *"Merging the two
-into a single prose answer would put the one text a reader must treat
-sceptically in the same paragraph as the one they may rely on."*
+**Three lists, never merged**, and the first of them is the work this is a
+recasting *of*. It was missing until somebody read a finished essay and noticed
+it named every source except the one it was made from — the document is not
+"consulted", it is the substance, so it is neither a reference the original
+carries nor a library work quoted alongside. A reader who cannot tell what a
+recasting recasts has been handed an orphan.
+
+The other two stay apart for the reason they always did: a work the source cited
+(which this work has never read) and a work this work actually quoted are
+different things, and an alphabetical merge would put them under one heading
+with nothing saying which is which. That is `synthesis.py`'s split applied to
+provenance: *"Merging the two into a single prose answer would put the one text
+a reader must treat sceptically in the same paragraph as the one they may rely
+on."*
 
 **An empty list renders its heading and a sentence.** An absent section and
 "there were none" are different facts, which is `/project-summary`'s `available`
@@ -34,6 +42,8 @@ from .types import CitedSource
 #: would not be.
 _WORDS: dict[str, dict[str, str]] = {
     "es": {
+        "source": "Obra de origen",
+        "no_source": "No consta de qué obra procede este texto.",
         "original": "Referencias de la obra original",
         "library": "Obras de esta biblioteca consultadas",
         "no_original": "La obra original no recoge referencias.",
@@ -41,6 +51,8 @@ _WORDS: dict[str, dict[str, str]] = {
         "cited_for": "sobre",
     },
     "en": {
+        "source": "The work this is a recasting of",
+        "no_source": "The work this was made from is not recorded.",
         "original": "References in the original work",
         "library": "Works from this library consulted",
         "no_original": "The original work carries no references.",
@@ -76,12 +88,29 @@ def chapter_title(style: BibliographyStyle, language: str) -> str:
     return _CHAPTER.get((style.tone, lang), _CHAPTER[("scholarly", lang)])
 
 
+def source_entry(title: str, author: str, language: str) -> str:
+    """The original work, named from the catalog and from nothing else.
+
+    Title and author come from `document`, which is what a person edits and what
+    `fill_document_metadata` may have corrected — so this is the same standard
+    every library entry is held to: a catalog row, never a model's guess. A
+    document with neither is named as untitled rather than invented, the rule
+    `bookmeta._clean` applies when it refuses to print "desconocido" on a cover.
+    """
+    lang = language_of(language)
+    name = " ".join(str(title or "").split()).strip() or UNTITLED[lang]
+    who = " ".join(str(author or "").split()).strip()
+    return f"{name} — {who}" if who else name
+
+
 def render(
     *,
     style: BibliographyStyle,
     language: str,
     references: list[str],
     sources: list[CitedSource],
+    source_title: str = "",
+    source_author: str = "",
 ) -> str:
     """The closing chapter, as Markdown, headings included.
 
@@ -93,6 +122,17 @@ def render(
     lang = language_of(language)
     words = _WORDS[lang]
     out: list[str] = [f"## {chapter_title(style, language)}", ""]
+
+    # First, and on its own, because it is not one source among others: it is
+    # the one the whole work is made of.
+    out.append(f"### {words['source']}")
+    out.append("")
+    if str(source_title or "").strip() or str(source_author or "").strip():
+        out.extend(_entries([source_entry(source_title, source_author, language)],
+                            style.numbered))
+    else:
+        out.append(words["no_source"])
+    out.append("")
 
     out.append(f"### {words['original']}")
     out.append("")

@@ -144,6 +144,43 @@ def test_chapters_from_survives_rubbish():
     assert outline.chapters_from({}, 10) == []
 
 
+def test_the_fallback_never_leaves_a_chapter_blank():
+    """The defect the first production run showed, at the moment it mattered.
+
+    The source was a sermon transcript; `chapters_of` gave it one chapter with
+    `title=""`, which is the honest reading of a document whose headings were
+    never detected and the state 27 of this corpus's 52 documents are in. The
+    fallback returned three chapters called `""`, so the **second gate** — whose
+    entire job is to show the outline before anybody pays — displayed three
+    blank bullets. The work itself read fine, because each chapter is titled as
+    it is *written*, which is after the decision.
+    """
+    passages = reading.passages_of(
+        [{"index": i, "kind": "cuerpo", "chapter": "", "text": "x" * 900}
+         for i in range(90)]
+    )
+    chapters = reading.chapters_of(passages)
+    assert [c.title for c in chapters] == [""], "the source really names nothing"
+
+    for language, word in (("es", "Parte"), ("en", "Part")):
+        plan = outline.fallback(chapters, passages, max_chapters=10,
+                                language=language)
+        assert len(plan) > 1
+        assert all(c.title for c in plan), "no chapter may reach a gate unnamed"
+        assert all(c.title.startswith(word) for c in plan)
+        assert len({c.title for c in plan}) == len(plan), "and they are distinct"
+
+
+def test_an_unknown_language_numbers_the_parts_in_english():
+    passages = reading.passages_of(
+        [{"index": i, "kind": "cuerpo", "chapter": "", "text": "x" * 900}
+         for i in range(60)]
+    )
+    plan = outline.fallback(reading.chapters_of(passages), passages,
+                            max_chapters=10, language="pt")
+    assert all(c.title.startswith("Part ") for c in plan)
+
+
 def test_the_fallback_covers_the_document_by_construction():
     """Not a failure. Rule learning falls back to built-in rules after three
     attempts rather than refusing, because "blocking there would refuse to

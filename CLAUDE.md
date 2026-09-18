@@ -143,7 +143,7 @@ uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # stack up: 1608 passed
+cd worker && uv sync && uv run pytest -q           # stack up: 1613 passed
 # Measured 2026-09-18 with the stack **up** and BRAIN_MEMGRAPH_URL pointed at
 # the port `docker` publishes (below). Without that variable 92 graph and
 # retrieval tests skip against the default 7788 — measured again the same day:
@@ -1759,10 +1759,32 @@ of one document wrote eight charge rows carrying **$0.000000** rather than no
 rows at all, which is the rule that a stage that ran for nothing and a stage
 that did not run are different facts.
 
-**What it did not settle**: every dollar figure above rests on `OUTPUT_PER_CHAR`
-and `OUTPUT_TOKENS_PER_CHAR`, which are still guesses, so `$6.06 – $9.41` is the
-shape of an answer rather than one. **No transformation has been composed, no
-chapter has been written, and no `transformed.md` exists.** `doc/TRANSFORM.md`
+**And then one was composed, in production.** A 1994 sermon transcript recast as
+an essay: 3 chapters, 8 verified citations, **0 invented, 0 removed, 0
+revisions**, 9 minutes, **$0.212318**. The work reads well. It found two more
+defects, one in each half of what a gate is for, both now fixed and both written
+up in `doc/TRANSFORM.md`:
+
+- **The second gate showed three blank bullets.** The planner fell back to the
+  source's own chapters — correct — but a transcript has one chapter with
+  `title=""`, so `_split` produced three parts named nothing. The finished work
+  was titled throughout, because a chapter is titled as it is *written*; the
+  failure landed entirely on the one screen whose job is to show the outline
+  **before** anybody pays. `_split` numbers an untitled part now, in the source's
+  own language.
+- **The quote was wrong in both directions at once**: `$1.0371 – $1.6494` against
+  a bill of `$0.212318`, with `transform-genre`, `transform-plan` and
+  `transform-research` all coming in **under** — the direction this product's
+  rules forbid outright — while the total over-reported by five, which is the
+  other harm the range exists to bound. All three were quoted from the wrong
+  quantity: two from their *visible* answers while reasoning is on, one with
+  `EVAL_QUERY_TOKENS` where a research query is a slice of the source. Re-quoted
+  against the same run: **$0.3180 – $0.4313**, 1.5x at the low end and no stage
+  under.
+
+**What is still unmeasured**: one document and one genre. `Genre.expansion` has
+never been measured for any of the eleven — a commentary expands where an essay
+selects — and no mode but `faithful` has been composed. `doc/TRANSFORM.md`
 lists what to read out of the first approved run, in order. One thing that run
 should settle first: `QUERIES_PER_SUPPORTED = 8` is now visibly the binding
 constant — the largest book in the library earned 6 research queries across 26

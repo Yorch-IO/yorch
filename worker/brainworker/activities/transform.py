@@ -374,6 +374,7 @@ async def plan_transformation(
         target_chapters=target,
         max_chapters=estimate.chapter_cap(target),
         supported=probe.supported,
+        language=source.language,
     )
 
     progress: dict = {"node": "planning", "done": 0}

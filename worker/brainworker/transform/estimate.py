@@ -16,18 +16,38 @@ planner is held to, which is `channel/estimate.py`'s own move — quote the
 longest candidate rather than the likeliest, because *"choosing the shortest
 would quote a bill the run cannot come in under."*
 
-**`transform-compose` gets no `THINKING_OUTPUT_MULTIPLIER` entry, deliberately.**
-`OUTPUT_PER_CHAR` is derived from this product's own measurement of the same
-kind of call — grounded prose with verified citations and reasoning on — so the
-reasoning is already inside it. Applying a multiplier on top would compound two
-margins, which is the mistake `THINKING_OUTPUT_MULTIPLIER["semantics"]` records
-against itself: *"Rounding up on top of it compounds two margins and puts the
-reasoning-on estimate past twice the measurement."*
+**`transform-compose` gets no `THINKING_OUTPUT_MULTIPLIER` entry, deliberately,
+and the other two now do.** The composition ratio is measured against real
+output tokens, so the reasoning is already inside it and a multiplier on top
+would compound two margins — the mistake
+`THINKING_OUTPUT_MULTIPLIER["semantics"]` records against itself. The genre
+analysis and the outline proposals had no such measurement when they were
+written and no multiplier either, which is how both came in **under** the quote
+on the first real run: the forbidden direction.
 
-**Every constant below is a guess, and each says so.** No transformation has
-ever run. The recipe that replaces them is in `doc/TRANSFORM.md` and it is one
-real run: the gate persists its `estimate` artifact, the ledger records what was
-billed, and the ratio is the measurement.
+**Re-measured 2026-09-18 against the first production transformation.** One
+document — a 1994 sermon transcript, 61,646 characters, recast as an essay in
+three chapters — so these are one measurement and not a corpus, and the next
+one may move them again. What it billed against what this quoted:
+
+| stage | quoted | billed | |
+|---|---|---|---|
+| `transform-genre` | $0.0075 | **$0.010413** | under by 1.4x |
+| `transform-plan` | $0.0285 – $0.0305 | **$0.057599** | under by 1.9x |
+| `transform-compose` | $1.0007 – $1.6110 | $0.143997 | over by 6.9x |
+| **total** | **$1.0371 – $1.6494** | **$0.212318** | over by 4.9x |
+
+Both failures at once, and they are different failures. Under-reporting is the
+one this product's rules forbid outright — a user approved a figure smaller than
+the bill. Over-reporting by five times is the other real harm the range exists
+to bound: it misleads somebody into declining affordable work exactly as much as
+the reverse misleads them into approving expensive work.
+
+The numbers behind the new constants, all from that run: the work came to
+**0.213** of the source's characters, its output cost **0.976 tokens per
+character written**, and the outline took all three attempts at ~1,810 output
+tokens each against the 270 this quoted. Every constant is set to over-report
+that run by a margin and each says by how much.
 """
 
 from __future__ import annotations
@@ -37,19 +57,43 @@ import math
 from ..pipeline import Estimate, StageEstimate
 from .genres import Genre
 
+#: Reasoning is billed as output and `candidates_token_count` excludes it, so a
+#: stage that reasons and is quoted from its visible answer under-reports —
+#: which is what `transform-genre` and `transform-plan` both did on the first
+#: production run, by 1.4x and 1.9x. Their own entries, not
+#: `activities/ingest.py`'s: that map is keyed by *its* stage names and these
+#: two are not in it.
+#:
+#: 6.0 is correction's and profile's measured value, borrowed rather than
+#: measured here — the observed ratios are 4.6x and 6.7x, so it sits between
+#: them and over-reports the smaller. `transform-compose` is deliberately absent:
+#: its ratio is measured against real output tokens and already contains the
+#: reasoning.
+THINKING_OUTPUT_MULTIPLIER: dict[str, float] = {
+    "transform-genre": 6.0,
+    "transform-plan": 6.0,
+}
+
 #: Output characters per source character, before the genre's own ratio.
 #:
-#: **A guess.** Anchored on the one comparable thing this product has measured:
-#: a `standard` answering turn spent 1,772–2,414 output tokens on 705–1,346
-#: characters of prose, which is about 1.8 output tokens per output character
-#: once reasoning is included. That is a *token* ratio and this is a *character*
-#: one, so what it fixes is the order of magnitude and not the number. The genre
-#: multiplies it by its own `expansion`.
-OUTPUT_PER_CHAR = 1.0
+#: **Measured at 0.236 on the first production run** (13,117 characters of essay
+#: from 61,646 of sermon, divided by that genre's 0.9). Set to 0.35, which
+#: over-reports that run by 1.5x — the margin is the point, and the previous
+#: value of 1.0 was a guess that over-reported it by more than four.
+#:
+#: One document and one genre. A commentary or a treatise expands where an essay
+#: selects, which is what `Genre.expansion` is for, and none of those ratios has
+#: been measured at all.
+OUTPUT_PER_CHAR = 0.35
 
 #: Output tokens per output character. Includes reasoning; see the module
 #: docstring for why there is no multiplier on top of it.
-OUTPUT_TOKENS_PER_CHAR = 1.8
+#:
+#: **Measured at 0.976** on the same run — 12,803 output tokens for 13,117
+#: characters of Spanish prose. The old 1.8 was borrowed from an answering
+#: turn's *token* ratio, which is a different quantity. 1.0, which is the
+#: measurement rounded up rather than a second margin on top of one.
+OUTPUT_TOKENS_PER_CHAR = 1.0
 
 #: Tokens one composition call costs before any document text: the three-layer
 #: system prompt, the schema, the outline block and the continuity block.
@@ -72,7 +116,11 @@ def _fragments_per_query() -> int:
 
 #: The genre-detection call: the opening of the document in, a genre name out.
 GENRE_INPUT_CHARS = 8_000
-GENRE_OUTPUT_TOKENS = 120
+#: **Measured at 927 output tokens**, against the 120 this quoted — the stage is
+#: reasoning-dominated and the visible answer is three short fields. The base
+#: stays near the visible answer and `THINKING_OUTPUT_MULTIPLIER` carries the
+#: rest, which is the shape every other reasoning stage here uses.
+GENRE_OUTPUT_TOKENS = 200
 
 #: One outline proposal: the source's chapter table plus the excerpt in, a
 #: chapter list out. Priced at the **worst case** of three attempts, the way
@@ -80,7 +128,13 @@ GENRE_OUTPUT_TOKENS = 120
 #: call and an estimate that assumed the first proposal validated would
 #: under-report exactly when the document is hardest.
 PLAN_INPUT_CHARS = 10_000
-PLAN_OUTPUT_TOKENS_PER_CHAPTER = 90
+#: **Measured at ~1,810 output tokens per proposal** for a three-chapter outline
+#: — about 600 per chapter, of which the visible JSON is a fraction and the rest
+#: is reasoning. 120 here with the multiplier below lands at 2,160 per call,
+#: which over-reports that run by 1.2x.
+PLAN_OUTPUT_TOKENS_PER_CHAPTER = 120
+#: And all three were used on the first real run, which is why this was always
+#: priced at the worst case rather than at the likeliest.
 PLAN_MAX_ATTEMPTS = 3
 
 #: How much wider the enforced chapter cap is than the projected count. The
@@ -127,12 +181,7 @@ def transform_estimate(
     research_budget: int,
 ) -> Estimate:
     """Project the whole run, per stage, from counts that cost nothing to get."""
-    from ..activities.ingest import (
-        CHARS_PER_TOKEN,
-        PRICE_SOURCE,
-        THINKING_OUTPUT_MULTIPLIER,
-        price_for,
-    )
+    from ..activities.ingest import CHARS_PER_TOKEN, PRICE_SOURCE, price_for
     from ..config import load
 
     settings = load()
@@ -196,12 +245,19 @@ def transform_estimate(
     )
 
     if research_budget and purposes:
-        from ..activities.ingest import EVAL_QUERY_TOKENS
+        # **Not `EVAL_QUERY_TOKENS`.** That constant is sized for a question
+        # somebody typed; a research query here is a slice of the chapter's own
+        # source text, up to `QUERY_CHARS`. Quoting the short one put this line
+        # **under** the bill on the first production run — 6 queries billed 593
+        # input tokens against the 360 this quoted, about 99 each — which is the
+        # forbidden direction however small the figure. The cap over-reports it
+        # at 139.
+        from .research import QUERY_CHARS
 
         add(
             "transform-research",
             embedding_model,
-            research_budget * EVAL_QUERY_TOKENS,
+            int(research_budget * QUERY_CHARS / CHARS_PER_TOKEN),
             0,
         )
 

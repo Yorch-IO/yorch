@@ -414,9 +414,73 @@ now visibly the binding constant.** The largest book in the library earned 6
 queries across 26 chapters — about one per four chapters. Whether that is too
 thin is not answerable without composing something.
 
+## The first *approved* run, 2026-09-18 — in production
+
+A 1994 sermon transcript on `preprod`/`lib_teologia` recast as an **essay**, all
+the way through: 3 chapters, 8 verified citations, **0 invented, 0 removed, 0
+revisions**, 9 minutes, **$0.212318**. The work reads well and is titled
+throughout. It found two defects, one in each half of what a gate is for.
+
+### The second gate showed three blank bullets
+
+The planner used all three attempts and fell back to the source's own chapters —
+correct, and the fallback covers the document by construction. But the source is
+a transcript, so `chapters_of` gave it **one chapter with `title=""`**, which is
+the honest reading of a document whose headings were never detected and the
+state 27 of this corpus's 52 documents are in. `_split` cut it into three parts
+and left every title empty.
+
+The finished work was fine: `n_verify` falls back to the model's own title, and
+the model titled each chapter as it wrote it. So the failure landed entirely on
+**the one screen whose job is to show the outline before anybody pays** — a
+person was asked to approve $0.21 of writing against three blank lines, and the
+names appeared only afterwards.
+
+`_split` numbers an untitled part now — `Parte 1`, `Part 1`, in the source's own
+language — because a number is the one true thing a function with no model in it
+can say about a division the source did not name, and a blank is the one thing
+that must not be shown to somebody deciding.
+
+### The quote was wrong in both directions at once
+
+| stage | quoted | billed | |
+|---|---|---|---|
+| `transform-probe` | $0.0003 | $0.000190 | over 1.4x |
+| `transform-genre` | $0.0075 | **$0.010413** | **under 1.4x** |
+| `transform-plan` | $0.0285 – $0.0305 | **$0.057599** | **under 1.9x** |
+| `transform-research` | $0.0001 | **$0.000119** | **under 1.2x** |
+| `transform-compose` | $1.0007 – $1.6110 | $0.143997 | over 6.9x |
+| **total** | **$1.0371 – $1.6494** | **$0.212318** | over 4.9x |
+
+**Three stages under-reported**, which this product's rules forbid outright, and
+the total over-reported by five, which is the other real harm the range exists
+to bound. The causes are all the same shape — a figure quoted from the wrong
+quantity:
+
+* `transform-genre` and `transform-plan` were quoted from their **visible
+  answers** while reasoning is on for both. Reasoning is billed as output and
+  `candidates_token_count` excludes it. They have their own
+  `THINKING_OUTPUT_MULTIPLIER` entries now, at correction's measured 6.0.
+* `transform-research` was priced with `EVAL_QUERY_TOKENS`, which is sized for a
+  question somebody typed. A research query here is a **slice of the chapter's
+  own source text**, up to `QUERY_CHARS`. 6 queries billed 593 input tokens
+  against the 360 quoted.
+* `transform-compose` used 1.8 output tokens per source character, borrowed from
+  an answering turn's *token* ratio — a different quantity. Measured: the work
+  came to **0.213** of the source's characters and cost **0.976 output tokens
+  per character written**.
+
+Re-quoted against the same run: **$0.3180 – $0.4313** against $0.212318 — 1.5x
+at the low end, and **no stage under**. Two tests built from these figures hold
+both ends, and both fail when the constants are put back.
+
+**It is still one document and one genre.** `Genre.expansion` is unmeasured for
+all eleven; a commentary expands where an essay selects, and the next run may
+move all of this again.
+
 ## What has never run
 
-**Nothing about this has touched Vertex.** Every figure in
+**No genre but `essay` has been composed, and no mode but `faithful`.** Every figure in
 `transform/estimate.py` is a guess and each says so in its own docstring. The
 whole feature is covered at every layer — 163 worker tests on the pure package,
 16 workflow tests with typed doubles, 9 paid-plane parity assertions, 16 in the

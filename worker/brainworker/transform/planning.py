@@ -157,6 +157,9 @@ class PlanDeps:
     target_chapters: int = 1
     max_chapters: int = 1
     supported: int = 0
+    #: The source document's own language, so the fallback can number an
+    #: untitled part in it rather than leaving a blank at the gate.
+    language: str = "es"
 
 
 async def n_detect(state: PlanState, deps: PlanDeps) -> dict:
@@ -327,7 +330,10 @@ async def n_fallback(state: PlanState, deps: PlanDeps) -> dict:
     survivable.
     """
     chapters = outline.fallback(
-        deps.source_chapters, deps.passages, max_chapters=deps.max_chapters
+        deps.source_chapters,
+        deps.passages,
+        max_chapters=deps.max_chapters,
+        language=deps.language,
     )
     return {
         "chapters": chapters,

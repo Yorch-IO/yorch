@@ -180,11 +180,27 @@ def validate(
     return out
 
 
+#: What an untitled part is called, per language.
+#:
+#: A number, never an invention. `fallback` is deterministic and has no model in
+#: it, so the one honest thing it can say about a division the source did not
+#: name is which part it is. Two languages because that is what this product's
+#: bundles hold; anything else falls back to English, which is visible in the
+#: outline rather than silent.
+_PART = {"es": "Parte", "en": "Part"}
+
+
+def _part_name(language: str, index: int, total: int) -> str:
+    word = _PART.get((language or "").strip().lower()[:2], _PART["en"])
+    return f"{word} {index}" if total > 1 else f"{word} 1"
+
+
 def fallback(
     source: list[SourceChapter],
     passages: list[Passage],
     *,
     max_chapters: int,
+    language: str = "es",
 ) -> list[ChapterPlan]:
     """The source's own chapters, adopted when no proposal validated.
 
@@ -207,7 +223,7 @@ def fallback(
         return [
             ChapterPlan(
                 ordinal=1,
-                title="",
+                title=_part_name(language, 1, 1),
                 intent="",
                 sources=[SourceSpan(first=passages[0].index, last=passages[-1].index)],
             )
@@ -215,7 +231,7 @@ def fallback(
 
     split: list[ChapterPlan] = []
     for chapter in source:
-        split.extend(_split(chapter, passages))
+        split.extend(_split(chapter, passages, language))
 
     merged = _merge(split, max(1, max_chapters or MAX_CHAPTERS))
     for ordinal, chapter in enumerate(merged, start=1):
@@ -224,8 +240,21 @@ def fallback(
     return merged
 
 
-def _split(chapter: SourceChapter, passages: list[Passage]) -> list[ChapterPlan]:
-    """One source chapter as one or more target chapters, at passage boundaries."""
+def _split(
+    chapter: SourceChapter, passages: list[Passage], language: str = "es"
+) -> list[ChapterPlan]:
+    """One source chapter as one or more target chapters, at passage boundaries.
+
+    **An untitled source chapter yields numbered parts, never blank ones.**
+    Measured on the first real production run: the source was a sermon
+    transcript, `chapters_of` gave it one chapter with `title=""` — which is the
+    honest reading of a document whose headings were never detected, and 27 of
+    this corpus's 52 documents are in that state — and this returned three
+    chapters called `""`. The composition then titled each one as it wrote it,
+    so the finished work read perfectly well; what got nothing was **the second
+    gate**, whose entire job is to show the outline *before* anybody pays. A
+    person was asked to approve $0.21 of writing against three blank bullets.
+    """
     inside = [p for p in passages if chapter.first <= p.index <= chapter.last]
     if not inside:
         return []
@@ -245,6 +274,11 @@ def _split(chapter: SourceChapter, passages: list[Passage]) -> list[ChapterPlan]
             # Numbered rather than invented: the source gave one title and this
             # is one of its parts, which is a true thing to say about it.
             title = f"{chapter.title} ({i}/{len(parts)})" if chapter.title else ""
+        if not title:
+            # The source named nothing. A number is the one true thing that can
+            # be said here without a model, and a blank is the one thing that
+            # cannot be shown to somebody deciding whether to spend.
+            title = _part_name(language, i, len(parts))
         out.append(
             ChapterPlan(
                 ordinal=0,

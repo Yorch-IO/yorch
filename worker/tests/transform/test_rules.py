@@ -16,6 +16,7 @@ from brainworker.transform.genres import GENRE_NAMES, GENRES
 from brainworker.transform.rules import (
     MODE_RULES,
     PURPOSE_RULES,
+    SHARED_CONVENTIONS,
     TRANSFORM_RULES,
     compose_transform_system,
 )
@@ -92,3 +93,57 @@ def test_the_adaptive_licence_says_what_it_is_not():
     adaptive = MODE_RULES["adaptive"].lower()
     assert "not a licence to assert" in adaptive
     assert "does not mean adding material" in adaptive
+
+
+@pytest.mark.parametrize("name", GENRE_NAMES)
+@pytest.mark.parametrize("mode", MODES)
+def test_every_genre_is_told_to_write_a_reference_rather_than_say_it(name, mode):
+    """Reported from a real recast: a sermon expanded «Juan 10:10» into «abran
+    sus Biblias en el Evangelio según San Juan, en el capítulo diez, versículo
+    diez».
+
+    Five of the eleven invite exactly that — the two spoken genres and the three
+    that carry no apparatus — so the rule binds all of them from one place
+    rather than being copied into five prompts, which is the duplication
+    `genres/base.py` warns against.
+    """
+    composed = compose_transform_system(GENRES[name], mode)
+    assert "A REFERENCE IS WRITTEN, NOT SPELLED OUT" in composed
+    assert "Juan 10:10" in composed
+    assert "capítulo diez, versículo diez" in composed, (
+        "the rule quotes the failure it was written for, so the model sees both"
+    )
+
+
+@pytest.mark.parametrize("name", GENRE_NAMES)
+def test_the_conventions_sit_below_the_rules_and_above_the_genre(name):
+    """Order is precedence here as everywhere else in this prompt."""
+    composed = compose_transform_system(GENRES[name], "faithful")
+    assert (
+        composed.index(TRANSFORM_RULES[:60])
+        < composed.index(SHARED_CONVENTIONS[:40])
+        < composed.index(GENRES[name].system.strip()[:60])
+    )
+
+
+def test_a_genre_may_not_undo_a_shared_convention():
+    assert "not the genre's to undo" in compose_transform_system(
+        GENRES["novel"], "adaptive"
+    )
+
+
+def test_the_conventions_are_not_smuggled_into_the_six_rules():
+    """The six draw their force from being short and from being about
+    substance. A convention on how to print a locator is not of that kind, and
+    putting it there would dilute the list that must never be argued with."""
+    assert "A REFERENCE IS WRITTEN" not in TRANSFORM_RULES
+    assert "6. NO IDENTIFIERS" in TRANSFORM_RULES
+    assert "7." not in TRANSFORM_RULES
+
+
+def test_the_shared_conventions_stay_domain_agnostic():
+    """Sermon must not implicitly mean religious, and now that the rule binds
+    every genre the point is sharper: a treatise recasting a statute reads it
+    too."""
+    for other in ("art. 14.2", "s. 3(1)(b)", "Fig. 4", "p. 212"):
+        assert other in SHARED_CONVENTIONS

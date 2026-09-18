@@ -303,20 +303,33 @@ The middle layer exists because a genre prompt is exactly the prose that would
 otherwise read as permission to embellish — "render as lived experience",
 "urgency without alarm" — and none of them says so on its own.
 
-**A reference is written, not spelled out.** Reported from a real recast: the
-sermon expanded «Juan 10:10» into «abran sus Biblias en el Evangelio según San
-Juan, en el capítulo diez, versículo diez». The genre invites exactly that — the
-whole point of a sermon is that it is *said* — and it is still wrong twice over:
-a spoken reference a hearer cannot write down is one they cannot check, and the
-text this produces is also **read**, where a locator in figures is what somebody
-searches for and a chapter and a verse in words is findable by nobody.
+**A reference is written, not spelled out** — and where that rule ended up is
+the more useful half of the story. Reported from a real recast: the sermon
+expanded «Juan 10:10» into «abran sus Biblias en el Evangelio según San Juan, en
+el capítulo diez, versículo diez». It is wrong twice over: a spoken reference a
+hearer cannot write down is one they cannot check, and every one of these works
+is also **read**, where a locator in figures is what somebody searches for and a
+chapter and a verse in words is findable by nobody.
 
-`sermon/2` carries the rule, with the failure quoted in it so the model sees
-both sides, and with three non-scriptural locators beside the example —
-`art. 14.2`, `s. 3(1)(b)`, `Fig. 4` — because the brief is explicit that Sermon
-must not implicitly mean religious. **`lecture` has the same shape and has not
-been changed**: its conventions say references are "spoken aloud in the ordinary
-way", which will produce the same expansion, and nobody has reported it.
+It went into `sermon.py` first, as `sermon/2`, because notation looks like genre
+business — how a work is *set* is exactly what a genre decides. Then the other
+ten were read with the same question, and **five of the eleven invite the same
+expansion**: `essay` names sources "in the prose where they matter to the
+thought", `lecture` has references "spoken aloud in the ordinary way", and
+`counsel` and `novel` carry no apparatus at all. Copying one paragraph into five
+files is precisely what `genres/base.py` warns against, so it moved to
+`rules.SHARED_CONVENTIONS` — a **fourth** prompt layer, composed below the mode
+and above the genre, with its own sentence saying a genre may not undo it.
+`sermon.py` is textually back to what it was and its version went *forward* to
+`sermon/3`, because a version that went backwards would name two different
+instruments with one string.
+
+**It is deliberately not a seventh rule.** The six draw their force from being
+short and from being about substance — do not invent, do not assert what nothing
+supports, mark what came from the library, write in the source's language, emit
+only the work, keep identifiers out of the prose. A convention about how to
+print a locator is not of that kind, and adding it there would dilute the list
+that must never be argued with. A test asserts there is no rule 7.
 
 **Novel and Sermon carry an extra clause each**, and the tension in Novel is real
 and named rather than smoothed: the licence is over *presentation* — staging,

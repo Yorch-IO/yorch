@@ -7,13 +7,33 @@ can rewrite, and *"an edit that weakened 'do not use general knowledge' would
 produce a fuller answer that is worse grounded, which is the failure that reads
 as success."*
 
-Here there are three layers rather than two, and the middle one is the reason.
+Here there are **four** layers, and the two middle ones exist for different
+reasons.
 A genre prompt is exactly the prose that would otherwise read as permission to
 embellish: "render as lived experience", "urgency without alarm", "concrete
 sensory detail". None of those is a licence to invent, and none of them says so
 on its own. So the invariants are stated once, above everything, and the mode
 sits between them and the genre — a licence over *form* that explicitly is not
 one over *fact*.
+
+The fourth is `SHARED_CONVENTIONS`, and it earned its place by measurement
+rather than by design. A rule about *notation* looks like genre business — how a
+work is set is exactly what a genre decides — and one was written into
+`sermon.py` when a real recast expanded «Juan 10:10» into «abran sus Biblias en
+el Evangelio según San Juan, en el capítulo diez, versículo diez». Then the
+other ten were read with that question in mind, and **five of them invite the
+same expansion**: `essay` names sources "in the prose where they matter to the
+thought", `lecture` has references "spoken aloud in the ordinary way", `counsel`
+and `novel` carry no apparatus at all. Copying one paragraph into five files is
+precisely what `genres/base.py` warns against — a rule repeated is a rule that
+can be weakened in one place — so it sits here instead, once.
+
+It is deliberately **not** a seventh rule. The six above draw their force from
+being short and being about substance: do not invent, do not assert what nothing
+supports, mark what came from the library, write in the source's language, emit
+only the work, keep identifiers out of the prose. A convention about how to
+print a locator is not of that kind, and adding it there would dilute the list
+that must never be argued with. It binds every genre anyway, and says so.
 
 Nothing in `genres/` repeats any of this. A rule repeated in eleven places is a
 rule that can be weakened in one.
@@ -102,6 +122,32 @@ well while resting on nothing is the failure this mode is most likely to \
 produce.""",
 }
 
+#: What every genre does the same way, whatever its register.
+#:
+#: One entry so far, and it is here rather than in five genre modules because
+#: five of the eleven invite the failure it fixes. See this module's docstring.
+SHARED_CONVENTIONS = """\
+Two conventions hold in every genre, whatever its register.
+
+A REFERENCE IS WRITTEN, NOT SPELLED OUT. Give a locator in the notation its own \
+field uses — `Juan 10:10`, `art. 14.2`, `s. 3(1)(b)`, `Fig. 4`, `p. 212` — and \
+never expand it into speech or into prose. Write «Juan 10:10», not «abran sus \
+Biblias en el Evangelio según San Juan, en el capítulo diez, versículo diez». \
+You may name the work in words where that is how it is introduced — "en la \
+carta a los Tesalonicenses", "en el informe de la comisión" — but the locator \
+beside it is always in figures.
+
+This holds even in a genre meant to be *said*, and even in one that carries no \
+citation marks at all. A spoken reference a hearer cannot write down is one \
+they cannot check, and every one of these works is also **read**: a locator in \
+figures is what somebody searches for, and a chapter and a verse spelled out in \
+words is findable by nobody.
+
+A FIGURE THE SOURCE GIVES IS REPRODUCED AS THE SOURCE GIVES IT. A date, a \
+quantity, a page, a count: copy it, do not round it, do not convert it, and do \
+not turn it into a word. Where the source is vague — "unos cuarenta" — stay \
+vague; the vagueness is the source's and is not yours to resolve."""
+
 #: Why the library was consulted, appended only for the purposes enabled on this
 #: run. Each says what to *do* with what comes back, because the retrieval is
 #: identical for all four — the same `retrieve.search`, the same floor — and
@@ -138,6 +184,12 @@ _RULES_WIN = (
     "seems to permit what they forbid, they win."
 )
 
+_CONVENTIONS_BIND = (
+    "The two conventions above are not the genre's to undo. A genre decides how "
+    "a work is written; it does not decide whether a reader can look a "
+    "reference up."
+)
+
 _MODE_WINS = (
     "The genre below describes how this kind of work is written. It shapes the "
     "prose and never the rules: where a convention of the genre would require "
@@ -162,6 +214,8 @@ def compose_transform_system(
         rule = PURPOSE_RULES.get(name)
         if rule:
             parts.append(rule)
+    parts.append(SHARED_CONVENTIONS)
+    parts.append(_CONVENTIONS_BIND)
     parts.append(_MODE_WINS)
     parts.append(genre.system.strip())
     return "\n\n".join(p.strip() for p in parts if p and p.strip())

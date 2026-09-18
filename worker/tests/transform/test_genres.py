@@ -131,42 +131,24 @@ def test_a_module_whose_name_disagrees_with_its_filename_is_refused():
             )
 
 
-def test_a_sermon_writes_a_reference_and_does_not_spell_it_out():
-    """Reported from a real recast: the address expanded «Juan 10:10» into
-    «abran sus Biblias en el Evangelio según San Juan, en el capítulo diez,
-    versículo diez».
 
-    The genre invites it — the whole point of a sermon is that it is *said* —
-    but a spoken reference a hearer cannot write down is one they cannot check,
-    and the text this produces is also read: a locator in figures is what
-    somebody searches for, and a chapter and a verse spelled out in words is
-    findable by nobody.
+def test_no_genre_prompt_carries_the_shared_conventions():
+    """They live in `rules.SHARED_CONVENTIONS`, once, and five genres need them.
 
-    Pinned as a property of the prompt rather than of one example, because a
-    rewording that dropped the rule would leave nothing else to notice.
+    `sermon/2` carried the notation rule in its own file for a few hours, until
+    the other ten were read with the same question: `essay` names sources "in
+    the prose where they matter to the thought", `lecture` has references
+    "spoken aloud in the ordinary way", and `counsel` and `novel` carry no
+    apparatus at all. Copying one paragraph into five files is what this
+    package's own `base.py` warns against.
     """
-    system = GENRES["sermon"].system
-    assert "A REFERENCE IS WRITTEN, NOT SPELLED OUT" in system
-    assert "Juan 10:10" in system
-    assert "capítulo diez, versículo diez" in system, (
-        "the rule names the failure it was written for, so the model sees both"
-    )
+    for name in GENRE_NAMES:
+        assert "A REFERENCE IS WRITTEN" not in GENRES[name].system, name
+        assert "Juan 10:10" not in GENRES[name].system, name
 
 
-def test_the_sermon_s_notation_rule_stays_domain_agnostic():
-    """The brief is explicit that Sermon must not implicitly mean religious.
-
-    The scripture case is the *example*, because it is the one that was
-    reported; the rule is about a locator in whatever notation its own field
-    uses, and it names three others so a model recasting a statute or a report
-    does not read it as being about Bibles.
-    """
-    system = GENRES["sermon"].system
-    for other in ("art. 14.2", "s. 3(1)(b)", "Fig. 4", "p. 212"):
-        assert other in system
-
-
-def test_a_reworded_sermon_prompt_gets_a_new_version():
-    """`PROMPT_VERSION` is how one reading is told from the next, and this
-    change moves what the model writes."""
-    assert GENRES["sermon"].prompt_version == "sermon/2"
+def test_the_sermon_version_moved_forward_rather_than_back():
+    """Its prompt is textually back to what `sermon/1` was, now that the rule
+    has left it, and the version is `sermon/3` anyway: one that went backwards
+    would name two different instruments with one string."""
+    assert GENRES["sermon"].prompt_version == "sermon/3"

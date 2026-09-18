@@ -111,8 +111,9 @@ composed one at a time rather than fanned out, why the continuity a chapter
 hands the next travels as an artifact rather than in a payload, why the research
 budget is the dense-floor `supported` count and why zero of it is a real answer,
 why the source document is excluded by a post-filter and never by widening
-`ALLOWED_FILTERS`, why the bibliography is rendered by a pure function with no
-model in the path, and why coverage is the one property that can hold a model to
+`ALLOWED_FILTERS`, why the prompt has **four** layers and why a convention that
+binds every genre is not a seventh rule, why the bibliography is rendered by a
+pure function with no model in the path, and why coverage is the one property that can hold a model to
 the document it was given. **Built 2026-09-18 for the paid plane and the desktop
 app only.** The free plane serves no route by decision and there is no Angular
 screen; both are decisions on the record rather than omissions. **Its free half
@@ -143,7 +144,7 @@ uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # stack up: 1630 passed
+cd worker && uv sync && uv run pytest -q           # stack up: 1665 passed
 # Measured 2026-09-18 with the stack **up** and BRAIN_MEMGRAPH_URL pointed at
 # the port `docker` publishes (below). Without that variable 92 graph and
 # retrieval tests skip against the default 7788 — measured again the same day:

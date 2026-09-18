@@ -2964,3 +2964,79 @@ ul.inferences > li > p {
   flex-basis: 100%;
   margin: 0.25rem 0 0;
 }
+
+/* Recasting a document into another genre.
+ *
+ * The form is a single column of labelled controls rather than a grid, and that
+ * is deliberate: every field here changes what the work *is*, so they are read
+ * in order and none of them belongs beside another. It therefore needs no
+ * `@media (max-width: 76rem)` block of its own — the rule that a new grid must
+ * carry one below its own declaration applies to grids, and this is not one. */
+.transform-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 40rem;
+  margin-bottom: 1.5rem;
+}
+
+.transform-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* A checkbox label reads as one line, not as a stacked pair. */
+.transform-form > label:has(> input[type="checkbox"]) {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.transform-modes,
+.transform-purposes {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.transform-modes label,
+.transform-purposes label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.transform-runs {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.transform-runs > li {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+
+/* `.stages`, `.actions`, `.caveat` and `.gate` are the approval gate's own and
+ * are reused rather than re-invented: a second vocabulary for the same panel
+ * would be a second thing to keep in step with the theme, and the two gates
+ * here are meant to read as the gate this product already has.
+ *
+ * The planned outline. Numbered, because a chapter's ordinal is what the
+ * composition is keyed on and a reader comparing the two wants the same
+ * numbers on both. */
+.chapters {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+.chapters > li {
+  margin-bottom: 0.25rem;
+}

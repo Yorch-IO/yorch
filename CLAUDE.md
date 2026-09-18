@@ -98,6 +98,29 @@ justifies it is measured rather than derived. **Built 2026-09-16/17 for the
 paid plane and both clients.** The free plane serves no route by decision, and
 says so.
 
+**Recasting a document into another literary genre has its own document:
+`doc/TRANSFORM.md`.** Read it before touching `brainworker/transform/`,
+`activities/transform.py`, `workflows/transform.py`, `workflows/tracked.py`,
+`TransformScreen.tsx`, `TransformGateReview.tsx` or the paid plane's
+`src/transform/`. It holds what is not visible from any one file — why there are
+**two** gates and why the first quote is explicitly a projection while the second
+is a contract the planner is held to, why each gate has its own query, route,
+type and component rather than reusing one, why two LangGraph `StateGraph`s run
+*inside* activities and never cross the Temporal boundary, why chapters are
+composed one at a time rather than fanned out, why the continuity a chapter
+hands the next travels as an artifact rather than in a payload, why the research
+budget is the dense-floor `supported` count and why zero of it is a real answer,
+why the source document is excluded by a post-filter and never by widening
+`ALLOWED_FILTERS`, why the bibliography is rendered by a pure function with no
+model in the path, and why coverage is the one property that can hold a model to
+the document it was given. **Built 2026-09-18 for the paid plane and the desktop
+app only.** The free plane serves no route by decision and there is no Angular
+screen; both are decisions on the record rather than omissions. **Its free half
+has run against the real corpus and its paid half has not**: the probe, the
+estimate and both gates were exercised on two real books for $0.000366 total,
+which found three defects no test could reach — and every dollar figure still
+rests on constants in `transform/estimate.py` that are guesses and say so.
+
 ## Commands
 
 Prerequisites live in `~/.local/bin` (`uv`) and `~/.cargo/bin` (Rust); add both
@@ -120,8 +143,8 @@ uv run docagent index libro.pdf                    # spends money
 uv run docagent query "pregunta" | profiles | diag
 
 # Worker (Temporal workflows + control API)
-cd worker && uv sync && uv run pytest -q           # stack up: 1417 passed
-# Measured 2026-09-17 with the stack **up** and BRAIN_MEMGRAPH_URL pointed at
+cd worker && uv sync && uv run pytest -q           # stack up: 1608 passed
+# Measured 2026-09-18 with the stack **up** and BRAIN_MEMGRAPH_URL pointed at
 # the port `docker` publishes (below). Without that variable 92 graph and
 # retrieval tests skip against the default 7788 — measured again the same day:
 # 1325 passed, 92 skipped. A skip, not a failure, and
@@ -163,7 +186,7 @@ cd app && npm install
 # on Linux and macOS (cmake, pinned commit), downloaded on Windows. `--cuda`
 # when nvcc is there; the models are not bundled and are fetched on first use.
 ./src-tauri/binaries/fetch-whisper.sh              # this machine's triple
-npm run typecheck && npx vitest run && npm run build   # 668 passed
+npm run typecheck && npx vitest run && npm run build   # 684 passed
 npx vitest run -t "define no key"                  # single test by name
 COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch npm run tauri dev
 
@@ -177,7 +200,7 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 COMPANY_BRAIN_REPO_ROOT=/home/kheiron/yorch \
 # and PKG_CONFIG_PATH set, or the `soup3-sys` build script fails first. No
 # `--release`: the tuned dev profile runs this gate in 60s at 412% CPU.
 export PKG_CONFIG_PATH=~/.local/tauri-sysroot/prefix/usr/lib/x86_64-linux-gnu/pkgconfig
-cd app/src-tauri && cargo test                     # 163 passed, 2 ignored
+cd app/src-tauri && cargo test                     # 164 passed, 2 ignored
 # Two tests are `#[ignore]`d because they talk to the bundled binaries — one to
 # YouTube, one to whisper.cpp — and they are the only things that can say those
 # binaries work at all. The whisper one found a timeout the unit tests could
@@ -1690,6 +1713,65 @@ migration applied. **`AuthorEdit` and the download button have not been
 pressed** in the real window either, which is the same position every other
 Library verb was in until somebody pressed it.
 
+**Recasting a document into another genre is built, its free half has run
+against the real corpus, and nothing has been composed.** Built 2026-09-18 —
+`doc/TRANSFORM.md` — and covered at every layer: 163 worker tests on the pure
+package, 16 workflow tests with typed doubles, 9 parity assertions on the paid
+plane's fork verified by breaking it, and 16 in the two React components.
+
+**The free half ran the same day, three times, for $0.000366 total**, against
+`preprod`/`lib_teologia` through Temporal directly — the developer path the
+design deliberately left open by putting the tenant guard at the route rather
+than inside the workflow. Every run was refused at its first gate, so nothing
+was composed. Two real books:
+`4.-Doctrina-de-la-Regeneración` (19,105 characters, **1** detected chapter)
+quoted at **$0.2922 – $0.6424**, and `01_RetoDeDios_INT-S` (468,714 characters,
+43 chapters → 26 target ones) at **$6.0589 – $9.4133**.
+
+**It found three defects, and none of them was reachable by any test.** All
+three are written up in `doc/TRANSFORM.md`; the shapes are the ones this file
+already records:
+
+- **The probe sampled *chapters*, and 27 of this corpus's 52 documents have
+  exactly one.** A 500-passage book was probed **once**, on its first 600
+  characters, with the whole run's research budget derived from it. `supported`
+  went **5 → 37** on one document when the probe moved to sampling passages.
+  The cause is upstream and known: `build_chunks` consumes a heading paragraph,
+  so a document whose headings were never detected really is one untitled
+  chapter.
+- **The budget's chapter cap was the *source's* count where it meant the
+  work's.** A 400,000-character book with undetected headings has one source
+  chapter and seventeen target ones, so it earned 3 queries instead of 51 — a
+  17x under-budget on exactly the documents the first defect served worst.
+- **Every charge was filed under `ask-embedding`**, which `ASK_COST_STAGES`
+  deliberately maps to no workflow stage, so it rendered under the trailing
+  `stage: null` heading — the `evidence` defect again — while the `COST_STAGES`
+  entries naming `transform-probe` and `transform-research` were declared and
+  written by nothing at all. Found by reading `cost_entry` after a real run,
+  which is the only way any of this class is ever found.
+
+**What the free half settled**: a real `chunks.jsonl` is read, the probe measures
+the real library through the real dense floor, the estimate is computed and
+persisted as an artifact so the quote is checkable afterwards, the run row is
+opened before anything that can fail, and a refused gate is recorded as
+`cancelled` in the stage it was in. The embedding cache also works: a second run
+of one document wrote eight charge rows carrying **$0.000000** rather than no
+rows at all, which is the rule that a stage that ran for nothing and a stage
+that did not run are different facts.
+
+**What it did not settle**: every dollar figure above rests on `OUTPUT_PER_CHAR`
+and `OUTPUT_TOKENS_PER_CHAR`, which are still guesses, so `$6.06 – $9.41` is the
+shape of an answer rather than one. **No transformation has been composed, no
+chapter has been written, and no `transformed.md` exists.** `doc/TRANSFORM.md`
+lists what to read out of the first approved run, in order. One thing that run
+should settle first: `QUERIES_PER_SUPPORTED = 8` is now visibly the binding
+constant — the largest book in the library earned 6 research queries across 26
+chapters, about one per four, and whether that is too thin is not answerable
+without composing something.
+
+**Nobody has pressed any of it in a window** — the screen, either gate panel, or
+the download.
+
 **Folder watching does not exist.** `source_folder` and its repository methods
 are there; there is no scan workflow, no add/change/delete detection, and
 nothing ever calls `Catalog.mark_absent`. Its delete detection now has somewhere
@@ -2570,6 +2652,16 @@ that are missing. Each was found by running the thing, and each is recorded
 rather than fixed because the fix is somebody's decision or sits in another
 session's files.
 
+- **A cross-repo commit went half-done on 2026-09-18, and the parity spec caught
+  it.** `stage_transcript` began raising `transcript_loops` — the refusal for a
+  transcript that is a loop — and the paid plane's `BUCKET_KINDS` was not widened
+  in the same commit, so `buckets.parity.spec.ts` was failing before any of the
+  transform work touched that repository. Fixed in passing (422, the same status
+  every other statement-about-the-bytes kind carries). Worth recording because it
+  is the second time this shape has appeared: a kind is added on the Python side,
+  the fork is not, and the only thing that notices is the spec that exists to.
+  **Run the other checkout's suite before assuming its red is yours.**
+
 - **A rejected correction is re-bought on every import, for ever, and re-rejected
   identically.** Measured when the first video was re-imported
   (`doc/AUDIT_VIDEO_20260910.md`, F7b): 85 of 107 paragraphs came back from the
@@ -2675,10 +2767,17 @@ session's files.
   reachable either. The fix is a route per plane over the existing query, and a
   panel that keys on the stage rather than reusing `GateReport`.
 
-- **`deciding` is a one-way latch, so a refused approval kills both buttons
-  until the app is restarted.** `ImportQueue.tsx` calls `setDeciding(true)` in
-  `onDecide` and **`setDeciding(false)` appears nowhere in the file** — grep
-  returns 0. On the happy path the row moves on and nobody notices; on a refusal
+- **`deciding` is a one-way latch — and this entry is stale: it was fixed and
+  the record was not updated.** Checked 2026-09-18 while adding a third gate to
+  the same component: `ImportQueue.tsx` now clears it in a `finally` on both
+  panels, with a comment naming the incident. The entry stays, moved nowhere,
+  because the *shape* is the thing worth carrying — every screen that latches a
+  button on a decision has to clear it on the way the decision can fail, and the
+  new Recast screen carries the same `finally` and a test that asserts it.
+  What follows is what the defect was.
+  `ImportQueue.tsx` called `setDeciding(true)` in
+  `onDecide` and **`setDeciding(false)` appeared nowhere in the file** — grep
+  returned 0. On the happy path the row moves on and nobody notices; on a refusal
   the panel stays on screen with "Approve and index" and "Cancel" both disabled
   and no way to retry. Found 2026-09-15 by a person reporting that the gate had
   no answerable control: they had pressed Approve, taken a 422 from the paid
@@ -3696,7 +3795,10 @@ maps them to localised labels.
   separate setting from a collection's *content* language.
 - **The ten screens are all mounted at once and only one is shown**, and the
   tab order is the order of the work: `home`, `stack`, `library`, `explore`,
-  `graph`, `import`, `channel`, `bucket`, `ask`, `chat`. Home is the default because
+  `graph`, `import`, `channel`, `bucket`, `ask`, `chat`, `transform`.
+  `transform` is last because it is the most downstream: it consumes a document
+  the rest of the product has already indexed, and produces a file rather than
+  an index. Home is the default because
   "what is in here?" is the question a person arrives with — Services was the
   landing screen only for want of anything else. Home and Services own no
   library, so the picker is off both; Home's figures are project-wide, so a

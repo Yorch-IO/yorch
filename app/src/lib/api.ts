@@ -451,6 +451,89 @@ export interface RecommendedStages {
  * until the money has been spent, and saying so is the point of a gate. Do not
  * render a zero there.
  */
+/** Recasting a document into another literary genre. Paid plane only: the local
+ *  plane serves none of these paths, and a call in local mode comes back as the
+ *  404 the proxy turns into `control_status`. See `doc/TRANSFORM.md`. */
+export interface TransformVocabulary {
+  genres: string[];
+  modes: string[];
+  defaultMode: string;
+  purposes: string[];
+}
+
+/** What a transformation is asked for. `tenantId` is deliberately absent: the
+ *  plane stamps it from the session, and a body carrying one is refused. */
+export interface TransformRequest {
+  libraryId: string;
+  documentId: string;
+  versionId: string;
+  genre: string;
+  mode: string;
+  purposes: string[];
+  autoApprove?: boolean;
+  label?: string;
+}
+
+/** Which of the two gates a run stops at, and whether it researches. */
+export interface TransformOptions {
+  reviewPlan: boolean;
+  research: boolean;
+}
+
+/** The answer to either gate.
+ *
+ *  `options` is optional and omitting it means *keep what the run was started
+ *  with*. Sending a fully-defaulted object instead would turn research back on
+ *  for a run started with it off — which is the recorded gate defect where every
+ *  stage a person unticked before pressing Import was silently turned back on. */
+export interface TransformApproval {
+  approved: boolean;
+  options?: TransformOptions;
+  reason?: string;
+}
+
+/** The **first** gate: a quote from what is knowable for free.
+ *
+ *  `projection` is true, and the screen says so: the chapter count is arithmetic
+ *  over the source's own chapters, not an outline. */
+export interface TransformGateReport {
+  genre: string;
+  mode: string;
+  purposes: string[];
+  sourceTitle: string;
+  sourceChapters: number;
+  characters: number;
+  projectedChapters: number;
+  researchBudget: number;
+  supported: number;
+  projection: boolean;
+  estimate: Estimate | null;
+}
+
+export interface ChapterPlan {
+  ordinal: number;
+  title: string;
+  intent: string;
+  chars: number;
+}
+
+/** The **second** gate: the outline, and the first quote anybody should act on.
+ *
+ *  Its own type and its own route, never the first report reassigned — in the
+ *  ingest path the one report is assigned before the first gate and never
+ *  cleared, so its second gate shows the first one's preview. */
+export interface TransformPlanReport {
+  genre: string;
+  mode: string;
+  chapters: ChapterPlan[];
+  uncoveredFraction: number;
+  researchBudget: number;
+  fallback: boolean;
+  notes: string[];
+  spentSoFar: number | null;
+  estimate: Estimate | null;
+}
+
 export interface VideoGateReport {
   runId: string;
   documentId: string;
@@ -2295,6 +2378,23 @@ export const api = {
    *  means the probe is still running, which is the ordinary first answer. */
   videoGate: (workflowId: string) =>
     invoke<VideoGateReport | null>("video_gate", { workflowId }),
+  /** The eleven genres, the two modes and the four research purposes. Fetched
+   *  rather than compiled in, so a genre added on the worker reaches the picker
+   *  without a client release. */
+  genres: () => invoke<TransformVocabulary>("genres"),
+  startTransform: (request: TransformRequest, options: TransformOptions) =>
+    invoke<StartedRun>("start_transform", { request, options }),
+  /** A transformation's first gate. null means the document is still being
+   *  read, which is the ordinary first answer and not a failure. */
+  transformGate: (workflowId: string) =>
+    invoke<TransformGateReport | null>("transform_gate", { workflowId }),
+  /** Its second gate: the outline, and the quote made against it. */
+  transformPlan: (workflowId: string) =>
+    invoke<TransformPlanReport | null>("transform_plan", { workflowId }),
+  /** Answer either gate. Its own route because the options are not stage
+   *  switches, and the shared `/approve` refuses them outright. */
+  approveTransform: (workflowId: string, approval: TransformApproval) =>
+    invoke<void>("approve_transform", { workflowId, approval }),
   /** Where a run *is*, which `ingestGate` alone cannot say. See `RunState`. */
   runStatus: (workflowId: string) => invoke<RunState>("run_status", { workflowId }),
   ingestApprove: (workflowId: string, approval: Approval) =>

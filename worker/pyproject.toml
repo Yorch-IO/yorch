@@ -22,6 +22,12 @@ dependencies = [
     # changes underneath it and a stale one fails at extraction, not at build.
     "yt-dlp>=2026.1.1",
     "boto3>=1.35",
+    # Recasting a document into another genre runs two `StateGraph`s, each
+    # inside one activity. It arrives today only transitively through
+    # `docagent`, which is a dependency this package could drop tomorrow — and
+    # then a feature here would break for a reason nothing in this file
+    # mentions. Pure Python, so the image keeps its "no compiler" property.
+    "langgraph>=1.2.9",
 ]
 
 [dependency-groups]

@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 #: commit as the code that needs the newer column, and never in a commit that
 #: only adds one — an assertion ahead of the code it protects turns a working
 #: deployment into a warning nobody can act on.
-REQUIRED_MIGRATION = "20260917100000_run_state_transcript"
+REQUIRED_MIGRATION = "20260918120000_run_kind_transform"
 
 def _default_migrations_dir() -> pathlib.Path:
     """Where `prisma migrate deploy` reads from.

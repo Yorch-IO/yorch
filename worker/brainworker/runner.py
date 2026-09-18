@@ -14,6 +14,7 @@ from .activities import (
 )
 from .activities import bucket as bucketacts
 from .activities import channel as channelacts
+from .activities import transform as transformacts
 from .activities import video as videoacts
 from .activities.health import probe_provider, probe_services
 from .workflows.activation import ActivationWorkflow
@@ -36,6 +37,7 @@ from .workflows.ping import PingWorkflow
 from .workflows.probe import ProviderProbeWorkflow
 from .workflows.rebuild import RebuildWorkflow
 from .workflows.removal import RemovalWorkflow
+from .workflows.transform import TransformWorkflow
 from .workflows.video import VideoIngestWorkflow
 
 log = logging.getLogger(__name__)
@@ -49,6 +51,7 @@ WORKFLOWS = [
     RemovalWorkflow,
     ActivationWorkflow,
     EpubWorkflow,
+    TransformWorkflow,
     ProviderProbeWorkflow,
     VideoIngestWorkflow,
     ChannelDiscoverWorkflow,
@@ -79,6 +82,15 @@ ACTIVITIES = [
     exporting.resolve_book_metadata,
     exporting.build_epub,
     exporting.export_version_epub,
+    # Recasting a document into another genre. Registering a workflow
+    # without its activities is a worker that accepts the task and then
+    # fails it with "activity not registered".
+    transformacts.read_source,
+    transformacts.probe_library,
+    transformacts.estimate_transform,
+    transformacts.plan_transformation,
+    transformacts.compose_chapter,
+    transformacts.bind_document,
     ingest.open_run,
     ingest.stage_source,
     ingest.register_document,

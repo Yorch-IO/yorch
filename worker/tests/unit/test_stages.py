@@ -22,6 +22,7 @@ REBUILD = (ROOT / "workflows" / "rebuild.py").read_text(encoding="utf-8")
 VIDEO = (ROOT / "workflows" / "video.py").read_text(encoding="utf-8")
 TIMED = (ROOT / "workflows" / "timed.py").read_text(encoding="utf-8")
 AUDIO = (ROOT / "workflows" / "bucket.py").read_text(encoding="utf-8")
+TRANSFORM = (ROOT / "workflows" / "transform.py").read_text(encoding="utf-8")
 PAID = (ROOT / "activities" / "paid.py").read_text(encoding="utf-8")
 
 
@@ -58,6 +59,32 @@ def test_every_stage_the_video_workflow_sets_is_in_the_list() -> None:
     assert missing == set(), (
         f"VideoIngestWorkflow sets {sorted(missing)}, which stages.VIDEO_STAGES "
         "does not name — the audit view cannot order or translate them"
+    )
+
+
+def test_every_stage_the_transform_workflow_sets_is_in_the_list() -> None:
+    missing = _assigned(TRANSFORM) - set(stages.TRANSFORM_STAGES) - {"starting"}
+    assert missing == set(), (
+        f"TransformWorkflow sets {sorted(missing)}, which "
+        "stages.TRANSFORM_STAGES does not name — the audit view cannot order or "
+        "translate them"
+    )
+
+
+def test_the_transform_list_names_no_stage_the_workflow_never_sets() -> None:
+    """The other direction, and it is the one that earned its place here.
+
+    `analysing` and `binding` were in this tuple and were removed, because each
+    named work happening *inside* another stage's single activity — detecting
+    the source genre inside `planning`, rendering the bibliography inside
+    `writing`. No transition could ever enter them, so they would have appeared
+    in the audit view as stages every run skipped, and the durations they
+    described would have been attributed to their neighbours.
+    """
+    unused = set(stages.TRANSFORM_STAGES) - _assigned(TRANSFORM)
+    assert unused == set(), (
+        f"stages.TRANSFORM_STAGES names {sorted(unused)}, which the workflow "
+        "never enters"
     )
 
 
@@ -151,6 +178,7 @@ def _every_stage() -> set[str]:
         | set(stages.EPUB_STAGES)
         | set(stages.CHANNEL_STAGES)
         | set(stages.AUDIO_STAGES)
+        | set(stages.TRANSFORM_STAGES)
     )
 
 

@@ -14,7 +14,8 @@
     "graph": "Grafo",
     "chat": "Conversación",
     "channel": "Canal",
-    "bucket": "Bucket"
+    "bucket": "Bucket",
+    "transform": "Reescribir"
   },
   "home": {
     "title": "Inicio",
@@ -1138,5 +1139,69 @@
     "probe": "Comprobar GPU o CPU",
     "probing": "Preguntando al binario…",
     "probeNeedsModel": "whisper.cpp nombra su dispositivo al cargar un modelo, así que descarga uno primero."
+  },
+  "transform": {
+    "title": "Reescribir un documento",
+    "intro": "Toma un documento que esta biblioteca ya tiene y vuelve a escribirlo como otro tipo de obra. El resto de la biblioteca puede consultarse como material de apoyo, y todo lo que aporte se cita.",
+    "document": "Documento",
+    "pickDocument": "Elige un documento…",
+    "genreLabel": "Como",
+    "modeLabel": "Con qué fidelidad",
+    "purposes": "Consultar el resto de la biblioteca para",
+    "purposesHint": "Solo se usan los propósitos que actives. Sin ninguno la biblioteca no se consulta, que es una opción legítima.",
+    "start": "Reescribir",
+    "runs": "Reescrituras",
+    "noRuns": "Todavía no se ha reescrito nada en esta biblioteca.",
+    "download": "Descargar",
+    "saved": "Guardado en {{path}}",
+    "option": {
+      "research": "Consultar la biblioteca",
+      "reviewPlan": "Enséñame el índice antes de escribirlo"
+    },
+    "gate": {
+      "title": "Antes de escribir nada",
+      "summary": "{{genre}}, {{mode}}, unos {{chapters}} capítulos a partir de {{characters}} caracteres de origen.",
+      "projection": "El número de capítulos es una proyección a partir de los capítulos del propio documento. El índice, y un presupuesto hecho sobre él, llegan en el paso siguiente.",
+      "research": "{{queries}} consultas, a partir de {{supported}} fragmentos de esta biblioteca lo bastante cercanos al documento como para valer la pena.",
+      "noResearch": "Nada más en esta biblioteca se acerca lo suficiente a este documento como para valer la pena, así que no se consultará nada.",
+      "approve": "Planificar la obra",
+      "cancel": "Cancelar"
+    },
+    "plan": {
+      "title": "El índice",
+      "summary": "{{count}} capítulos. Este es el primer presupuesto hecho sobre un índice real.",
+      "fallback": "Ningún índice propuesto pasó sus comprobaciones, así que se adoptaron los capítulos del propio documento. La obra sigue cubriéndolo entero.",
+      "uncovered": "El {{percent}}% del documento no está asignado a ningún capítulo.",
+      "research": "La escritura dispone de {{queries}} consultas a esta biblioteca.",
+      "spent": "Gastado hasta ahora: {{usd}} USD.",
+      "approve": "Escribirla"
+    },
+    "genre": {
+      "treatise": "tratado",
+      "essay": "ensayo",
+      "commentary": "comentario",
+      "study": "estudio",
+      "biography": "biografía",
+      "history": "historia",
+      "counsel": "consejo",
+      "novel": "novela",
+      "sermon": "sermón",
+      "lecture": "conferencia",
+      "chronicle": "crónica"
+    },
+    "mode": {
+      "faithful": "Fiel",
+      "adaptive": "Adaptativa"
+    },
+    "modeHint": {
+      "faithful": "conserva cada afirmación del documento y solo cambia su forma",
+      "adaptive": "puede reunir, condensar y desarrollar, pero sigue sin añadir nada que el documento no sostenga"
+    },
+    "purpose": {
+      "context": "Contexto que el documento da por sabido",
+      "verification": "Comprobar nombres, fechas y cifras",
+      "completion": "Completar lo que el documento deja sin desarrollar",
+      "contradiction": "Dónde otras obras discrepan"
+    }
   }
 }

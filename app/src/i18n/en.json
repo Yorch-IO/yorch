@@ -14,7 +14,8 @@
     "graph": "Graph",
     "chat": "Conversation",
     "channel": "Channel",
-    "bucket": "Bucket"
+    "bucket": "Bucket",
+    "transform": "Recast"
   },
   "home": {
     "title": "Home",
@@ -1138,5 +1139,69 @@
     "probe": "Check GPU or CPU",
     "probing": "Asking the binary…",
     "probeNeedsModel": "whisper.cpp names its device while loading a model, so download one first."
+  },
+  "transform": {
+    "title": "Recast a document",
+    "intro": "Take a document this library already holds and write it again as another kind of work. The rest of the library can be consulted as supporting material, and everything it contributes is cited.",
+    "document": "Document",
+    "pickDocument": "Choose a document…",
+    "genreLabel": "Into",
+    "modeLabel": "How faithfully",
+    "purposes": "Consult the rest of the library for",
+    "purposesHint": "Only the purposes you enable are used. With none enabled the library is not consulted at all, which is a legitimate choice.",
+    "start": "Recast",
+    "runs": "Recastings",
+    "noRuns": "Nothing has been recast in this library yet.",
+    "download": "Download",
+    "saved": "Saved to {{path}}",
+    "option": {
+      "research": "Consult the library",
+      "reviewPlan": "Show me the outline before writing it"
+    },
+    "gate": {
+      "title": "Before anything is written",
+      "summary": "{{genre}}, {{mode}}, about {{chapters}} chapters from {{characters}} characters of source.",
+      "projection": "The chapter count is a projection from the document's own chapters. The outline, and a quote made against it, come at the next step.",
+      "research": "{{queries}} queries, from {{supported}} fragments of this library close enough to the document to be worth asking about.",
+      "noResearch": "Nothing else in this library is close enough to this document to be worth asking about, so nothing will be consulted.",
+      "approve": "Plan the work",
+      "cancel": "Cancel"
+    },
+    "plan": {
+      "title": "The outline",
+      "summary": "{{count}} chapters. This is the first estimate made against a real outline.",
+      "fallback": "No proposed outline passed its checks, so the document's own chapters were adopted. The work still covers all of it.",
+      "uncovered": "{{percent}}% of the document is assigned to no chapter.",
+      "research": "{{queries}} queries of this library are available to the writing.",
+      "spent": "Spent so far: ${{usd}}.",
+      "approve": "Write it"
+    },
+    "genre": {
+      "treatise": "a treatise",
+      "essay": "an essay",
+      "commentary": "a commentary",
+      "study": "a study",
+      "biography": "a biography",
+      "history": "a history",
+      "counsel": "counsel",
+      "novel": "a novel",
+      "sermon": "a sermon",
+      "lecture": "a lecture",
+      "chronicle": "a chronicle"
+    },
+    "mode": {
+      "faithful": "Faithful",
+      "adaptive": "Adaptive"
+    },
+    "modeHint": {
+      "faithful": "keeps every claim the document makes, and changes only its shape",
+      "adaptive": "may gather, condense and develop, but still adds nothing the document does not support"
+    },
+    "purpose": {
+      "context": "Background the document assumes",
+      "verification": "Checking names, dates and figures",
+      "completion": "Filling what the document leaves undeveloped",
+      "contradiction": "Where other works disagree"
+    }
   }
 }

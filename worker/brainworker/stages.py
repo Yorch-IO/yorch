@@ -182,6 +182,35 @@ ACTIVATION_STAGES: tuple[str, ...] = ("activating",)
 #: spent months rendering under the trailing ``stage: null`` heading.
 EPUB_STAGES: tuple[str, ...] = ("epub", "done")
 
+#: Recasting a document into another literary genre.
+#:
+#: Two gates, which no other pipeline here has for this reason: the first quote
+#: is arithmetic over the source's own character and chapter counts — all that
+#: is knowable before a model has seen it — while the outline, and therefore the
+#: real chapter count, exists only after `planning`. So `awaiting_approval`
+#: buys the planning calls and `awaiting_plan_review` buys the composition,
+#: which is where essentially the whole bill is. The shape is
+#: `awaiting_correction_review`'s: look at what the expensive-to-undo step
+#: produced before paying for the next one.
+TRANSFORM_STAGES: tuple[str, ...] = (
+    "reading",
+    "probing",
+    "previewing",
+    "awaiting_approval",
+    "planning",
+    "awaiting_plan_review",
+    "composing",
+    "writing",
+    "done",
+)
+# `analysing` and `binding` were in this tuple and are not, and the reason is
+# worth keeping: both named work that happens *inside* another stage's single
+# activity — detecting the source genre inside `planning`, rendering the
+# bibliography inside `writing` — so no transition could ever enter them. A
+# stage in the trail that nothing can be in is not documentation, it is a
+# duration attributed to the wrong place, and this trail already has one of
+# those it could not fix.
+
 #: What a run can end as. Constrained in ``run_state_check``, which Prisma owns.
 #:
 #: ``blocked`` is a real outcome and not a failure: the run did every stage and
@@ -202,6 +231,19 @@ TERMINAL_OUTCOMES: frozenset[str] = frozenset(
 #: making explicitly: it is what lets the audit view render ``cost: null`` for
 #: a free stage rather than a zero somebody would read as "the charge was lost".
 COST_STAGES: dict[str, tuple[str, ...]] = {
+    #: Recasting a document. `probing` is four thousandths of a cent of query
+    #: embeddings and is here anyway: a stage that spends without a row is
+    #: exactly how the ledger came to be missing every question ever asked, and
+    #: `ask-embedding` was invisible for months by being too small to notice.
+    #: `composing` covers both halves of what a chapter costs — the query
+    #: embeddings its research makes and the call that writes it — because they
+    #: are charged separately and a reader of the ledger wants them apart.
+    "probing": ("transform-probe",),
+    #: Both halves of planning, because one activity makes both calls: the genre
+    #: analysis and the outline proposals. Splitting them across two workflow
+    #: stages would put a duration on a stage nothing can be in.
+    "planning": ("transform-genre", "transform-plan"),
+    "composing": ("transform-research", "transform-compose"),
     "learning": ("profile",),
     "correcting": ("correction",),
     "embedding": ("embedding",),
@@ -300,6 +342,15 @@ ARTIFACT_STAGES: dict[str, str] = {
     # Reading a channel.
     "preselection": "preselecting",
     "topics": "reading",
+    # Recasting a document. Four artifacts, four writers, no two of them the
+    # same stage — so no `ARTIFACT_STAGE_OVERRIDES` entry is needed for any of
+    # them, and `estimate` needs none either because this path's quoting stage
+    # is called `previewing`, which is the name this map already carries.
+    "transform_plan": "planning",
+    "transform_draft": "composing",
+    "transform_continuity": "composing",
+    "transform": "writing",
+    "transform_report": "writing",
 }
 
 
@@ -386,6 +437,7 @@ def as_json() -> str:
             "removal_stages": list(REMOVAL_STAGES),
             "activation_stages": list(ACTIVATION_STAGES),
             "epub_stages": list(EPUB_STAGES),
+            "transform_stages": list(TRANSFORM_STAGES),
             "channel_stages": list(CHANNEL_STAGES),
             "terminal_outcomes": sorted(TERMINAL_OUTCOMES),
             "cost_stages": {k: list(v) for k, v in COST_STAGES.items()},

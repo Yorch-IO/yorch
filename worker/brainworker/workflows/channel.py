@@ -48,7 +48,8 @@ with workflow.unsafe.imports_passed_through():
         TopicsOutcome,
         TopicsRequest,
     )
-    from ..pipeline import Estimate, RunOpen
+    from ..pipeline import Estimate
+    from .tracked import Tracked
     from .video import failure_of
 
 #: Reading a catalogue off the volume and pricing it. No provider call.
@@ -82,86 +83,10 @@ _RETRY = RetryPolicy(maximum_attempts=3)
 _PAID_RETRY = RetryPolicy(maximum_attempts=2)
 
 
-class _Tracked:
-    """The run trail, shared by both workflows.
-
-    The same shape `IngestWorkflow` and `VideoIngestWorkflow` use, and the same
-    two rules: `seq` is a counter on the workflow object and `at` is
-    `workflow.now()`, so a retried transition carries the number *and the
-    timestamp* it carried the first time and `ON CONFLICT (run_id, seq) DO
-    NOTHING` drops it. `now()` in SQL would move under a retry and silently
-    stretch the previous stage's measured duration.
-
-    Unlike those two there is no `_pending` buffer, because there is nothing to
-    buffer: the run row is opened by the first activity these workflows run, so
-    no event can precede it. `_insert_event` derives its tenant from the run row
-    and silently drops an event written before it exists, which is what the
-    buffer in the other two is for.
-    """
-
-    def __init__(self) -> None:
-        self._stage = "starting"
-        self._seq = 0
-
-    @workflow.query
-    def stage(self) -> str:
-        return self._stage
-
-    async def _open(self, run_id: str, *, tenant_id: str, library_id: str, label: str) -> None:
-        await workflow.execute_activity(
-            act.open_run,
-            RunOpen(
-                run_id=run_id,
-                workflow_id=workflow.info().workflow_id,
-                kind="channel",
-                tenant_id=tenant_id,
-                library_id=library_id,
-                label=label,
-            ),
-            start_to_close_timeout=WRITE_TIMEOUT,
-            retry_policy=_RETRY,
-        )
-
-    async def _enter(
-        self, run_id: str, stage: str, state: str = "running", detail: str | None = None
-    ) -> None:
-        self._stage = stage
-        self._seq += 1
-        await workflow.execute_activity(
-            act.set_run_stage,
-            args=[run_id, stage, state, self._seq, workflow.now(), detail],
-            start_to_close_timeout=WRITE_TIMEOUT,
-            retry_policy=_RETRY,
-        )
-
-    async def _finish(
-        self,
-        run_id: str,
-        state: str,
-        error_kind: str | None = None,
-        error_detail: str | None = None,
-    ) -> None:
-        self._seq += 1
-        await workflow.execute_activity(
-            act.record_run_outcome,
-            args=[
-                run_id, state, error_kind, error_detail,
-                self._seq, workflow.now(), self._stage,
-            ],
-            start_to_close_timeout=WRITE_TIMEOUT,
-            retry_policy=_RETRY,
-        )
-
-    async def _record_failure(self, run_id: str, error: ActivityError) -> None:
-        kind, detail = failure_of(error)
-        try:
-            await self._finish(run_id, "failed", kind, detail[:2000])
-        except Exception:  # noqa: BLE001
-            workflow.logger.warning("could not record run failure for %s", run_id)
-
-
 @workflow.defn(name="ChannelDiscoverWorkflow")
-class ChannelDiscoverWorkflow(_Tracked):
+class ChannelDiscoverWorkflow(Tracked):
+    kind = "channel"
+
     """Quote both passes, then judge the channel's metadata.
 
     The quote covers the transcript pass as well as this one, because that is
@@ -216,7 +141,9 @@ class ChannelDiscoverWorkflow(_Tracked):
 
 
 @workflow.defn(name="ChannelTopicsWorkflow")
-class ChannelTopicsWorkflow(_Tracked):
+class ChannelTopicsWorkflow(Tracked):
+    kind = "channel"
+
     """Read the uncorrected transcripts of videos that have already probed."""
 
     @workflow.run

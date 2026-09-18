@@ -38,6 +38,8 @@ use control::{
     RunEventPage, RunListPage, SectionChunks,
     RunState, StageOptions, StagedSource, StartedRun, VersionConcepts, VersionStatistics,
     VideoGateReport, VideoRequest,
+    TransformApproval, TransformGateReport, TransformOptions, TransformPlanReport,
+    TransformRequest, TransformVocabulary,
     BucketDetail, BucketForgotten, BucketList, BucketProbeResult, BucketRegistered, BucketSource,
     MediaLink, TranscriberSwitched, TranscriptUploaded,
 };
@@ -742,6 +744,59 @@ async fn video_start(
     control
         .start_video(&request, &options.unwrap_or_default())
         .await
+}
+
+/// The genres, modes and research purposes a transformation may use.
+///
+/// Fetched rather than compiled in, so a genre added on the worker reaches the
+/// picker without a client release.
+#[tauri::command]
+async fn genres(state: State<'_, AppState>) -> Result<TransformVocabulary> {
+    let control = state.control().await?;
+    control.genres().await
+}
+
+#[tauri::command]
+async fn start_transform(
+    state: State<'_, AppState>,
+    request: TransformRequest,
+    options: TransformOptions,
+) -> Result<StartedRun> {
+    let control = state.control().await?;
+    control.start_transform(&request, &options).await
+}
+
+/// A transformation's first gate. `None` while the document is still being
+/// read, which is the ordinary first answer and not a failure.
+#[tauri::command]
+async fn transform_gate(
+    state: State<'_, AppState>,
+    workflow_id: String,
+) -> Result<Option<TransformGateReport>> {
+    let control = state.control().await?;
+    control.transform_gate(&workflow_id).await
+}
+
+/// Its second gate: the outline, and the quote made against it. A separate
+/// command because it is a separate report — see `control.rs` for what sharing
+/// one cost the ingest path.
+#[tauri::command]
+async fn transform_plan(
+    state: State<'_, AppState>,
+    workflow_id: String,
+) -> Result<Option<TransformPlanReport>> {
+    let control = state.control().await?;
+    control.transform_plan(&workflow_id).await
+}
+
+#[tauri::command]
+async fn approve_transform(
+    state: State<'_, AppState>,
+    workflow_id: String,
+    approval: TransformApproval,
+) -> Result<()> {
+    let control = state.control().await?;
+    control.approve_transform(&workflow_id, &approval).await
 }
 
 /// A video run's gate. `None` while the probe is still running, which is the
@@ -1757,6 +1812,11 @@ pub fn run() {
             ingest_gate,
             video_start,
             video_gate,
+            genres,
+            start_transform,
+            transform_gate,
+            transform_plan,
+            approve_transform,
             run_status,
             cancel_run,
             ingest_approve,

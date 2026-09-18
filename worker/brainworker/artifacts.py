@@ -117,6 +117,29 @@ KINDS: dict[str, str] = {
     #: and it carries the quotations the code verified rather than only a count.
     "preselection": "preselection.json",
     "topics": "topics.json",
+    #: Recasting a document into another genre.
+    #:
+    #: `transform_draft` is rewritten whole by every composing activity — the
+    #: store has no append primitive and `KINDS` is a fixed filename map, so a
+    #: file per chapter does not fit — and `write_bytes` writes a sibling and
+    #: renames, so a killed activity leaves the previous complete file. One
+    #: consequence to know: each rewrite changes the ref's sha256, so only the
+    #: latest `ArtifactRef` may be held, and the hash is what makes a stale one
+    #: detectable rather than silently wrong.
+    #:
+    #: `transform_continuity` is what one chapter hands the next, and it is an
+    #: artifact rather than a Temporal payload because it carries `tail` — the
+    #: previous chapter's last words, verbatim, which is customer prose, and
+    #: `pipeline.py`'s own first rule is that none of that may be persisted in
+    #: workflow history for the namespace's whole retention period.
+    #:
+    #: `transform` is the second artifact whose whole purpose is to be read by a
+    #: person, which is why it joins `epub` in `DOWNLOADABLE`.
+    "transform_plan": "plan.json",
+    "transform_draft": "draft.jsonl",
+    "transform_continuity": "continuity.jsonl",
+    "transform_report": "transform-report.json",
+    "transform": "transformed.md",
 }
 
 TEXT_ENCODING = "utf-8"

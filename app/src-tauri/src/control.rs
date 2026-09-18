@@ -1464,6 +1464,149 @@ fn default_effort() -> String {
     "standard".to_string()
 }
 
+// -- recasting a document into another genre --------------------------------
+//
+// Paid plane only. The local plane serves none of these paths, and a call in
+// local mode answers with the 404 the proxy already turns into
+// `control_status` — the same position the bucket paths are in, and recorded
+// for the same reason in `doc/TRANSFORM.md`.
+
+/// One document to recast, and into what.
+///
+/// Renamed on the deserialize side, like `StageOptions` and `Approval`: it
+/// travels webview → plane, so the webview writes camelCase and this serialises
+/// the snake_case both planes read. `tenantId` is deliberately absent — the
+/// plane stamps it from the authenticated session, and a body carrying one is
+/// refused outright by `forbidNonWhitelisted`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct TransformRequest {
+    pub library_id: String,
+    pub document_id: String,
+    pub version_id: String,
+    /// One of the eleven. Validated by the plane with its own `Literal`/`@IsIn`,
+    /// so an unknown one comes back as a 422 with a list rather than as a
+    /// hand-raised kind — the decision `Question.effort` already records.
+    pub genre: String,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub purposes: Vec<String>,
+    #[serde(default)]
+    pub auto_approve: bool,
+    #[serde(default)]
+    pub label: String,
+}
+
+/// Which of the two gates this run stops at, and whether it researches.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct TransformOptions {
+    #[serde(default = "default_true")]
+    pub review_plan: bool,
+    #[serde(default = "default_true")]
+    pub research: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The answer to either gate.
+///
+/// `options` is an `Option`, and `None` is not the same as a defaulted one: the
+/// plane omits the key entirely when it is absent, and the workflow then keeps
+/// the options the run was started with. Sending a defaulted object instead
+/// would turn research back on for a run started with it off — which is the
+/// recorded Angular gate defect, where every stage a person unticked before
+/// pressing Import was silently turned back on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub struct TransformApproval {
+    pub approved: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<TransformOptions>,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// The eleven genres, the two modes and the four research purposes.
+///
+/// Served rather than compiled in, so a genre added on the worker reaches the
+/// picker without a client release.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct TransformVocabulary {
+    pub genres: Vec<String>,
+    pub modes: Vec<String>,
+    pub default_mode: String,
+    pub purposes: Vec<String>,
+}
+
+/// A transformation's **first** gate: a quote from what is knowable for free.
+///
+/// `projection` is `true` and says so on the screen: the chapter count here is
+/// arithmetic over the source's own chapters, not an outline. The second gate
+/// carries the real one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct TransformGateReport {
+    pub genre: String,
+    pub mode: String,
+    #[serde(default)]
+    pub purposes: Vec<String>,
+    #[serde(default)]
+    pub source_title: String,
+    pub source_chapters: usize,
+    pub characters: usize,
+    pub projected_chapters: usize,
+    pub research_budget: usize,
+    pub supported: usize,
+    #[serde(default)]
+    pub projection: bool,
+    #[serde(default)]
+    pub estimate: Option<Estimate>,
+}
+
+/// One chapter of the planned work, and the source material it is made from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ChapterPlan {
+    pub ordinal: usize,
+    pub title: String,
+    #[serde(default)]
+    pub intent: String,
+    #[serde(default)]
+    pub chars: usize,
+}
+
+/// A transformation's **second** gate: the outline, and the first quote anybody
+/// should act on.
+///
+/// Its own type and its own route, never the first report reassigned. In
+/// `IngestWorkflow` the one report is assigned before the first gate and never
+/// cleared, so its second gate serves the first one's preview — a reader was
+/// shown "Nothing has been paid for yet" over a run that had spent $0.58.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct TransformPlanReport {
+    pub genre: String,
+    pub mode: String,
+    #[serde(default)]
+    pub chapters: Vec<ChapterPlan>,
+    #[serde(default)]
+    pub uncovered_fraction: f64,
+    pub research_budget: usize,
+    #[serde(default)]
+    pub fallback: bool,
+    #[serde(default)]
+    pub notes: Vec<String>,
+    #[serde(default)]
+    pub spent_so_far: Option<f64>,
+    #[serde(default)]
+    pub estimate: Option<Estimate>,
+}
+
 // -- conversations ----------------------------------------------------------
 //
 // A conversation's transcript comes from the catalog rather than from Temporal,
@@ -3067,6 +3210,80 @@ impl Control {
 
     /// Which libraries exist. Free, and the first call every screen needs: a
     /// library id is not something a person can be expected to type.
+    // -- recasting a document -----------------------------------------------
+
+    /// The genres, modes and purposes a picker draws. Paid plane only.
+    pub async fn genres(&self) -> Result<TransformVocabulary> {
+        self.get("/genres", HEALTH_TIMEOUT).await
+    }
+
+    pub async fn start_transform(
+        &self,
+        request: &TransformRequest,
+        options: &TransformOptions,
+    ) -> Result<StartedRun> {
+        self.post_json(
+            "/transform",
+            &serde_json::json!({ "request": request, "options": options }),
+            START_TIMEOUT,
+        )
+        .await
+    }
+
+    /// The first gate, or `Ok(None)` while the document is still being read.
+    ///
+    /// 409 is "not yet", the same convention every other gate here uses: the run
+    /// exists and is simply not there, and a screen polling this must read it as
+    /// keep-waiting rather than as failed.
+    pub async fn transform_gate(&self, workflow_id: &str) -> Result<Option<TransformGateReport>> {
+        match self
+            .get::<TransformGateReport>(
+                &format!("/runs/{workflow_id}/transform-gate"),
+                HEALTH_TIMEOUT,
+            )
+            .await
+        {
+            Ok(report) => Ok(Some(report)),
+            Err(AppError::ControlStatus { status: 409, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The second gate, or `Ok(None)` while the outline is still being planned.
+    pub async fn transform_plan(&self, workflow_id: &str) -> Result<Option<TransformPlanReport>> {
+        match self
+            .get::<TransformPlanReport>(
+                &format!("/runs/{workflow_id}/transform-plan"),
+                HEALTH_TIMEOUT,
+            )
+            .await
+        {
+            Ok(report) => Ok(Some(report)),
+            Err(AppError::ControlStatus { status: 409, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Answer either gate.
+    ///
+    /// Its own route rather than `/approve`, because the payloads are different
+    /// types: a transformation's options are not stage switches, and the shared
+    /// route's DTO would refuse them outright.
+    pub async fn approve_transform(
+        &self,
+        workflow_id: &str,
+        approval: &TransformApproval,
+    ) -> Result<()> {
+        let _: serde_json::Value = self
+            .post_json(
+                &format!("/runs/{workflow_id}/transform-approve"),
+                approval,
+                START_TIMEOUT,
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn answer_styles(&self) -> Result<AnswerStyles> {
         self.get("/answer-styles", HEALTH_TIMEOUT).await
     }

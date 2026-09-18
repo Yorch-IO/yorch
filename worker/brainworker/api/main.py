@@ -2354,7 +2354,19 @@ async def rebuild_document(library_id: str, document_id: str) -> dict[str, Any]:
 #: off the machine can route to it. A generic `/artifacts/{name}` would make that
 #: the only thing standing between a misconfigured port and the whole corpus, and
 #: it would do it for a feature that needs exactly one file.
-DOWNLOADABLE = {"epub": "application/epub+zip"}
+#:
+#: `transform` is the second kind to earn a place, and for the same reason: it is
+#: the whole product of its run and the only thing a person wants out of it.
+#: **This plane serves no route that can start such a run** — recasting a
+#: document is the paid plane's, by decision, recorded in `doc/TRANSFORM.md` —
+#: so the only way an artifact of this kind exists here is a workflow somebody
+#: started through Temporal by hand. It is in the allowlist anyway because the
+#: allowlist is forked, and a kind added on one side and not the other is how the
+#: two planes come to answer the same request differently.
+DOWNLOADABLE = {
+    "epub": "application/epub+zip",
+    "transform": "text/markdown; charset=utf-8",
+}
 
 
 def _content_disposition(filename: str) -> str:

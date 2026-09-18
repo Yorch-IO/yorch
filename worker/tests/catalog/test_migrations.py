@@ -47,6 +47,7 @@ def test_applying_every_migration_creates_every_table(database_url: str):
         "20260916180000_run_kind_audio",
         "20260916180100_document_dates",
         "20260917100000_run_state_transcript",
+        "20260918120000_run_kind_transform",
     ]
     assert {
         "library",
@@ -116,6 +117,7 @@ def test_require_schema_accepts_a_catalog_ahead_of_the_code(database_url: str):
         "20260916120000_run_kind_channel",
         "20260916180000_run_kind_audio",
         "20260916180100_document_dates",
+        "20260917100000_run_state_transcript",
         m.REQUIRED_MIGRATION,
     ]
 

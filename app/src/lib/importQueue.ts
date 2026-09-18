@@ -140,8 +140,16 @@ export function useImportQueue(libraryFilter: string | null) {
         // A bucket recording publishes the same report a video does, on its
         // own route; the queue renders both through `VideoGateReview`.
         const isVideo = run.kind === "video" || run.kind === "audio";
+        // A transformation has **two** gates on two routes returning two types,
+        // and this queue's `onDecide` is typed on `StageOptions` — which a
+        // transformation's switches are not. Its row belongs here, so that work
+        // started from the Transform screen is visible on the screen whose job
+        // is showing what is in flight; its panels belong on the screen that
+        // started it. Asking for a gate it cannot render would be one 404 per
+        // poll for nothing.
+        const elsewhere = run.kind === "transform";
         let cached = gates.current.get(run.workflowId) ?? null;
-        if (cached === null && waiting(run)) {
+        if (cached === null && waiting(run) && !elsewhere) {
           try {
             cached =
               run.kind === "audio"

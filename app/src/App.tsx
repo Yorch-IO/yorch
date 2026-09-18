@@ -12,6 +12,7 @@ import { AskScreen } from "./screens/AskScreen";
 import { BucketScreen } from "./screens/BucketScreen";
 import { ChannelScreen } from "./screens/ChannelScreen";
 import { ChatScreen } from "./screens/ChatScreen";
+import { TransformScreen } from "./screens/TransformScreen";
 import { ImportScreen } from "./screens/ImportScreen";
 import { ExploreScreen } from "./screens/ExploreScreen";
 import { HomeScreen } from "./screens/HomeScreen";
@@ -35,6 +36,7 @@ const TABS = [
   "bucket",
   "ask",
   "chat",
+  "transform",
 ] as const;
 export type Tab = (typeof TABS)[number];
 
@@ -61,6 +63,7 @@ const SCREENS: Record<
   bucket: BucketScreen,
   ask: AskScreen,
   chat: ChatScreen,
+  transform: TransformScreen,
 };
 
 /** Home and Services are the two screens that own no library. Services is what
@@ -82,6 +85,7 @@ const NEEDS_LIBRARY: ReadonlySet<Tab> = new Set<Tab>([
   "import",
   "ask",
   "chat",
+  "transform",
 ]);
 
 /** The provider has to sit above what it invalidates, and `App` is what reads

@@ -538,8 +538,10 @@ fn hex(bytes: &[u8]) -> String {
 ///
 /// **Measured, after a minute turned out to be too short.** On this machine —
 /// RTX 4060, CUDA 12.4, the 1.6 GB default model — the line arrives **38.7 s**
-/// after the process starts: a CUDA context and 1.6 GB into VRAM, most of it
-/// before whisper.cpp says anything at all. The first version of this constant
+/// after the process starts on a *cold* page cache: a CUDA context and 1.6 GB
+/// read from disk, most of it before whisper.cpp says anything at all. Warm,
+/// the same load is **0.5 s**, which is why a transcription right after this
+/// probe looks so much faster than the probe itself. The first version of this constant
 /// was 60 s on the reasoning that a model load is "about a second from the
 /// page cache", which was true of the CPU build and wrong of the one people
 /// will actually ship. Three minutes leaves room for a cold disk and a larger

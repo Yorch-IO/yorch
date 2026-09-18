@@ -303,6 +303,21 @@ The middle layer exists because a genre prompt is exactly the prose that would
 otherwise read as permission to embellish — "render as lived experience",
 "urgency without alarm" — and none of them says so on its own.
 
+**A reference is written, not spelled out.** Reported from a real recast: the
+sermon expanded «Juan 10:10» into «abran sus Biblias en el Evangelio según San
+Juan, en el capítulo diez, versículo diez». The genre invites exactly that — the
+whole point of a sermon is that it is *said* — and it is still wrong twice over:
+a spoken reference a hearer cannot write down is one they cannot check, and the
+text this produces is also **read**, where a locator in figures is what somebody
+searches for and a chapter and a verse in words is findable by nobody.
+
+`sermon/2` carries the rule, with the failure quoted in it so the model sees
+both sides, and with three non-scriptural locators beside the example —
+`art. 14.2`, `s. 3(1)(b)`, `Fig. 4` — because the brief is explicit that Sermon
+must not implicitly mean religious. **`lecture` has the same shape and has not
+been changed**: its conventions say references are "spoken aloud in the ordinary
+way", which will produce the same expansion, and nobody has reported it.
+
 **Novel and Sermon carry an extra clause each**, and the tension in Novel is real
 and named rather than smoothed: the licence is over *presentation* — staging,
 order, pacing, the rhythm of a recorded conversation — and never over *fact*. A

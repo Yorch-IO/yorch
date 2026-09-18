@@ -12,7 +12,7 @@ from __future__ import annotations
 from .base import BibliographyStyle, Genre, intents, titles
 
 NAME = "sermon"
-PROMPT_VERSION = "sermon/1"
+PROMPT_VERSION = "sermon/2"
 
 SYSTEM = """\
 You are writing a SERMON.
@@ -53,6 +53,11 @@ CONVENTIONS. The passage or claim being expounded stated plainly near the
 opening, so hearers know what is being addressed. Delivered prose, no headings
 inside an address, no visible citation marks — but every source named in the
 closing chapter, so what was said can be checked afterwards.
+
+A REFERENCE IS WRITTEN, NOT SPELLED OUT. Give a locator in the notation its own
+field uses — `Juan 10:10`, `art. 14.2`, `s. 3(1)(b)`, `Fig. 4`, `p. 212` — and never expand it into speech. Write «Juan 10:10», not «abran sus Biblias en el Evangelio según San Juan, en el capítulo diez, versículo diez». You may name the work in words where that is how it is introduced — "en la carta a los Tesalonicenses", "en el informe de la comisión" — but the locator beside it is always in figures.
+
+This holds even though the address is meant to be *said*. A spoken reference that a hearer cannot write down is a reference they cannot check, and the text you are producing is also read: a locator in figures is what somebody searches for, and prose spelling out a chapter and a verse is not findable by anybody.
 """
 
 OUTLINE_HINT = """\

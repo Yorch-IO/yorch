@@ -26,6 +26,7 @@ from brainworker.bucketstore import BucketStore
 from brainworker.pipeline import (
     AudioRequest,
     AudioStaged,
+    LocalTranscript,
     BucketObject,
     BucketSource,
     BucketSyncRequest,
@@ -571,3 +572,66 @@ def test_the_correction_reaches_the_bucket_with_its_times_and_its_report(
     assert fake.objects[fake.puts[1]].decode().startswith("Primer párrafo.")
     told = json.loads(fake.objects[fake.puts[2]])
     assert told["report"]["rejected"][0]["reason"] == "proper_noun"
+
+
+# --- the transcript has to be of the recording, not of itself ----------------
+
+
+def _transcript(cues: list[tuple[int, int, str]]) -> bytes:
+    return json.dumps({"transcription": [
+        {"offsets": {"from": d, "to": h}, "text": t} for d, h, t in cues]}).encode()
+
+
+def _inbox(workspace: pathlib.Path, data: bytes) -> pathlib.Path:
+    inbox = workspace / "tenants" / TNT / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    path = inbox / "subida.transcript.json"
+    path.write_bytes(data)
+    return path
+
+
+def test_a_transcript_that_latched_is_refused_before_anything_is_paid_for(workspace):
+    """The shape of the two that reached production before anybody measured.
+
+    `whisper.cpp` feeds the text it has produced into the next window, so once
+    it repeats a line it reads that back and emits it until the audio ends. The
+    document is valid, the size is ordinary and the process exits 0 — and the
+    run that accepts it goes on to pay for correction and semantics over
+    fabricated text. The real one repeated «¿Alguien más quiere orar conmigo?»
+    **167 times** across the closing three minutes, replacing the altar call.
+    """
+    cues = [(i * 2000, i * 2000 + 2000, f"frase {i}") for i in range(20)]
+    cues += [(40_000 + i * 1000, 41_000 + i * 1000, "¿Alguien más quiere orar conmigo?")
+             for i in range(167)]
+    path = _inbox(workspace, _transcript(cues))
+
+    with pytest.raises(ApplicationError) as refusal:
+        asyncio.run(bkt.stage_transcript(
+            "audio-1", LocalTranscript(path=str(path), engine="whisper.cpp",
+                                       model="large-v3-turbo", language="es"),
+            TNT, "ver_a"))
+    assert refusal.value.type == "transcript_loops"
+    assert "167 veces" in str(refusal.value)
+    # The remedy is in the refusal, because the person reading it is the one
+    # who can apply it.
+    assert "-mc 0" in str(refusal.value)
+    assert not path.exists(), "the inbox is cleared whichever way it goes"
+
+
+def test_a_preacher_who_repeats_a_line_is_not_a_latch(workspace):
+    """Eleven of the thirteen reach a run of up to 7 and are perfectly good.
+
+    A threshold that refused those would refuse the corpus, which is why the
+    numbers come from the measurement and not from taste.
+    """
+    cues = [(i * 2000, i * 2000 + 2000, f"frase {i}") for i in range(60)]
+    for i in range(7):                      # the healthiest corpus's worst run
+        cues[20 + i] = (cues[20 + i][0], cues[20 + i][1], "gloria a Dios")
+    path = _inbox(workspace, _transcript(cues))
+
+    ref = asyncio.run(bkt.stage_transcript(
+        "audio-2", LocalTranscript(path=str(path), engine="whisper.cpp",
+                                   model="large-v3-turbo", language="es"),
+        TNT, "ver_a"))
+    assert ref.kind == "transcription_result"
+    assert not path.exists()

@@ -236,6 +236,61 @@ def transcript_engine(payload: dict) -> str:
     raise TranscriptError("not a transcript document this reader knows")
 
 
+@dataclass(frozen=True)
+class Repetition:
+    """How much of a transcript is one phrase said over and over.
+
+    A transcript can be a perfectly valid document and still be worthless:
+    the decoder repeats a line and emits it until the audio ends. Nothing
+    fails — the JSON parses, the file is the usual size, the process exits 0 —
+    so the only way to see it is to measure it.
+
+    Two numbers because they catch different shapes. `longest_run` catches a
+    latch at the end of a recording, which is where it usually happens and
+    which can be a small fraction of the duration. `fraction` catches a
+    transcript that is mostly loop, where the run may be broken up.
+    """
+
+    cues: int
+    longest_run: int
+    #: Of the transcript's own span, how much sits inside a run of two or more
+    #: identical cues.
+    fraction: float
+    #: The text of the longest run, so a refusal can say what it was repeating.
+    text: str
+
+
+def repetition(cues: list[Cue]) -> Repetition:
+    """Measure a transcript's repetition. Judges nothing; the caller decides.
+
+    Identical *consecutive* text only. That is deliberately narrow: it is what
+    a decoder latch produces, and it does not fire on a preacher who really
+    does repeat a line twice. What it cannot see is a loop with small
+    variations, and anything relying on this should know that.
+    """
+    rows = [(c.start_s, c.end_s, c.text.strip()) for c in cues]
+    if not rows:
+        return Repetition(0, 0, 0.0, "")
+    span = max(end for _, end, _ in rows) - min(start for start, _, _ in rows)
+    longest, inside, best_text, i = 1, 0.0, "", 0
+    while i < len(rows):
+        j = i
+        while j + 1 < len(rows) and rows[j + 1][2] == rows[i][2]:
+            j += 1
+        run = j - i + 1
+        if run >= 2:
+            inside += rows[j][1] - rows[i][0]
+            if run > longest:
+                longest, best_text = run, rows[i][2]
+        i = j + 1
+    return Repetition(
+        cues=len(rows),
+        longest_run=longest,
+        fraction=(inside / span) if span > 0 else 0.0,
+        text=best_text,
+    )
+
+
 def parse_any(payload: dict) -> list[Cue]:
     """Cues from either engine's document, dispatched on its shape."""
     engine = transcript_engine(payload)

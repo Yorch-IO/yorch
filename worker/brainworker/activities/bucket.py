@@ -407,6 +407,21 @@ def _probe(source, request: AudioRequest) -> BucketObject:
     return s3source.describe(obj, source)
 
 
+#: When a transcript is a loop rather than a transcription.
+#:
+#: Measured on this corpus, thirteen sermons of 38 to 89 minutes transcribed
+#: with `large-v3-turbo`: the eleven healthy ones reach a longest identical run
+#: of **7** and 2.1% of their duration inside repetitions; the two damaged ones
+#: start at **51** and 4.6%. The gap is wide, so these are not a matter of
+#: taste — and they are the same numbers the standalone auditor uses.
+#:
+#: The fraction is the second net, for a transcript that is mostly loop with
+#: the runs broken up; neither catches a loop that varies slightly, and nothing
+#: here should be read as saying otherwise.
+LOOP_RUN = 30
+LOOP_FRACTION = 0.25
+
+
 # --- archive: the transcript already in the customer's bucket -----------------
 
 
@@ -692,6 +707,23 @@ async def stage_transcript(
     artifact the grouper reads, because a grouper handed a stray file would
     fail three activities later with a message about cues.
 
+    **And it has to be a transcript of the recording, not of itself.** A
+    decoder that repeats a line and emits it until the audio ends produces a
+    valid document of the usual size, and the process that made it exits 0:
+    measured on this corpus, two of thirteen recordings arrived that way and
+    were indexed, chunked, embedded and answerable before anybody looked. One
+    of them had its closing three minutes — the altar call — replaced by a
+    single phrase said 167 times, so the loop does not add noise on top of
+    speech, it takes speech away. `repetition` is the measurement and the
+    thresholds below are where this corpus splits: healthy transcripts reach a
+    run of 7, damaged ones start at 51.
+
+    Refusing rather than warning, and that is a decision about *cost*. A
+    warning is what did not exist here, and the alternative to refusing is
+    paying for correction and semantics over fabricated text and then having
+    to find it in the index. Re-transcribing costs nothing but the machine's
+    time, so the cheap side of the trade is to send it back.
+
     Idempotent under a retry in the way `stage_audio` is: the artifact is
     keyed on the run, and the inbox file is deleted whether or not the write
     landed, because a retry is told the app has to send it again rather than
@@ -713,12 +745,28 @@ async def stage_transcript(
         with contextlib.suppress(OSError):
             os.unlink(path)
     try:
-        dt.transcript_engine(json.loads(data))
+        payload = json.loads(data)
+        dt.transcript_engine(payload)
+        cues = dt.parse_any(payload)
     except (ValueError, dt.TranscriptError) as e:
         raise _fail(
             "transcript_unreadable",
             f"lo subido no es un documento de transcripción que se sepa leer: {e}",
         ) from e
+
+    loop = dt.repetition(cues)
+    if loop.longest_run >= LOOP_RUN or loop.fraction >= LOOP_FRACTION:
+        raise _fail(
+            "transcript_loops",
+            f"la transcripción repite «{loop.text[:60]}» {loop.longest_run} veces "
+            f"seguidas y {loop.fraction:.0%} de su duración está dentro de "
+            f"repeticiones: el decodificador se enganchó y el texto no es el del "
+            f"audio. Vuelve a transcribirla limitando el contexto (-mc 0).",
+        )
+    activity.logger.info(
+        "transcript for %s: %d cues, longest run %d, %.1f%% repeated",
+        run_id, loop.cues, loop.longest_run, 100 * loop.fraction,
+    )
     store = ArtifactStore(settings.workspace, run_id)
     return _record(run_id, "transcription_result",
                    store.write_bytes("transcription_result", data))

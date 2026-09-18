@@ -3179,6 +3179,37 @@ session's files.
 
 ## Defects that were recorded here and are now fixed
 
+- **A transcript can be a valid document and not be a transcription of the
+  recording, and nothing in this product could see it.** whisper.cpp's
+  `--max-context` defaults to -1, feeding every word already produced into the
+  next window as a prompt; once the model repeats a phrase it reads that back
+  and emits it until the audio ends. The JSON parses, the size is ordinary, the
+  process exits 0. Measured 2026-09-18 over the thirteen recordings this
+  installation had indexed: **two of them** were loops, one replacing its
+  closing 2.9 minutes — the altar call — with a single phrase said **167**
+  times. Both had been chunked, embedded, answered from and archived into the
+  customer's bucket first.
+  The measurement is what settles the fix, because the obvious reading is
+  wrong: the damaged transcript had *657 more words* than the clean one and
+  **56 fewer distinct** ones. The loop does not add noise on top of speech, it
+  takes speech away — so this was not a cosmetic defect in text nobody reads,
+  it was missing content in an index people query. `-mc 0` collapses the
+  longest run from 167 to 3 and recovers 126 distinct words across the corpus,
+  all of them in the two damaged recordings.
+  Two changes, and the second is the one that matters for the next engine:
+  `whisper.rs::run_cli` passes the flag, and `stage_transcript` **refuses** a
+  transcript whose longest identical run reaches `LOOP_RUN = 30` — the boundary
+  every transcript crosses, whoever produced it. Refusing rather than warning
+  is a cost argument: re-transcribing is free, accepting buys correction and
+  semantics over fabricated text. The thresholds are where this corpus splits
+  (healthy ≤ 7, damaged ≥ 51), not where taste put them, and `--vad` is
+  deliberately unused — it fixes the loop too but merges 1,013 segments into
+  748, and a segment's start is what a citation points at.
+  **The general lesson is the one this file keeps relearning**: every check in
+  the path was a check of *form* — `count_segments` counts, `transcript_engine`
+  matches a shape — and a form check cannot see a document that is well-formed
+  and false. See `doc/BUCKET.md`.
+
 Kept because each fix carries a rule worth not relearning. The heading used to
 count them and the count was already wrong — nine entries under "Eight" — which
 is a small demonstration of the rule this file keeps applying to code: a number

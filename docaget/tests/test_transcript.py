@@ -348,3 +348,32 @@ def test_the_engine_is_read_off_the_shape_and_neither_is_refused():
         transcript_engine({"hello": "world"})
     with pytest.raises(TranscriptError):
         transcript_engine([])
+
+
+def test_repetition_measures_a_latch_and_not_a_preacher_repeating_himself():
+    """Identical *consecutive* cues, which is what a decoder latch produces.
+
+    Deliberately narrow: a speaker who really says a line twice must not be
+    reported as a loop, and the measurement must not try to guess intent. What
+    it cannot see is a loop with small variations between repeats.
+    """
+    from docagent.transcript import Cue, repetition
+
+    sano = [Cue(start_s=i * 2, end_s=i * 2 + 2, text=f"frase {i}") for i in range(10)]
+    sano[4] = Cue(start_s=8, end_s=10, text="frase 3")  # dicha dos veces de verdad
+    medida = repetition(sano)
+    assert medida.longest_run == 2
+    assert medida.fraction < 0.25
+
+    # Un enganche al final: la misma línea hasta que se acaba el audio.
+    enganchado = sano[:6] + [
+        Cue(start_s=12 + i, end_s=13 + i, text="¿Alguien más quiere orar conmigo?")
+        for i in range(40)
+    ]
+    medida = repetition(enganchado)
+    assert medida.longest_run == 40
+    assert medida.text == "¿Alguien más quiere orar conmigo?"
+    assert medida.fraction > 0.5
+
+    vacio = repetition([])
+    assert vacio.longest_run == 0 and vacio.fraction == 0.0

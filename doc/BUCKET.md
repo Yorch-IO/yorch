@@ -261,6 +261,43 @@ build takes **38.7 s** to reach that line, most of it a CUDA context and
 1.6 GB into VRAM. The 60 s version failed against the real binary the first
 time it was run.
 
+**The decoder must not read its own transcript back to itself, and finding
+that out cost two recordings.** whisper.cpp's `--max-context` defaults to -1:
+every word already produced is fed into the next window as a prompt. Once the
+model repeats a phrase it reads that repetition back and latches on, emitting
+the same line until the audio ends. **Nothing fails** — the JSON is valid, the
+size is ordinary, the process exits 0 — so it is invisible to every check this
+product had.
+
+Measured 2026-09-18 over the thirteen recordings already indexed, each
+re-transcribed with and without `-mc 0`, `large-v3-turbo` on an RTX 4060:
+
+| | longest identical run | damaged of thirteen | distinct words |
+|---|---|---|---|
+| default | up to **167** | **2** | 22,073 |
+| `-mc 0` | at most **3** | **0** | **22,199** |
+
+Read the last column first. On the worst recording the default produced *657
+more words and 56 fewer distinct ones*: in the closing 2.9 minutes it emitted
+one phrase 167 times where `-mc 0` finds 44 segments of 43 different lines —
+the altar call. **The loop does not pile junk on top of speech, it replaces
+it.** Both damaged recordings had been indexed, chunked, embedded, answered
+from, and one had its corrected text archived into the customer's bucket before
+anybody measured.
+
+Two things follow, and both are in the code now. `run_cli` passes `-mc 0`, and
+`stage_transcript` **refuses** a transcript whose longest identical run reaches
+`LOOP_RUN` — every transcript passes through it, whoever made it. Refusing
+rather than warning is a decision about cost: re-transcribing is free, while
+accepting buys correction and semantics over fabricated text and then leaves
+somebody to find it in an index. The thresholds are where this corpus splits —
+healthy reach a run of 7, damaged start at 51 — not where taste put them.
+
+`--vad` was measured too (longest run 1, coverage 98.3%) and is deliberately
+**not** used: it merges segments, 1,013 to 748 on the same recording, and a
+segment's start is what a citation points at. It would coarsen every locator in
+the corpus to buy what `-mc 0` already bought.
+
 **The speed is measured, never derived.** A desktop 4060 and a laptop's
 integrated chip both report `cuda` and are an order of magnitude apart, so the
 Services panel prints the ratio the last run produced and says plainly when

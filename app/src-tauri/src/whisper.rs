@@ -855,7 +855,7 @@ async fn download_audio(url: &str, into: &Path, on_event: &Channel<Progress>) ->
     Ok(())
 }
 
-/// Run `whisper-cli` and read its progress and its system_info line.
+/// Run `whisper-cli` and read its progress and its device line.
 ///
 /// `-pp` makes whisper.cpp print `progress = NN%` lines on stderr, which is
 /// why the stream is read rather than the process merely waited on — the same
@@ -863,6 +863,35 @@ async fn download_audio(url: &str, into: &Path, on_event: &Channel<Progress>) ->
 /// reason: a person watching an hour-long transcription needs to see it move.
 /// The output JSON is written by whisper.cpp itself to `<out_base>.json`,
 /// never assembled here.
+///
+/// **`-mc 0` is the flag that keeps the transcript honest, and it was added
+/// after the damage.** whisper.cpp feeds the text it has just produced into
+/// the next window as a prompt (`--max-context`, default -1: carry
+/// everything). Once it repeats a phrase it reads that repetition back to
+/// itself and latches on, emitting the same line until the audio ends.
+/// Nothing fails: the JSON is valid, the size is ordinary, the process
+/// succeeds. Only a measurement sees it.
+///
+/// Measured on this machine with `large-v3-turbo` over a real 63-minute
+/// sermon, the worst of thirteen transcribed with the defaults:
+///
+/// | | segments | longest identical run | repeated | distinct words |
+/// |---|---|---|---|---|
+/// | default | 1013 | **167** | 7.3% | 1477 |
+/// | `-mc 0` | 1061 | **3** | 1.9% | **1533** |
+///
+/// Read the last column before the others. The default produced *657 more
+/// words and 56 fewer distinct ones*: in the final 2.9 minutes it emitted one
+/// phrase 167 times where `-mc 0` finds 44 segments of 43 different lines —
+/// the closing altar call. The loop does not pile junk on top of speech, it
+/// **replaces** it. Two of the thirteen were damaged this way and both had
+/// already been indexed before anybody measured.
+///
+/// `--vad` was measured too (longest run 1, coverage 98.3%) and is
+/// deliberately *not* used: it merges segments — 1013 to 748 on the same
+/// recording — and a segment's start is what a citation points at, so it
+/// would coarsen every locator in the corpus to buy what `-mc 0` already
+/// bought.
 async fn run_cli(
     bin: &Path,
     model: &Path,
@@ -873,18 +902,7 @@ async fn run_cli(
     on_event: &Channel<Progress>,
 ) -> Result<String> {
     let mut child = Command::new(bin)
-        .arg("-m")
-        .arg(model)
-        .arg("-f")
-        .arg(audio)
-        .arg("-l")
-        .arg(language)
-        .arg("-oj")
-        .arg("-of")
-        .arg(out_base)
-        .arg("-t")
-        .arg(threads.to_string())
-        .arg("-pp")
+        .args(cli_args(model, audio, out_base, language, threads))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -931,6 +949,44 @@ async fn run_cli(
         ));
     }
     Ok(backend)
+}
+
+/// Everything `whisper-cli` is told, as a list.
+///
+/// Pure so the one argument that decides whether the transcript is honest can
+/// be asserted without running a transcription — the same reason this codebase
+/// keeps its graph arithmetic out of its components.
+fn cli_args(
+    model: &Path,
+    audio: &Path,
+    out_base: &Path,
+    language: &str,
+    threads: usize,
+) -> Vec<std::ffi::OsString> {
+    let threads = threads.to_string();
+    let flat: [&std::ffi::OsStr; 13] = [
+        "-m".as_ref(),
+        model.as_os_str(),
+        "-f".as_ref(),
+        audio.as_os_str(),
+        "-l".as_ref(),
+        language.as_ref(),
+        "-oj".as_ref(),
+        // A *prefix*, never a filename: whisper.cpp appends the extension
+        // itself, so `-of x.json` writes `x.json.json` and the reader reports
+        // a transcription that happened, and was paid for in GPU time, as
+        // missing.
+        "-of".as_ref(),
+        out_base.as_os_str(),
+        "-t".as_ref(),
+        threads.as_ref(),
+        // Do not let the transcript become its own prompt. See `run_cli`.
+        "-mc".as_ref(),
+        "0".as_ref(),
+    ];
+    let mut args: Vec<std::ffi::OsString> = flat.iter().map(|a| (*a).to_owned()).collect();
+    args.push(std::ffi::OsString::from("-pp"));
+    args
 }
 
 /// One `progress = NN%` line, or `None` for anything else on stderr. Pure so
@@ -1076,6 +1132,44 @@ mod tests {
     /// `LOCAL_CONTAINERS` on the paid plane is this list, and the two are
     /// compared by `buckets.parity.spec.ts`. Verified against the binary's own
     /// `--help` at v1.8.2: flac, mp3, ogg, wav.
+    /// The transcript must never become its own prompt.
+    ///
+    /// `--max-context` defaults to -1, which carries every word already
+    /// transcribed into the next window: once whisper.cpp repeats a phrase it
+    /// reads that back to itself and emits it until the audio ends. Measured
+    /// here on a real 63-minute sermon with `large-v3-turbo`: a run of **167**
+    /// identical segments by default against **3** with this flag — and, the
+    /// part that matters, 1477 distinct words against 1533, because the loop
+    /// *replaced* the closing three minutes rather than adding to them.
+    ///
+    /// Nothing else catches this. The JSON is valid either way, the file size
+    /// is ordinary, the process exits 0, and two damaged recordings were
+    /// indexed and answerable before anybody measured.
+    #[test]
+    fn the_transcript_is_never_fed_back_as_its_own_prompt() {
+        let args: Vec<String> = cli_args(
+            Path::new("/m/ggml-large-v3-turbo.bin"),
+            Path::new("/tmp/a.mp3"),
+            Path::new("/tmp/out/run-1"),
+            "es",
+            16,
+        )
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+
+        let at = args.iter().position(|a| a == "-mc").expect("-mc is passed");
+        assert_eq!(args[at + 1], "0", "-mc must be 0, not merely present");
+
+        // And the two that are easy to get wrong beside it.
+        let of = args.iter().position(|a| a == "-of").unwrap();
+        assert_eq!(args[of + 1], "/tmp/out/run-1", "`-of` is a prefix, not a filename");
+        assert!(!args[of + 1].ends_with(".json"), "whisper.cpp appends the extension");
+        let l = args.iter().position(|a| a == "-l").unwrap();
+        assert_eq!(args[l + 1], "es", "the language is fixed, never auto-detected");
+        assert!(!args.iter().any(|a| a == "-ng"), "the GPU is never switched off");
+    }
+
     /// The probe's own input, checked as bytes: whisper.cpp reads this with
     /// miniaudio and refuses anything under a second, so both the header and
     /// the length are load-bearing.

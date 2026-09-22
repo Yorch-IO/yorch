@@ -1160,3 +1160,132 @@ async def test_the_eval_set_estimate_covers_what_the_first_real_run_billed(
     # to hold: covering the worst must not mean doubling the typical.
     assert stage.output_tokens < 2 * 7_743
     assert stage.input_tokens < 2 * 4_408
+
+
+# -- what the caches already hold --------------------------------------------
+#
+# A re-import was quoted as a first import: $0.2257767 against a bill of
+# $0.031821, 7.1x over, because the estimator worked from a character count and
+# had no way to ask `cache/correct` what was already paid for. These assert the
+# three states that must read differently — nothing measured, a measured zero,
+# and a real discount — because collapsing any two of them is how a figure
+# nobody can act on reaches the moment somebody decides whether to spend.
+
+
+async def _real_preview(libro: pathlib.Path) -> Preview:
+    extraction = await act.extract_text(request_for(libro), "run_1")
+    return await act.preview_chunks("run_1", extraction, StageOptions())
+
+
+def _correction(estimate) -> act.StageEstimate:
+    return next(s for s in estimate.stages if s.stage == "correction")
+
+
+async def test_a_first_import_is_quoted_whole_and_says_nothing_was_prepaid(
+    workspace: pathlib.Path, libro: pathlib.Path
+):
+    """A *measured* zero, not an absence: `prepaid` is present and reports that
+    none of this document is cached. `None` would be the different fact that
+    nothing looked, and the gate renders the two differently."""
+    estimate = await act.estimate_cost(await _real_preview(libro), StageOptions(), None, "run_1")
+
+    assert estimate.prepaid is not None
+    assert estimate.prepaid.correction_hits == 0
+    assert estimate.prepaid.correction_total > 0
+    assert _correction(estimate).input_tokens > 0
+
+
+async def test_a_re_import_is_not_quoted_for_what_is_already_paid_for(
+    workspace: pathlib.Path, libro: pathlib.Path
+):
+    """The recorded defect, at the scale it was measured: most of a document
+    already corrected, and the quote must fall with it rather than repeat the
+    figure a first import earned."""
+    from docagent import correct as engine_correct
+    from docagent.chunk import split_paragraphs
+
+    preview = await _real_preview(libro)
+    settings = config.load()
+    store = act.ArtifactStore(settings.workspace, "run_1")
+    paragraphs = [p.text for p in split_paragraphs(store.read_bytes(preview.text))]
+    assert len(paragraphs) > 2, "needs more than one paragraph to discount a part of"
+
+    first = await act.estimate_cost(preview, StageOptions(), None, "run_1")
+
+    # Everything but the last paragraph is already corrected.
+    cache = engine_correct._ParagraphCache(settings.paths.correct_cache)
+    for par in paragraphs[:-1]:
+        cache.put(par, par)
+
+    again = await act.estimate_cost(preview, StageOptions(), None, "run_1")
+
+    assert again.prepaid.correction_hits == len(paragraphs) - 1
+    assert again.prepaid.correction_total == len(paragraphs)
+    assert _correction(again).input_tokens < _correction(first).input_tokens
+    assert _correction(again).usd < _correction(first).usd
+    # Every other stage is untouched: the discount is correction's alone,
+    # because its cache is the only one keyed on something the gate holds.
+    others = lambda e: {s.stage: s.input_tokens for s in e.stages if s.stage != "correction"}
+    assert others(again) == others(first)
+
+
+async def test_a_fully_cached_document_quotes_correction_at_zero_rather_than_omitting_it(
+    workspace: pathlib.Path, libro: pathlib.Path
+):
+    """A stage that will run for nothing and a stage that will not run are
+    different facts — the same rule `semantics-replay` books a zero row for."""
+    from docagent import correct as engine_correct
+    from docagent.chunk import split_paragraphs
+
+    preview = await _real_preview(libro)
+    settings = config.load()
+    store = act.ArtifactStore(settings.workspace, "run_1")
+    cache = engine_correct._ParagraphCache(settings.paths.correct_cache)
+    for p in split_paragraphs(store.read_bytes(preview.text)):
+        cache.put(p.text, p.text)
+
+    estimate = await act.estimate_cost(preview, StageOptions(), None, "run_1")
+    row = _correction(estimate)
+    assert row.stage == "correction"
+    assert row.input_tokens == 0 and row.output_tokens == 0
+    assert row.usd == 0.0
+    assert estimate.prepaid.correction_characters == 0
+    assert estimate.prepaid.correction_share == 0.0
+
+
+async def test_an_unmeasurable_gate_quotes_the_whole_document(
+    workspace: pathlib.Path, libro: pathlib.Path
+):
+    """`prepaid` is `None` when nothing could look — no run id, or correction
+    switched off — and the quote is then exactly what shipped before any of
+    this existed. Silently discounting to zero would under-report, which is the
+    one direction this estimate may not fail in."""
+    preview = await _real_preview(libro)
+    with_run = await act.estimate_cost(preview, StageOptions(), None, "run_1")
+    without = await act.estimate_cost(preview, StageOptions(), None, "")
+
+    assert without.prepaid is None
+    # Byte-identical, not merely close: the discount is a ratio over the
+    # document's own size, so nothing cached is exactly 1.0. Recounting the
+    # paragraph stream instead quoted 1% less here — an under-report arriving
+    # through the field added to stop an over-report.
+    assert without.prepaid is None and with_run.prepaid.correction_share == 1.0
+    assert _correction(without) == _correction(with_run)
+
+
+async def test_the_measurement_never_fails_the_gate(
+    workspace: pathlib.Path, libro: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A gate that failed over its own discount would be a worse trade than one
+    that over-reports — the same rule `_persist_estimate` follows for the
+    receipt it writes beside this."""
+    from docagent import correct as engine_correct
+
+    preview = await _real_preview(libro)
+    monkeypatch.setattr(
+        engine_correct, "cached",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("cache unreadable")),
+    )
+    estimate = await act.estimate_cost(preview, StageOptions(), None, "run_1")
+    assert estimate.prepaid is None
+    assert _correction(estimate).input_tokens > 0

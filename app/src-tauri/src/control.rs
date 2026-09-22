@@ -671,11 +671,27 @@ pub struct StageEstimate {
     pub usd_high: Option<f64>,
 }
 
+/// What the caches already hold, so a re-import is not quoted as a first one.
+/// `None` on the estimate means nothing measured it, which is not the same as
+/// "nothing is cached" and must not render as it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Prepaid {
+    pub correction_hits: u32,
+    pub correction_total: u32,
+    pub correction_characters: u64,
+    pub correction_characters_total: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase"))]
 pub struct Estimate {
     pub stages: Vec<StageEstimate>,
     pub total_usd: Option<f64>,
+    /// Declared, because serde drops what it does not know and a field the
+    /// webview can never see is the recorded `Answer::effort` defect.
+    #[serde(default)]
+    pub prepaid: Option<Prepaid>,
     /// The upper end of the bill. Defaulted rather than required so an older API
     /// costs the gate a range, not the whole approval screen.
     #[serde(default)]
@@ -4042,6 +4058,34 @@ mod tests {
     }"#;
 
     #[test]
+    fn what_the_caches_already_hold_reaches_the_webview() {
+        // Declared on purpose: serde discards a field this struct does not
+        // name, which is how `Answer::effort` never reached the webview at all.
+        let parsed: Estimate = serde_json::from_str(
+            r#"{"stages":[],"total_usd":null,"price_source":"x","unpriced_stages":[],
+                "prepaid":{"correction_hits":85,"correction_total":107,
+                           "correction_characters":4000,"correction_characters_total":20000}}"#,
+        )
+        .unwrap();
+        let out = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(out["prepaid"]["correctionHits"], 85);
+        assert_eq!(out["prepaid"]["correctionCharactersTotal"], 20000);
+        assert!(out["prepaid"].get("correction_hits").is_none());
+    }
+
+    #[test]
+    fn an_estimate_nothing_measured_keeps_the_absence_rather_than_inventing_a_zero() {
+        // "nothing looked" and "nothing is cached" are different facts and the
+        // gate renders them differently; a `0` here would collapse them.
+        let parsed: Estimate = serde_json::from_str(
+            r#"{"stages":[],"total_usd":null,"price_source":"x","unpriced_stages":[]}"#,
+        )
+        .unwrap();
+        assert!(parsed.prepaid.is_none());
+        assert!(serde_json::to_value(&parsed).unwrap()["prepaid"].is_null());
+    }
+
+    #[test]
     fn a_probe_report_survives_the_round_trip_to_the_webview() {
         let parsed: ProbeReport = serde_json::from_str(PROBE).unwrap();
         let out = serde_json::to_value(&parsed).unwrap();
@@ -5077,6 +5121,7 @@ mod estimate_range {
             total_usd_high: Some(0.1209),
             price_source: "…".into(),
             unpriced_stages: vec![],
+            prepaid: None,
         };
 
         let out = serde_json::to_value(&estimate).unwrap();

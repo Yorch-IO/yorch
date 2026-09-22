@@ -98,7 +98,7 @@ const estimate = (usd: number, stages: Estimate["stages"] = []): Estimate => ({
   stages,
   totalUsd: usd,
   totalUsdHigh: usd * 1.2,
-  priceSource: "terceros",
+  priceSource: "terceros", prepaid: null,
   unpricedStages: [],
 });
 

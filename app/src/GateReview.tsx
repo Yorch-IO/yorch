@@ -257,6 +257,25 @@ export function EstimateTable({ estimate }: { estimate: Estimate }) {
     {/* The caveat travels with the figure, always: the token counts are
         measured, the prices are second-hand. */}
 
+      {/* Only when something is actually prepaid. `prepaid` present with zero
+          hits is a *measured* zero — a first import — and printing "0 of 107
+          are already corrected" over it would be noise; `prepaid: null` is the
+          different fact that nothing measured, and it must not render as
+          either. */}
+      {/* Truthiness, not `!== null`: a control plane older than this field
+          sends no key at all, and `undefined !== null` is true — which read
+          `undefined.correctionHits` and took the whole gate down rather than
+          costing it one line. Rust defaults the field to `null`; the paid
+          plane passes the payload through untyped and does not. */}
+      {estimate.prepaid && estimate.prepaid.correctionHits > 0 && (
+        <p className="notice prepaid">
+          {t("gate.prepaid", {
+            hits: estimate.prepaid.correctionHits,
+            total: estimate.prepaid.correctionTotal,
+          })}
+        </p>
+      )}
+
       {/* The caveat travels with the figure, always: the token counts are
           measured, the prices are second-hand. */}
       <p className="caveat">{estimate.priceSource}</p>

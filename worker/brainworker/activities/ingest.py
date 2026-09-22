@@ -35,6 +35,7 @@ from ..pipeline import (
     Estimate,
     Extraction,
     IngestRequest,
+    Prepaid,
     Preview,
     ProfileDecision,
     ProfileRules,
@@ -757,6 +758,39 @@ async def preview_chunks(
     )
 
 
+def measure_prepaid(text: "ArtifactRef", run_id: str) -> "Prepaid | None":
+    """How much of correction this document has already paid for.
+
+    Read off the preview's own text artifact, which holds exactly the
+    paragraphs `correct_text` will hand the model, keyed by exactly the key
+    the cache is keyed on. Best-effort: a gate that failed over its own
+    discount would be a worse trade than one that over-reports, so any failure
+    returns `None` and the quote is the whole document — the behaviour that
+    shipped before this existed.
+    """
+    try:
+        from docagent import correct as engine_correct
+        from docagent.chunk import split_paragraphs
+
+        settings = _settings()
+        store = ArtifactStore(settings.workspace, run_id)
+        paragraphs = [p.text for p in split_paragraphs(store.read_bytes(text))]
+        if not paragraphs:
+            return None
+        hits = engine_correct.cached(paragraphs, settings.paths.correct_cache)
+        return Prepaid(
+            correction_hits=sum(hits),
+            correction_total=len(paragraphs),
+            correction_characters=sum(
+                len(par) for par, hit in zip(paragraphs, hits) if not hit
+            ),
+            correction_characters_total=sum(len(par) for par in paragraphs),
+        )
+    except Exception:  # noqa: BLE001 — never fail a gate over its own discount
+        log.warning("run %s: could not measure the caches", run_id, exc_info=True)
+        return None
+
+
 def _persist_estimate(run_id: str, estimate: "Estimate") -> "Estimate":
     """Write the quote the gate is about to show. See the video path's copy of
     this for why the artifact kind existed for so long with no writer; the
@@ -787,9 +821,12 @@ async def estimate_cost(
     about and no `Preview` to put them in, and a gate whose numbers were
     computed twice would eventually quote two different bills for one pipeline.
     """
+    prepaid = measure_prepaid(preview.text, run_id) if options.correct and run_id else None
     return _persist_estimate(
         run_id,
-        estimate_for(preview.characters, preview.chunk_count, options, decision),
+        estimate_for(
+            preview.characters, preview.chunk_count, options, decision, prepaid
+        ),
     )
 
 
@@ -798,6 +835,7 @@ def estimate_for(
     chunk_count: int,
     options: StageOptions,
     decision: ProfileDecision | None = None,
+    prepaid: "Prepaid | None" = None,
 ) -> Estimate:
     """Project the work from character counts, before spending anything.
 
@@ -848,7 +886,6 @@ def estimate_for(
         )
 
     # Calls, not characters, is what the prompt overhead multiplies by.
-    correction_calls = max(1, -(-characters // CORRECTION_BATCH_CHARS))
     semantic_calls = max(1, chunk_count)
 
     # Learning is skipped entirely when the family already has a profile, so the
@@ -862,11 +899,27 @@ def estimate_for(
             PROFILE_CALL_OUTPUT * PROFILE_MAX_ATTEMPTS,
         )
     if options.correct:
+        # **What the cache already holds is not quoted.** A re-import was priced
+        # as a first import — $0.2257767 against a bill of $0.031821, 7.1x over,
+        # with 85 of 107 paragraphs already paid for — because this line worked
+        # from the document's character count and had no way to ask. It asks
+        # now; `prepaid` is `None` when nothing measured, which quotes the whole
+        # document exactly as before rather than silently discounting to zero.
+        #
+        # The call count falls with the characters, not independently: a batch
+        # is filled by characters, so a document that is nine-tenths cached
+        # makes about a tenth of the calls. Rounding up keeps a fully-cached
+        # document from quoting a stage it will not run at *minus* one call.
+        correct_chars = int(
+            characters * (1.0 if prepaid is None else prepaid.correction_share)
+        )
+        correct_tokens = int(correct_chars / CHARS_PER_TOKEN)
+        calls = max(0, -(-correct_chars // CORRECTION_BATCH_CHARS))
         add(
             "correction",
             settings.gemini.model,
-            tokens + correction_calls * CORRECTION_CALL_OVERHEAD,
-            int(tokens * CORRECTION_OUTPUT_RATIO),
+            correct_tokens + calls * CORRECTION_CALL_OVERHEAD,
+            int(correct_tokens * CORRECTION_OUTPUT_RATIO),
         )
     if options.embed:
         # Embeddings carry no system prompt and no output charge.
@@ -989,6 +1042,10 @@ def estimate_for(
         total_usd_high=sum(priced_high) if priced_high else None,
         price_source=PRICE_SOURCE,
         unpriced_stages=[s.stage for s in stages if s.usd is None],
+        # Travels with the figure it produced. A quote and the measurement it
+        # was discounted by are one fact; the gate renders the second only when
+        # something was actually prepaid, and `None` here says nothing looked.
+        prepaid=prepaid,
     )
 
 

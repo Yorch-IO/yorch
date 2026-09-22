@@ -394,6 +394,54 @@ class StageEstimate:
 
 
 @dataclass
+class Prepaid:
+    """What the caches already hold, measured before the gate quotes.
+
+    A re-import was quoted as a first import: **$0.2257767 against a bill of
+    $0.031821, an over-report of 7.1x**, because `estimate_for` works from
+    character counts and had no way to ask `cache/correct` what was already
+    paid for. Over-reporting pushes somebody to decline affordable work exactly
+    as much as under-reporting pushes them to approve expensive work, and a 7x
+    over-quote on a re-import is the case most likely to be met with "that is
+    too much for something I already have".
+
+    Only correction is measured, and that is a decision rather than an
+    omission. Its cache is keyed on the paragraph, and the paragraphs are
+    exactly what the preview's own text artifact holds, so the count is a fact.
+    The *embedding* cache is keyed on a chunk's `embed_text`, and whenever
+    correction or profile-learning is on the final chunking is not knowable at
+    the gate — so a discount there would be a discount on a guess, and a wrong
+    guess under-reports, which is the one direction this estimate may not fail
+    in. It is also small: on the run that produced the 7.1x, embedding was
+    **$0.0034 of the $0.2258**, so the whole miss was correction.
+    """
+
+    #: Paragraphs the correction cache already answers for.
+    correction_hits: int
+    #: Paragraphs the document has in total.
+    correction_total: int
+    #: Characters in the paragraphs that are *not* cached, and in all of them.
+    #:
+    #: **Both, because the estimator applies them as a ratio and not as a
+    #: replacement.** A paragraph stream is not the document: it drops the
+    #: separators and counts characters where `Preview.characters` counts
+    #: bytes, so substituting one for the other quoted 1% less for a document
+    #: with nothing cached at all — an under-report arriving through the very
+    #: field added to stop an over-report. As a fraction of the document's own
+    #: size the two cannot drift: nothing cached is exactly 1.0, and the quote
+    #: is byte-identical to the one that shipped before this existed.
+    correction_characters: int
+    correction_characters_total: int
+
+    @property
+    def correction_share(self) -> float:
+        """How much of correction is still to pay for, in [0, 1]."""
+        if self.correction_characters_total <= 0:
+            return 1.0
+        return self.correction_characters / self.correction_characters_total
+
+
+@dataclass
 class Estimate:
     """Projected spend, per stage, from measured token counts.
 
@@ -410,6 +458,11 @@ class Estimate:
     #: has a measured spread, which is what lets a surface render "$X" or
     #: "$X – $Y" from the same two fields without a flag.
     total_usd_high: float | None = None
+    #: What the caches already hold, or `None` when nothing measured it — which
+    #: is not the same as "nothing is cached" and must not render as it.
+    #: Appended and defaulted, so a gate parked for seven days decodes a payload
+    #: that never carried it rather than failing replay.
+    prepaid: "Prepaid | None" = None
 
 
 @dataclass

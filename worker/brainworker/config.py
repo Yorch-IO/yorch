@@ -122,6 +122,18 @@ class Paths:
         return self.root / "cache"
 
     @property
+    def correct_cache(self) -> pathlib.Path:
+        """Corrections already paid for — and refusals already refused.
+
+        Here for the same reason `embed_cache` is, arrived at the same way:
+        `docagent.correct.CACHE_DIR` is a CWD-relative module constant, so the
+        corrector and the *estimator* that quotes it would each resolve it
+        themselves and could silently disagree — which is a cache that never
+        hits, the one failure a cache cannot report. Both callers name this.
+        """
+        return self.cache / "correct"
+
+    @property
     def embed_cache(self) -> pathlib.Path:
         """Embeddings already paid for.
 

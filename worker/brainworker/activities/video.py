@@ -49,6 +49,7 @@ from ..pipeline import (
     ChunkKindCount,
     Chunked,
     Estimate,
+    Prepaid,
     Preview,
     Spend,
     StageEstimate,
@@ -467,6 +468,37 @@ async def record_video_artifacts(run_id: str, refs: list[ArtifactRef]) -> None:
 # --- grouping: cues in, timed paragraphs out ---------------------------------
 
 
+def _cues_of(raw: bytes, kind: str, probe: VideoProbe):
+    """The cues and the source name, from either transcript document.
+
+    Pulled out of `group_transcript` so the **estimate** can reach the same
+    paragraphs without reimplementing the grouping. A second implementation
+    would eventually quote a bill for a document the run does not produce,
+    which is the reason `estimate_timed` has one estimator for two gates and
+    the reason this has one parser for two readers.
+    """
+    from docagent import transcript as dt
+
+    if kind == "captions":
+        cues = dt.parse_vtt(raw)
+        # Only an automatic track scrolls. Applying the repair to a manual one
+        # would eat a speaker legitimately repeating themselves.
+        if probe.chosen is not None and probe.chosen.kind == "auto":
+            cues = dt.dedupe_rolling(cues)
+        source = (
+            f"captions:{probe.chosen.language}:{probe.chosen.kind}"
+            if probe.chosen else "captions"
+        )
+        return cues, source
+    # Either engine's document, read by its shape: Amazon's per-word items or
+    # whisper.cpp's segments. The source names which, because the audit and the
+    # archive's sidecar both say so and a reader deciding whether to trust a
+    # name in the transcript wants to know.
+    payload = json.loads(raw.decode("utf-8"))
+    engine = dt.transcript_engine(payload)
+    return dt.parse_any(payload), ("transcribe" if engine == "transcribe" else "whisper")
+
+
 @activity.defn(name="group_transcript")
 async def group_transcript(
     run_id: str, probe: VideoProbe, source_ref: ArtifactRef
@@ -490,23 +522,7 @@ async def group_transcript(
     store = ArtifactStore(settings.workspace, run_id)
     raw = store.read_bytes(source_ref)
 
-    if source_ref.kind == "captions":
-        cues = dt.parse_vtt(raw)
-        # Only an automatic track scrolls. Applying the repair to a manual one
-        # would eat a speaker legitimately repeating themselves.
-        if probe.chosen is not None and probe.chosen.kind == "auto":
-            cues = dt.dedupe_rolling(cues)
-        source = f"captions:{probe.chosen.language}:{probe.chosen.kind}" \
-            if probe.chosen else "captions"
-    else:
-        # Either engine's document, read by its shape: Amazon's per-word
-        # items or whisper.cpp's segments. The source names which, because the
-        # audit and the archive's sidecar both say so and a reader deciding
-        # whether to trust a name in the transcript wants to know.
-        payload = json.loads(raw.decode("utf-8"))
-        engine = dt.transcript_engine(payload)
-        cues = dt.parse_any(payload)
-        source = "transcribe" if engine == "transcribe" else "whisper"
+    cues, source = _cues_of(raw, source_ref.kind, probe)
 
     if not cues:
         raise _fail("transcript_is_empty", "el transcript no contiene texto")
@@ -642,6 +658,45 @@ async def estimate_video(
                           run_id, "transcribe")
 
 
+def _timed_prepaid(probe: VideoProbe, options: StageOptions, run_id: str):
+    """What correction on this recording has already been paid for.
+
+    The measurement that produced the 7.1x over-quote was a **re-imported
+    video**, so the gate that made it is this one. It is answerable here only
+    on the captioned path: the paragraphs the cache is keyed on are the ones
+    `group_transcript` derives, and a recording awaiting transcription has no
+    cues to derive them from yet — which quotes the whole thing, the only
+    direction this estimate may fail in.
+
+    Best-effort and silent, like `_persist_estimate` beside it: a gate that
+    failed over its own discount would be the worse trade.
+    """
+    if not options.correct or not run_id or probe.captions is None:
+        return None
+    try:
+        from docagent import correct as engine_correct
+        from docagent import transcript as dt
+
+        settings = _settings()
+        store = ArtifactStore(settings.workspace, run_id)
+        cues, _ = _cues_of(store.read_bytes(probe.captions), probe.captions.kind, probe)
+        paragraphs = dt.to_paragraphs(dt.group_cues(cues))
+        if not paragraphs:
+            return None
+        hits = engine_correct.cached(paragraphs, settings.paths.correct_cache)
+        return Prepaid(
+            correction_hits=sum(hits),
+            correction_total=len(paragraphs),
+            correction_characters=sum(
+                len(par) for par, hit in zip(paragraphs, hits) if not hit
+            ),
+            correction_characters_total=sum(len(par) for par in paragraphs),
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("run %s: could not measure the caches", run_id, exc_info=True)
+        return None
+
+
 def estimate_timed(
     probe: VideoProbe,
     options: StageOptions,
@@ -653,7 +708,8 @@ def estimate_timed(
 ) -> Estimate:
     """The one implementation behind `estimate_video` and `estimate_audio`."""
     settings = _settings()
-    estimate = estimate_for(characters, chunk_count, options, None)
+    prepaid = _timed_prepaid(probe, options, run_id)
+    estimate = estimate_for(characters, chunk_count, options, None, prepaid)
 
     if characters_high > characters:
         # Only the no-captions path sends this. The character count there is
@@ -664,7 +720,7 @@ def estimate_timed(
         # figure stays within reach of a typical video and the high one covers
         # the fastest, which is the pairing `OUTPUT_SPREAD` makes for semantics.
         wide = {row.stage: row for row in
-                estimate_for(characters_high, chunk_count, options, None).stages}
+                estimate_for(characters_high, chunk_count, options, None, prepaid).stages}
         stages = [
             replace(
                 row,

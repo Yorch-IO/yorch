@@ -45,6 +45,7 @@ const estimate: Estimate = {
   totalUsd: 4.5,
   totalUsdHigh: 6.75,
   priceSource: "Precios de terceros consultados el 2026-08-20",
+  prepaid: null,
   unpricedStages: [],
 };
 

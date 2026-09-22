@@ -29,6 +29,7 @@ import os
 import pathlib
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -327,6 +328,20 @@ def correct_paragraphs(
                     Rejection(index=i, reason=reason, detail=detail,
                               proposed=proposed.strip())
                 )
+                # Cached anyway. A refusal is a result: the model was paid to
+                # propose this and `verify` is deterministic, so asking again
+                # buys the same proposal and the same refusal. Measured on the
+                # first video re-imported (`doc/AUDIT_VIDEO_20260910.md`, F7b):
+                # the same 22 refused paragraphs were re-sent and re-refused
+                # identically, $0.031821 of a $0.031821 bill buying nothing —
+                # 100% of that run, against the 31.8% the audit trail was built
+                # to find. The read side already re-verifies every hit, which
+                # is what makes this safe: a cached refusal is re-judged under
+                # *tomorrow's* rules for free, and if a rule is loosened the
+                # proposal is accepted without being bought again. The model
+                # is never re-asked; that is the same property an accepted
+                # entry has always had, and it is the saving.
+                cache.put(original, proposed.strip())
                 continue
             # Persisted here rather than after the batch. Correction is the
             # most expensive step in the pipeline and the slowest; saving only
@@ -343,6 +358,28 @@ def correct_paragraphs(
             report.changed += 1
 
     return out, report
+
+
+def cached(
+    paragraphs: "Sequence[str]", cache_dir: "pathlib.Path | None" = None
+) -> list[bool]:
+    """Which of these paragraphs the cache already holds a correction for.
+
+    Public because the *estimate* needs it and nothing else could ask. A gate
+    that quotes a re-import as a first import over-reports by the whole cached
+    fraction, measured at **7.1x** on a re-imported video — $0.2258 quoted
+    against $0.031821 spent, with 85 of its 107 paragraphs already paid for.
+    Over-reporting misleads somebody into declining affordable work exactly as
+    much as under-reporting misleads them into approving expensive work.
+
+    A hit here is not a promise that the paragraph is free of *verification*:
+    `correct_paragraphs` re-runs `verify` on the way out of the cache, and a
+    refusal is cached too. Both are deterministic and neither calls the model,
+    so "cached" and "costs nothing" are the same set — which is the property
+    that makes this a sound thing to quote from.
+    """
+    cache = _ParagraphCache(cache_dir)
+    return [cache.get(p) is not None for p in paragraphs]
 
 
 def corrected_path(source: str) -> pathlib.Path:

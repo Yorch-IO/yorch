@@ -866,12 +866,22 @@ export interface StageEstimate {
   usdHigh: number | null;
 }
 
+/** What the caches already hold. `null` means nothing measured it — which is
+ *  not the same as "nothing is cached" and must not render as it. */
+export interface Prepaid {
+  correctionHits: number;
+  correctionTotal: number;
+  correctionCharacters: number;
+  correctionCharactersTotal: number;
+}
+
 export interface Estimate {
   stages: StageEstimate[];
   totalUsd: number | null;
   totalUsdHigh: number | null;
   priceSource: string;
   unpricedStages: string[];
+  prepaid: Prepaid | null;
 }
 
 export interface ProfileWarning {

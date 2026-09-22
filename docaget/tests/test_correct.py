@@ -550,3 +550,56 @@ def test_a_paragraph_that_came_back_absent_has_no_proposal_to_keep():
     assert out[0] == ORIGINAL
     assert report.missing == 1
     assert report.rejected == []
+
+
+# --- a refusal is a result, and a result is cached ---------------------------
+
+
+def test_a_refused_correction_is_cached_and_never_re_bought(tmp_path):
+    """Measured on the first video re-imported: the same 22 refused paragraphs
+    re-sent to the model and re-refused identically, 100% of the bill buying
+    nothing. `verify` is deterministic, so a second call could only return
+    the same refusal — the proposal belongs in the cache beside the accepted
+    ones, and the read side's re-verification is what keeps it honest."""
+    calls = []
+
+    def loses_the_name(items):
+        calls.append(len(items))
+        return [
+            {"i": it["i"], "texto": it["texto"].replace("Dooyeweerd", "el autor")}
+            for it in items
+        ]
+
+    root = tmp_path / "correct"
+    first_out, first = correct_paragraphs(FakeVertex(loses_the_name), [ORIGINAL], cache_dir=root)
+    assert first_out == [ORIGINAL] and [r.reason for r in first.rejected] == ["proper_noun"]
+    assert calls == [1]
+
+    second_out, second = correct_paragraphs(FakeVertex(loses_the_name), [ORIGINAL], cache_dir=root)
+    assert calls == [1], "the refusal was cached, so the model was not asked again"
+    assert second_out == [ORIGINAL]
+    assert second.cache_hits == 1 and second.calls == 0
+    # And it is still a refusal, still reviewable: what was refused survives.
+    assert [r.reason for r in second.rejected] == ["proper_noun"]
+    assert second.rejected[0].proposed == first.rejected[0].proposed
+
+
+def test_a_cached_refusal_is_accepted_the_day_the_rule_loosens(tmp_path, monkeypatch):
+    """The open question the record raised — whether a cached rejection is
+    re-verified when the rules change — is answered by the read side: every
+    hit is re-verified, so a proposal refused under one rule and admissible
+    under the next is used without being bought again."""
+    def loses_the_name(items):
+        return [
+            {"i": it["i"], "texto": it["texto"].replace("Dooyeweerd", "el autor")}
+            for it in items
+        ]
+
+    root = tmp_path / "correct"
+    correct_paragraphs(FakeVertex(loses_the_name), [ORIGINAL], cache_dir=root)
+
+    # Loosen the gate: pretend proper nouns are no longer protected.
+    monkeypatch.setattr(correct_mod, "verify", lambda original, proposed: (True, "", ""))
+    out, report = correct_paragraphs(_RefusesToSpend(), [ORIGINAL], cache_dir=root)
+    assert out == [ORIGINAL.replace("Dooyeweerd", "el autor")]
+    assert report.cache_hits == 1 and not report.rejected

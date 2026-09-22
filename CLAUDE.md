@@ -2744,33 +2744,6 @@ session's files.
   the fork is not, and the only thing that notices is the spec that exists to.
   **Run the other checkout's suite before assuming its red is yours.**
 
-- **A rejected correction is re-bought on every import, for ever, and re-rejected
-  identically.** Measured when the first video was re-imported
-  (`doc/AUDIT_VIDEO_20260910.md`, F7b): 85 of 107 paragraphs came back from the
-  cache free, the **same 22** rejected ones were re-sent to the model, and the
-  run produced `corrected.txt` and `chunks.jsonl` **byte-identical** to what was
-  already on disk — `75c97c33…` and `ca7132f8…` both times. So `$0.031821` of a
-  `$0.031821` bill bought nothing, and will be spent again next time. The
-  embedding half shows the correct behaviour in the same run: every vector a
-  cache hit, `$0.000000`. The whole asymmetry is `cache.put` being skipped on
-  rejection. Same shape as the `$1.1965` of `$3.7572` the `trail` leg was built
-  to find — 31.8% there, **100%** here. Caching the refusal is the fix and it is
-  now possible, because `Rejection.proposed` records what was refused; what it
-  needs first is a decision about re-verifying a cached *rejection* when the
-  rules tighten, which is the same argument that made accepted entries
-  verify-on-read.
-- **The gate quotes a re-import as though it were a first import.** Visible only
-  once `estimate.json` was persisted, which is how it was found within an hour of
-  that fix shipping: quote `$0.2257767` against a bill of `$0.031821`, an
-  over-report of **7.1x**, where a first import of the same video over-reported
-  by 1.46x. `estimate_for` works from character counts and knows nothing about
-  `cache/correct` or `docagent.embedcache`, so it quoted 107 paragraphs of
-  correction when 85 were already paid for and 17,226 embedding tokens when the
-  real figure was zero. Over-reporting misleads a user into declining affordable
-  work exactly as much as under-reporting misleads them into approving expensive
-  work, and a 7x over-quote on a re-import is the case most likely to be met
-  with "that is too much for something I already have".
-
 - **On an auto-caption transcript, `correct.verify`'s proper-noun rule protects
   the transcription error.** Measured on the first real video import
   (`doc/AUDIT_VIDEO_20260910.md`): **22 of 107 paragraphs — 20.6% — had their
@@ -3395,6 +3368,63 @@ Kept because each fix carries a rule worth not relearning. The heading used to
 count them and the count was already wrong — nine entries under "Eight" — which
 is a small demonstration of the rule this file keeps applying to code: a number
 maintained by hand drifts, and one that has drifted is worse than none.
+
+- **A rejected correction was re-bought on every import, for ever, and a
+  re-import was quoted as a first import.** Two recorded defects with one
+  shape, fixed together 2026-09-21 because each was half of the other's cost.
+  Measured on the first video re-imported: 85 of 107 paragraphs came back from
+  the cache free, the **same 22** rejected ones were re-sent and re-refused
+  identically, and the run produced byte-identical output — **$0.031821 of a
+  $0.031821 bill buying nothing, 100%**, against the 31.8% the audit trail was
+  built to find. And the gate quoted **$0.2257767 against that $0.031821, 7.1x
+  over**, because `estimate_for` worked from a character count and had no way
+  to ask.
+  **A refusal is a result, so it is cached.** `verify` is deterministic and the
+  read side already re-verifies every hit, which is what makes this safe and
+  what answers the question the record left open: a cached refusal is re-judged
+  under *tomorrow's* rules for free, so a rule that loosens admits the proposal
+  without buying it again, and a rule that tightens still refuses. The model is
+  never re-asked — the same property an accepted entry has always had.
+  **And the estimate asks the caches what is already paid for.**
+  `docagent.correct.cached` is the public reader, `Paths.correct_cache` is the
+  one definition of the directory (two would be a cache that never hits), and
+  `Prepaid` travels on the `Estimate`. Three things are decisions. The discount
+  is applied as a **ratio over the document's own size, never as a
+  substitution** — a paragraph stream drops the separators and counts
+  characters where `Preview.characters` counts bytes, and substituting quoted
+  1% less for a document with *nothing* cached: an under-report arriving
+  through the field added to stop an over-report. Only **correction** is
+  discounted, because its cache is keyed on paragraphs the gate holds while the
+  embedding cache is keyed on a chunk's `embed_text` and the final chunking is
+  not knowable before correction runs — a discount on a guess under-reports,
+  and embedding was $0.0034 of the $0.2258 anyway. And **`None` is not zero**:
+  nothing measured, a measured zero and a real discount are three facts, and
+  the gate prints only the third. The video gate discounts too, through the
+  same `_cues_of` the run itself parses with, since one parser is what keeps a
+  quote from describing a document the run does not produce.
+  Verified end to end on the running stack: a four-paragraph document imported
+  and then re-imported quoted correction at **$0.001614 → $0.000000** and
+  billed **$0.001994 → $0.000000**, with `prepaid` reporting 0 of 4 the first
+  time and 4 of 4 the second. Two things that verification also showed and
+  this fix does not touch: correction *under*-reported that tiny document by
+  1.24x, which is a property of the prompt-overhead constants at 205
+  characters and not of the discount — the arithmetic is byte-identical with
+  nothing cached, and a test asserts exactly that — and the *total* still
+  over-reports whenever stages are switched off at the gate after being
+  quoted, which is the recorded `_recommended` shape and a different entry.
+  And a second defect came out of the *extraction*: pulling `_cues_of` out of
+  the top of `group_transcript` put the new helper directly under that
+  activity's `@activity.defn`, so the helper became the activity and the
+  activity became bare. **The whole worker refused to start**, in a container,
+  after a deploy — and nothing in the suite could see it, because every test
+  calls activities as plain functions. `tests/unit/test_activity_registration.py`
+  asserts that every function in `ACTIVITIES` and `FETCH_ACTIVITIES` carries a
+  definition and that no two claim one name; verified by removing the
+  decorator.
+  One robustness defect came out of the client half: the panel guarded on
+  `prepaid !== null`, and a control plane older than the field sends no key at
+  all — `undefined !== null` is true, so it read `undefined.correctionHits` and
+  took the whole gate down rather than costing it one line.
 
 - **A refused correction kept no record of what was refused, so `verify`'s
   false-positive rate had never been measured.** `correct_paragraphs` `continue`s

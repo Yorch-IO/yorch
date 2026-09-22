@@ -476,7 +476,8 @@
       "correctAuto": "Los subtítulos automáticos llegan sin puntuación, que es justo lo que la corrección sabe reparar: por eso empieza activada. También es la etapa que domina la factura, y su valor sobre una transcripción no está medido.",
       "correctManual": "Estos subtítulos ya los escribió y puntuó una persona, así que la corrección empieza desactivada: su valor sobre una transcripción no está medido y es la etapa que domina la factura.",
       "correctTranscribe": "Amazon puntúa su propia salida, así que la corrección empieza desactivada: su valor sobre una transcripción no está medido y es la etapa que domina la factura."
-    }
+    },
+    "prepaid": "{{hits}} de {{total}} párrafos ya están corregidos y no cuestan nada; solo se cotiza el resto."
   },
   "ask": {
     "title": "Preguntar a la biblioteca",

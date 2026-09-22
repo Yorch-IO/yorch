@@ -193,6 +193,11 @@ uv run python scripts/refusal_census.py ver_… [ver_… …] [--deep N] [--json
 # bills about $2 for 640 questions. This is what decided against re-chunking.
 uv run python scripts/parent_ceiling.py ver… [ver… …] [--rerank] [--json out.json]
 
+# Serve the corpus to an agent over MCP, on stdio. Answers with verified
+# citations, never chunks; localhost only, free plane. Register it in an
+# agent's own config — see `brainworker/mcp.py` for the reasoning.
+uv run python scripts/mcp_server.py
+
 # Measure the speech rate the video gate projects a correction bill from.
 # Free — captions and metadata cost nothing and no transcription job is started.
 # See doc/VIDEO.md; the constant it feeds was a guess until 2026-09-05.
@@ -1175,6 +1180,61 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
   the developer's plane. Screenshotted at 1440 and 900 in both themes before
   commit, which found a `.verdict` class already taken by the channel screen
   making every line of the verdict bold.
+- **An agent can reach the corpus over MCP, and what it gets is answers —
+  never chunks.** Added 2026-09-22. `brainworker/mcp.py` is the protocol and
+  every decision in it; `scripts/mcp_server.py` is the stdio pump and the HTTP,
+  the same split `probing.py`/`probe_retrieval.py` uses.
+  **A `retrieve` tool is the version not built**, and refusing it is the whole
+  point: handing raw passages to somebody else's model exports the retrieval and
+  leaves behind the one property that makes this a product rather than a vector
+  database. Every citation this returns has already survived `answer._verify`,
+  because the tool goes through the same two-call `/ask` contract and the same
+  effort ladder the app uses. `test_the_tools_are_ask_and_collect_and_nothing_that_returns_passages`
+  is what sends whoever adds a third tool back to the docstring.
+  **Localhost only, over the free plane, on stdio — a decision on the record
+  and not an omission.** The free plane has no authentication and is safe only
+  because nothing off the machine can route to it, so a hosted server would be
+  the first externally reachable surface this product has ever had; the paid
+  alternative needs MCP's OAuth transport, and this product's own PKCE sign-in
+  has never run. **stdio has no port at all**, which makes it strictly safer
+  than what is already running. And it is a developer's tool, which is the same
+  argument that put the retrieval probe on the free plane. A non-loopback
+  control API is *warned* about rather than refused: it exposes nothing that
+  plane was not already exposing, so refusing would be the script making a
+  deployment decision that is not its own.
+  **No dependency.** JSON-RPC 2.0 over newline-delimited stdio is stdlib, the
+  same "no compiler in the image" property the EPUB writer keeps.
+  Four decisions inside it. **The live library ids go in the schema's `enum`,
+  not only in the description** — RAGFlow builds its tool description from the
+  live dataset list so a model needs no second round trip, and putting the ids
+  in the schema costs nothing more and makes naming a library that does not
+  exist *unrepresentable*. An empty list omits the enum, because an empty one is
+  a schema nothing satisfies and a fresh installation must still be able to say
+  it holds nothing. **A refusal is a result, never an `isError`**: `off_corpus`
+  and `insufficient_evidence` have different fixes and a model taught to treat
+  an honest refusal as a fault will retry it, which costs money for nothing —
+  while a control API that is down *is* an `isError`, so a fault never renders
+  like a refusal. **A notification is answered with nothing**, or a strict
+  client closes the connection at the handshake. And **running out of patience
+  hands back the question id and denies failure in words**, because the turn
+  keeps going in the worker and the recorded `ASK_TIMEOUT` incident is an answer
+  computed, billed and reported as lost.
+  **One defect was found by the first live call, and it is the worst one this
+  surface can have.** `GET /ask/{id}` reports the *run's* outcome at the top
+  level, which is `done` for every question that finished — `asking._record`
+  maps a refusal onto a success on purpose — while the three states a reader
+  acts on live on the answer. Reading the outer one rendered a real answer, with
+  its prose and two verified citations, as **"No answer (done)"**: a corpus made
+  to look silent when it had spoken. Nothing failed, the envelope was
+  well-formed, and **sixteen tests passed over it**, because the doubles were
+  hand-built envelopes that agreed with the assumption rather than the shape the
+  plane sends. They are built from the real envelope now.
+  Verified over real stdio against the running plane: handshake at
+  `2025-06-18`, `tools/list` carrying the three live libraries in its enum, and
+  a `standard` question answered in 12.1 s for **$0.018923** with **2 verified
+  citations** reading `Procrastinacion · p. 1 · [1014:2180]` — the page locator
+  and the byte range both reaching an agent — plus an off-corpus question
+  refused with the plane's own reason and `isError` absent.
 - **Two retrieval knobs are deliberately off the effort ladder, for two
   different reasons.** `MIN_SCORE` is the topicality floor and the recorded
   sweep already settled it: 0.50 scored best of everything tried and is wrong,

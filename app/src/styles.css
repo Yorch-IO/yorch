@@ -1075,6 +1075,70 @@ button.link.active {
   padding-left: 0.5rem;
 }
 
+/* The retrieval probe, below Explore's panes. Its two tables reuse
+   `table.estimate`, which already knows how to lay out numbers. */
+.panel.probe {
+  margin-top: 1.5rem;
+}
+
+.panel.probe .notice.sandbox {
+  margin-top: 0;
+}
+
+.panel.probe textarea {
+  width: 100%;
+  max-width: 46rem;
+}
+
+.probe-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  margin: 0.5rem 0;
+}
+
+.probe-report .summary {
+  margin: 1rem 0 0.25rem;
+}
+
+.probe-report .probe-verdict {
+  border-left: 3px solid var(--line);
+  padding: 0.5rem 0.9rem;
+  margin: 1rem 0;
+}
+
+.probe-report .probe-verdict.reached {
+  border-left-color: var(--ok);
+}
+
+.probe-report .probe-verdict.lost {
+  border-left-color: var(--warn);
+}
+
+.probe-report table.candidates tr.dropped td {
+  color: var(--muted);
+}
+
+.probe-report table.candidates tr.delivered td:first-child,
+.probe-report table.candidates tr.delivered td:nth-child(2) {
+  font-weight: 600;
+}
+
+.probe-report .preview {
+  margin: 0.25rem 0 0;
+  font-size: 0.85em;
+  color: var(--muted);
+  /* A wide table cell that never wraps pushes the whole panel past the
+     viewport — the recorded `white-space: nowrap` defect on the gate table. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.probe-report table.candidates td,
+.probe-report table.legs td {
+  vertical-align: top;
+}
+
 .chunk {
   border: 1px solid var(--line);
   border-radius: 4px;

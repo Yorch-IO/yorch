@@ -83,6 +83,7 @@ export type ControlErrorKind =
   | "gate_not_ready"
   | "provider_unconfigured"
   | "graph_unreachable"
+  | "qdrant_unreachable"
   | "bad_identifier"
   | "document_not_found"
   | "version_not_found"
@@ -226,6 +227,7 @@ const CONTROL_GUIDANCE: Partial<Record<ControlErrorKind, string>> = {
   provider_unconfigured: "error.providerUnconfigured",
   run_not_found: "error.runNotFound",
   graph_unreachable: "error.graphUnreachable",
+  qdrant_unreachable: "error.qdrantUnreachable",
   bad_identifier: "error.badIdentifier",
   source_path_unknown: "error.sourcePathUnknown",
   rebuild_unavailable: "error.rebuildUnavailable",
@@ -1251,6 +1253,89 @@ export interface ProviderSettings {
 // Concepts, claims and related documents were *proposed by a model*, which is
 // what `semantic` and `confidence` are for — an edge a model suggested and an
 // edge read off a table of contents have different standing as evidence.
+
+/** One retrieval leg's account of a chunk being placed. `rank` is `null` when
+ *  the chunk was outside the window searched — "below where we looked" and
+ *  "first" must never be the same value. */
+export interface ProbeLeg {
+  leg: string;
+  rank: number | null;
+  score: number | null;
+  searched: number;
+  prefetchLimit: number;
+  floor: number | null;
+  clearsFloor: boolean | null;
+  inPrefetch: boolean;
+}
+
+export interface ProbeVerdict {
+  reached: boolean;
+  /** The first gate that excluded the chunk — never every gate it failed,
+   *  because the remedies differ per gate. */
+  lostAt: string | null;
+  deliveredRank: number | null;
+  detail: string;
+  remedy: string;
+  note: string | null;
+}
+
+export interface ProbeTarget {
+  target: string;
+  singleTermQuery: boolean;
+  dense: ProbeLeg;
+  sparse: ProbeLeg;
+  fusedRank: number | null;
+  rrfRank: number | null;
+  rerankScore: number | null;
+  verdict: ProbeVerdict;
+  note: string | null;
+}
+
+/** One fused candidate with its legs pulled apart — what the fused number
+ *  hides. `deliveredRank` is `null` for one `diversify` did not pick. */
+export interface ProbeCandidate {
+  chunkId: string;
+  source: string | null;
+  breadcrumb: string | null;
+  kind: string | null;
+  preview: string;
+  rrfRank: number | null;
+  rank: number | null;
+  denseRank: number | null;
+  denseScore: number | null;
+  sparseRank: number | null;
+  sparseScore: number | null;
+  rerankScore: number | null;
+  deliveredRank: number | null;
+}
+
+export interface ProbeServedWith {
+  minScore: number;
+  prefetchLimit: number;
+  candidateLimit: number;
+  perSection: number;
+  topK: number;
+  effort: string;
+  reranked: boolean;
+  rerankModel: string;
+  rerankNote: string;
+  depth: number;
+}
+
+export interface ProbeReport {
+  question: string;
+  effort: string;
+  queryTerms: string[];
+  onTopic: boolean;
+  denseSupported: number;
+  servedWith: ProbeServedWith;
+  candidates: ProbeCandidate[];
+  target: ProbeTarget | null;
+  /** What the probe cost. `recorded` is always false and travels anyway: a
+   *  sandbox that cost a tenth of a cent must not look free. */
+  spent: { embeddingInputTokens: number; cacheHits: number; rerankUsd: number; recorded: boolean };
+  sandbox: boolean;
+}
 
 export interface Section {
   id: string;
@@ -2718,6 +2803,17 @@ export const api = {
     invoke<ChunkContext>("explore_chunk_context", { chunkId }),
   exploreConcepts: (versionId: string) =>
     invoke<VersionConcepts>("explore_concepts", { versionId }),
+  /** One question through retrieval's gates, in the level's own widths, with
+   *  every candidate's legs pulled apart. A sandbox: nothing here changes what
+   *  a question is answered with. Spends an embedding (usually cached) and, at
+   *  a level that reranks, one ranking query — and records neither. */
+  exploreProbe: (args: {
+    libraryId: string;
+    question: string;
+    chunkId?: string;
+    versionId?: string;
+    effort?: AskEffort;
+  }) => invoke<ProbeReport>("explore_probe", args),
   exploreRelated: (versionId: string) =>
     invoke<RelatedDocuments>("explore_related", { versionId }),
   exploreClaims: (conceptId: string) =>

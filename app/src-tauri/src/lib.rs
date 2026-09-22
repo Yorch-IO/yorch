@@ -1607,6 +1607,25 @@ async fn explore_chunk_context(
 }
 
 #[tauri::command]
+async fn explore_probe(
+    state: State<'_, AppState>,
+    library_id: String,
+    question: String,
+    chunk_id: Option<String>,
+    version_id: Option<String>,
+    effort: Option<String>,
+) -> Result<control::ProbeReport> {
+    let control = state.control().await?;
+    let req = control::ProbeRequest {
+        question,
+        chunk_id: chunk_id.unwrap_or_default(),
+        version_id: version_id.unwrap_or_default(),
+        effort: effort.unwrap_or_else(|| "standard".to_string()),
+    };
+    control.probe_retrieval(&library_id, &req).await
+}
+
+#[tauri::command]
 async fn explore_concepts(
     state: State<'_, AppState>,
     version_id: String,
@@ -1835,6 +1854,7 @@ pub fn run() {
             explore_outline,
             explore_section_chunks,
             explore_chunk_context,
+            explore_probe,
             explore_concepts,
             explore_related,
             explore_claims,

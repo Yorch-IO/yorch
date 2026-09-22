@@ -15,6 +15,7 @@ import {
   type Section,
 } from "../lib/api";
 import { useLibraries } from "../lib/libraries";
+import { RetrievalProbe } from "./RetrievalProbe";
 
 /** Marks a result a model proposed rather than one read off the document.
  *
@@ -382,6 +383,17 @@ export function ExploreScreen() {
           )}
         </div>
       </div>
+
+      {/* Below the panes rather than in one: a probe is about a chunk, and the
+          chunk whose context is open above is the one it offers to place. */}
+      {libraryId && (
+        <RetrievalProbe
+          libraryId={libraryId}
+          versionId={versionId}
+          chunkId={context?.chunkId ?? null}
+          onPick={(id) => void openChunk(id)}
+        />
+      )}
     </section>
   );
 }

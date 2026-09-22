@@ -84,17 +84,6 @@ DEFAULT_DEPTH = 500
 DEFAULT_TOP_K = budget_for(DEFAULT_EFFORT).top_k
 
 
-def _ids(hits: list[Any]) -> list[str]:
-    return [str(h.payload.get("chunk_id") or "") for h in hits]
-
-
-def _score_of(hits: list[Any], target: str) -> "float | None":
-    for h in hits:
-        if str(h.payload.get("chunk_id") or "") == target:
-            return float(h.score)
-    return None
-
-
 def probe(
     settings: config.Settings,
     *,
@@ -109,114 +98,45 @@ def probe(
     depth: int,
     effort: str = DEFAULT_EFFORT,
 ) -> dict[str, Any]:
-    from docagent.bm25 import tokenize
-    from docagent.qdrant import Qdrant, SearchOpts, diversify
-    from brainworker.activities.paid import (
-        EMBED_WORKERS,
-        CachedEmbedder,
-        _embed_cache_dir,
-        _provider,
-    )
-    from brainworker.providers.gemini import RETRIEVAL_QUERY
+    """The store-touching half moved to `brainworker.probing` on 2026-09-21 so a
+    route could serve the same report; this keeps the script's older shape —
+    `dense`, `sparse`, `verdict`, `delivered` at the top level — for anybody
+    who scripted against it.
 
-    embedder = CachedEmbedder(
-        _provider(),
-        _embed_cache_dir(settings),
-        model=settings.gemini.embedding_model,
-        dimensions=settings.gemini.embedding_dimensions,
-        workers=EMBED_WORKERS,
-    )
-    vector = embedder.embed_many([question], task_type=RETRIEVAL_QUERY)[0].values
+    The overrides (`--min-score`, `--prefetch`, …) are no longer honoured, and
+    the report says so: `probing.probe` reproduces production's values on
+    purpose, because a probe that explained a retrieval production never ran
+    is worse than none. Pass `--effort` to explain the level a question was
+    actually asked at.
+    """
+    from brainworker.probing import ProbeRequest, probe as run_probe
 
-    with Qdrant(settings.qdrant_url, settings.qdrant_collection) as q:
-        # Each leg on its own, with no floor, to place the chunk. `min_score` is
-        # left off deliberately: the question here is "where does this rank",
-        # and a floor would answer "nowhere" for exactly the chunks worth
-        # explaining.
-        dense_hits = q.search(
-            vector,
-            SearchOpts(limit=depth, min_score=0.0, dense_only=True,
-                       query_text=question, filters=filters),
-        )
-        sparse_hits = q.search(
-            vector,
-            SearchOpts(limit=depth, sparse_only=True,
-                       query_text=question, filters=filters),
-        )
-        # And then the search production actually issues.
-        fused = q.search(
-            vector,
-            SearchOpts(limit=candidate_limit, min_score=min_score,
-                       query_text=question, filters=filters,
-                       prefetch_limit=prefetch_limit),
-        )
-
-    delivered = diversify(fused, per_section, top_k)
-
-    dense = pr.leg(
-        "dense",
-        rank=pr.rank_of(_ids(dense_hits), target),
-        score=_score_of(dense_hits, target),
-        prefetch_limit=prefetch_limit,
-        floor=min_score,
-        searched=len(dense_hits),
-    )
-    sparse = pr.leg(
-        "sparse",
-        rank=pr.rank_of(_ids(sparse_hits), target),
-        score=_score_of(sparse_hits, target),
-        prefetch_limit=prefetch_limit,
-        searched=len(sparse_hits),
-    )
-
-    report = pr.probe(
-        question=question,
-        terms=tokenize(question),
-        target=target,
-        dense=dense,
-        sparse=sparse,
-        fused_rank=pr.rank_of(_ids(fused), target),
-        candidate_limit=candidate_limit,
-        delivered_rank=pr.rank_of(_ids(delivered), target),
-        top_k=top_k,
-    )
-    report["served_with"] = {
-        "min_score": min_score,
-        "prefetch_limit": prefetch_limit,
-        "candidate_limit": candidate_limit,
-        "per_section": per_section,
-        "top_k": top_k,
-        "effort": effort,
-        # Compared against *the named level's* budget, not against the module
-        # constants. Those describe `standard` only, so checking against them
-        # would report "differs from production" for every faithful probe of a
-        # question asked at any other level — and the note it prints is what a
-        # reader uses to decide whether the explanation applies at all.
-        # `min_score` and `per_section` stay on the constants because no level
-        # scales them.
-        "matches_production": (
-            min_score == MIN_SCORE
-            and per_section == PER_SECTION
-            and candidate_limit == budget_for(effort).candidate_limit
-            and prefetch_limit == budget_for(effort).prefetch_limit
-        ),
+    budget = budget_for(effort)
+    overridden = {
+        k: v for k, v in {
+            "min_score": (min_score, MIN_SCORE),
+            "prefetch_limit": (prefetch_limit, budget.prefetch_limit),
+            "candidate_limit": (candidate_limit, budget.candidate_limit),
+            "per_section": (per_section, PER_SECTION),
+            "top_k": (top_k, budget.top_k),
+        }.items() if v[0] != v[1]
     }
-    report["scope"] = filters
+    full = run_probe(settings, ProbeRequest(
+        question=question, library_id=filters["library_id"], tenant_id=filters["tenant_id"],
+        chunk_id=target, version_id=filters.get("version_id", ""), effort=effort, depth=depth,
+    ))
+    report: dict[str, Any] = dict(full["target"] or {})
+    report["served_with"] = {**full["served_with"], "matches_production": True}
+    if overridden:
+        report["served_with"]["ignored_overrides"] = {k: v[0] for k, v in overridden.items()}
+    report["scope"] = full["scope"]
     report["delivered"] = [
-        {
-            "chunk_id": h.payload.get("chunk_id"),
-            "source": h.payload.get("source_title"),
-            "breadcrumb": h.payload.get("breadcrumb"),
-            "score": round(float(h.score), 4),
-        }
-        for h in delivered
+        {"chunk_id": c["chunk_id"], "source": c["source"], "breadcrumb": c["breadcrumb"],
+         "rank": c["delivered_rank"], "dense_score": c["dense_score"],
+         "sparse_score": c["sparse_score"], "rerank_score": c["rerank_score"]}
+        for c in full["candidates"] if c["delivered_rank"]
     ]
-    # Reported, not assumed: a non-zero figure here is real spend, and a zero
-    # means the cache answered.
-    report["spent"] = {
-        "embedding_input_tokens": embedder.usage.input_tokens,
-        "cache_hits": embedder.cache_hits,
-    }
+    report["spent"] = full["spent"]
     return report
 
 
@@ -231,8 +151,12 @@ def render(report: dict[str, Any]) -> str:
     terms = ", ".join(report["query_terms"]) or "(ninguno)"
     note = "  <-- one term: BM25 cannot rank by relevance here" if report["single_term_query"] else ""
     out.append(f"bm25 terms: [{terms}]{note}")
-    if not served["matches_production"]:
-        out.append("NOTE: parameters differ from what production serves")
+    if served.get("ignored_overrides"):
+        out.append(f"NOTE: overrides ignored, production's values used: {served['ignored_overrides']}")
+    if served.get("reranked"):
+        out.append(f"reranked : yes ({served['rerank_model']}) — the fused rank below is the reranked position")
+    elif served.get("rerank_note"):
+        out.append(f"reranked : NO — {served['rerank_note']}")
     out.append("")
 
     for name in ("dense", "sparse"):
@@ -265,12 +189,15 @@ def render(report: dict[str, Any]) -> str:
     out.append("")
     out.append(f"delivered evidence ({len(report['delivered'])}):")
     for i, d in enumerate(report["delivered"], 1):
-        out.append(f"  {i}. {d['score']:<8} {str(d['source'])[:34]:<34} {str(d['breadcrumb'] or '')[:32]}")
+        ds = "-" if d["dense_score"] is None else f"{d['dense_score']:.3f}"
+        ss = "-" if d["sparse_score"] is None else f"{d['sparse_score']:.2f}"
+        rs = "" if d["rerank_score"] is None else f" rr {d['rerank_score']:.3f}"
+        out.append(f"  {i}. dense {ds:<6} bm25 {ss:<6}{rs:<9} {str(d['source'])[:30]:<30} {str(d['breadcrumb'] or '')[:30]}")
 
     s = report["spent"]
     out.append("")
     out.append(f"spent: {s['embedding_input_tokens']} embedding input tokens "
-               f"({s['cache_hits']} cache hit(s))")
+               f"({s['cache_hits']} cache hit(s)), ${s['rerank_usd']:.4f} reranking — recorded nowhere")
     return "\n".join(out)
 
 

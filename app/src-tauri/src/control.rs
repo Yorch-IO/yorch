@@ -2514,6 +2514,123 @@ pub struct ChunkContext {
     pub citation: Option<ChunkCitation>,
 }
 
+/// What the free plane's `POST /libraries/{id}/probe` is asked. Snake case on
+/// the wire because it is the Python dataclass's own field names, and no
+/// rename on serialize because this struct only ever travels *to* the API.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProbeRequest {
+    pub question: String,
+    pub chunk_id: String,
+    pub version_id: String,
+    pub effort: String,
+}
+
+/// One retrieval leg's account of the chunk being placed. `rank` is `None`
+/// when the chunk was outside the window searched — "ranked below where we
+/// looked" and "ranked first" must never be the same value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ProbeLeg {
+    pub leg: String,
+    pub rank: Option<u32>,
+    pub score: Option<f64>,
+    pub searched: u32,
+    pub prefetch_limit: u32,
+    pub floor: Option<f64>,
+    pub clears_floor: Option<bool>,
+    pub in_prefetch: bool,
+}
+
+/// The first gate that excluded the chunk, or that it was delivered.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ProbeVerdict {
+    pub reached: bool,
+    pub lost_at: Option<String>,
+    pub delivered_rank: Option<u32>,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub remedy: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ProbeTarget {
+    pub target: String,
+    pub single_term_query: bool,
+    pub dense: ProbeLeg,
+    pub sparse: ProbeLeg,
+    pub fused_rank: Option<u32>,
+    pub rrf_rank: Option<u32>,
+    pub rerank_score: Option<f64>,
+    pub verdict: ProbeVerdict,
+    pub note: Option<String>,
+}
+
+/// One fused candidate with its legs pulled apart — the thing the fused number
+/// hides. `delivered_rank` is `None` for a candidate `diversify` did not pick.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ProbeCandidate {
+    pub chunk_id: String,
+    pub source: Option<String>,
+    pub breadcrumb: Option<String>,
+    pub kind: Option<String>,
+    pub preview: String,
+    pub rrf_rank: Option<u32>,
+    pub rank: Option<u32>,
+    pub dense_rank: Option<u32>,
+    pub dense_score: Option<f64>,
+    pub sparse_rank: Option<u32>,
+    pub sparse_score: Option<f64>,
+    pub rerank_score: Option<f64>,
+    pub delivered_rank: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ProbeServedWith {
+    pub min_score: f64,
+    pub prefetch_limit: u32,
+    pub candidate_limit: u32,
+    pub per_section: u32,
+    pub top_k: u32,
+    pub effort: String,
+    pub reranked: bool,
+    pub rerank_model: String,
+    #[serde(default)]
+    pub rerank_note: String,
+    pub depth: u32,
+}
+
+/// What the probe spent. `recorded` is always false and travels anyway: a
+/// sandbox that cost a tenth of a cent must not look free.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ProbeSpent {
+    pub embedding_input_tokens: u64,
+    pub cache_hits: u64,
+    pub rerank_usd: f64,
+    pub recorded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ProbeReport {
+    pub question: String,
+    pub effort: String,
+    pub query_terms: Vec<String>,
+    pub on_topic: bool,
+    pub dense_supported: u32,
+    pub served_with: ProbeServedWith,
+    pub candidates: Vec<ProbeCandidate>,
+    pub target: Option<ProbeTarget>,
+    pub spent: ProbeSpent,
+    pub sandbox: bool,
+}
+
 /// Project-wide totals, each leg carrying its own availability.
 ///
 /// Every count is an `Option` and none of them defaults to zero. The API
@@ -3595,6 +3712,14 @@ impl Control {
             .await
     }
 
+    /// One question through retrieval's gates. The embedding is usually cached
+    /// and a reranking level adds one short call, so the Explore timeout is
+    /// enough — `ASK_TIMEOUT` would be measuring a generation that never runs.
+    pub async fn probe_retrieval(&self, library_id: &str, req: &ProbeRequest) -> Result<ProbeReport> {
+        self.post_json(&format!("/libraries/{library_id}/probe"), req, EXPLORE_TIMEOUT)
+            .await
+    }
+
     pub async fn project_summary(&self) -> Result<ProjectSummary> {
         self.get("/project-summary", EXPLORE_TIMEOUT).await
     }
@@ -3886,6 +4011,74 @@ mod tests {
     //! `undefined` in TypeScript, which renders as a blank rather than an error.
 
     use super::*;
+
+    /// A real free-plane answer, trimmed to one candidate. Read on 2026-09-21.
+    const PROBE: &str = r#"{
+      "question": "¿Cómo reaccionó la congregación?",
+      "effort": "brief",
+      "scope": {"library_id": "lib_pruebas", "tenant_id": "tnt_000000000000000000000001"},
+      "query_terms": ["reacciono", "congregacion"],
+      "on_topic": true,
+      "dense_supported": 4,
+      "served_with": {"min_score": 0.6, "prefetch_limit": 50, "candidate_limit": 20,
+                      "per_section": 2, "top_k": 4, "effort": "brief", "reranked": true,
+                      "rerank_model": "semantic-ranker-default-005", "rerank_note": "", "depth": 500},
+      "candidates": [{"chunk_id": "chk_aaaaaaaaaaaaaaaaaaaaaaaa", "source": "01 · El Reto de Dios",
+                      "breadcrumb": "Capítulo 11", "kind": "cuerpo", "preview": "Tras sufrir…",
+                      "rrf_rank": 1, "rank": 1, "dense_rank": 1, "dense_score": 0.703,
+                      "sparse_rank": 2, "sparse_score": 14.9, "rerank_score": 0.881, "delivered_rank": 1}],
+      "target": {"question": "¿Cómo reaccionó la congregación?", "target": "chk_bbbbbbbbbbbbbbbbbbbbbbbb",
+                 "query_terms": ["reacciono"], "single_term_query": false,
+                 "dense": {"leg": "dense", "rank": 496, "score": 0.4967, "searched": 500, "prefetch_limit": 50,
+                           "floor": 0.6, "clears_floor": false, "in_prefetch": false},
+                 "sparse": {"leg": "sparse", "rank": null, "score": null, "searched": 25, "prefetch_limit": 50,
+                            "floor": null, "clears_floor": null, "in_prefetch": false},
+                 "fused_rank": null, "candidate_limit": 20, "top_k": 4,
+                 "verdict": {"reached": false, "lost_at": "prefetch", "detail": "dense: 0.4967 < floor 0.6",
+                             "remedy": "the floor excludes it", "note": "RRF never saw this chunk"},
+                 "rrf_rank": null, "rerank_score": null},
+      "spent": {"embedding_input_tokens": 0, "cache_hits": 1, "rerank_usd": 0.001, "recorded": false},
+      "sandbox": true
+    }"#;
+
+    #[test]
+    fn a_probe_report_survives_the_round_trip_to_the_webview() {
+        let parsed: ProbeReport = serde_json::from_str(PROBE).unwrap();
+        let out = serde_json::to_value(&parsed).unwrap();
+
+        assert_eq!(out["servedWith"]["topK"], 4);
+        assert_eq!(out["servedWith"]["reranked"], true);
+        assert_eq!(out["candidates"][0]["rerankScore"], 0.881);
+        assert_eq!(out["candidates"][0]["deliveredRank"], 1);
+        // A leg that never ranked the chunk keeps `null`, never 0: "below where
+        // we looked" and "first" must not be the same value.
+        assert!(out["target"]["sparse"]["rank"].is_null());
+        assert_eq!(out["target"]["verdict"]["lostAt"], "prefetch");
+        assert_eq!(out["target"]["dense"]["clearsFloor"], false);
+        // The sandbox flag and the unrecorded spend both travel.
+        assert_eq!(out["sandbox"], true);
+        assert_eq!(out["spent"]["recorded"], false);
+        assert_eq!(out["spent"]["rerankUsd"], 0.001);
+        assert!(out["served_with"].is_null());
+    }
+
+    #[test]
+    fn a_probe_with_no_target_keeps_the_field_as_null() {
+        let mut v: serde_json::Value = serde_json::from_str(PROBE).unwrap();
+        v["target"] = serde_json::Value::Null;
+        let parsed: ProbeReport = serde_json::from_value(v).unwrap();
+        assert!(parsed.target.is_none());
+    }
+
+    #[test]
+    fn the_probe_request_travels_in_the_pythons_own_field_names() {
+        let req = ProbeRequest {
+            question: "¿qué?".into(), chunk_id: "".into(), version_id: "".into(), effort: "brief".into(),
+        };
+        let out = serde_json::to_value(&req).unwrap();
+        assert_eq!(out["chunk_id"], "");
+        assert!(out.get("chunkId").is_none());
+    }
 
     const CONTEXT: &str = r#"{
         "chunk_id": "chk_aaaaaaaaaaaaaaaaaaaaaaaa",

@@ -810,6 +810,30 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
   (`discoveryengine.googleapis.com`) that needed no extra role here — checked
   by calling it. `BRAIN_RERANK_MODEL=` (empty) turns it off everywhere
   without touching the ladder.
+- **Retrieval can be probed from the Explore screen, and the probe is a
+  sandbox that says so.** Added 2026-09-21. `brainworker/proberetrieval.py`
+  had been pure, tested, and reachable from a shell and a chunk id and from
+  no screen; its store-touching half now lives in `brainworker/probing.py`
+  (the script calls the same driver), `POST /libraries/{id}/probe` serves it
+  on the free plane, Rust proxies it as `explore_probe`, and
+  `RetrievalProbe.tsx` sits **below Explore's panes** rather than on a tab —
+  a probe is about a chunk, and the chunk whose context is open is the one it
+  offers to place. Three decisions. **Every candidate comes back with its legs
+  pulled apart** — dense rank and cosine, BM25 rank and score, RRF rank, the
+  reranker's score when one ran — because a hit that scores well on one leg
+  and badly on the other is a different diagnosis from one middling on both,
+  and the fused number hides which (RAGFlow's retrieval-testing screen shows
+  the same three). **It reproduces production's numbers and honours no
+  override**: the script's `--min-score`/`--prefetch` flags are reported as
+  ignored now, because a probe that explained a retrieval production never
+  ran is worse than none; the reranker runs where and when `retrieve.search`
+  runs it. **It spends what a question spends and records nothing**, exactly
+  like `POST /provider/probe` — no run row, so no cost row — and the response
+  carries `spent.recorded: false` for the screen to print. Free plane and
+  desktop only, as a decision: it is a developer's tool and the free plane is
+  the developer's plane. Screenshotted at 1440 and 900 in both themes before
+  commit, which found a `.verdict` class already taken by the channel screen
+  making every line of the verdict bold.
 - **Two retrieval knobs are deliberately off the effort ladder, for two
   different reasons.** `MIN_SCORE` is the topicality floor and the recorded
   sweep already settled it: 0.50 scored best of everything tried and is wrong,

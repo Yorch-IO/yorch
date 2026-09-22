@@ -3155,6 +3155,72 @@ def chunk_context(chunk_id: str) -> dict[str, Any]:
     }
 
 
+@dataclass
+class ProbeBody:
+    """One question to run through retrieval's gates, and optionally one chunk
+    to place. `effort` is a `Literal` for the reason `Question.effort` is: the
+    framework refuses a bad level with its own 422, and the paid plane renders
+    the same shape, so a hand-raised 400 would make the two planes differ."""
+
+    question: Annotated[str, Field(min_length=1, max_length=2000)]
+    chunk_id: str = ""
+    version_id: str = ""
+    effort: Literal["brief", "standard", "thorough"] = DEFAULT_EFFORT
+
+
+@app.post("/libraries/{library_id}/probe")
+async def probe_retrieval(library_id: str, body: ProbeBody) -> dict[str, Any]:
+    """Why a chunk did or did not reach an answer — the retrieval-testing view.
+
+    Serves `brainworker.probing`, which until 2026-09-21 was reachable from a
+    shell and a chunk id and from no screen. **A sandbox, and the response says
+    so**: nothing a person changes here changes what a question is answered
+    with, because there is nothing to change — the probe reproduces
+    production's own constants and widths for the level named, on purpose. A
+    debug screen whose knobs were settings would be a settings screen nobody
+    audited; RAGFlow's docs draw the same line for its own testing screen.
+
+    It spends what production spends for a question — one embedding, usually
+    cached, and at a level that reranks one ranking query at list price — and
+    **records none of it**, exactly like `POST /provider/probe`: there is no
+    run row to hang a cost row off. The figure travels in `spent` for the
+    screen to print, so a probe that cost a tenth of a cent never looks free.
+    """
+    from docagent.qdrant import QdrantError
+
+    from ..probing import ProbeRequest, probe as run_probe
+    from ..providers import ProviderError
+
+    s = settings()
+    if not s.gemini.configured:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "kind": "provider_unconfigured",
+                "message": "Falta BRAIN_GEMINI_PROJECT_ID: no se puede sondear la recuperación.",
+            },
+        )
+    req = ProbeRequest(
+        question=body.question, library_id=library_id, tenant_id=LEGACY_TENANT_ID,
+        chunk_id=body.chunk_id, version_id=body.version_id, effort=body.effort,
+    )
+    try:
+        report = await asyncio.to_thread(run_probe, s, req)
+    except ProviderError as e:
+        raise HTTPException(
+            status_code=503, detail={"kind": e.kind, "message": str(e)}
+        ) from e
+    except (httpx.HTTPError, QdrantError) as e:
+        # Same shape as `graph_unreachable`: a stopped container is a 503
+        # naming the fix, not a 500 echoing a transport error.
+        raise HTTPException(
+            status_code=503,
+            detail={"kind": "qdrant_unreachable", "message": f"Qdrant no responde en {s.qdrant_url}: {e}"},
+        ) from e
+    report["sandbox"] = True
+    return report
+
+
 @app.get("/versions/{version_id}/concepts")
 def version_concepts(
     version_id: str, confidence_floor: float = 0.6, limit: int = 50

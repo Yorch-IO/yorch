@@ -182,6 +182,12 @@ uv run python scripts/retally_spellings.py [--dry-run]
 # 1,000 questions). This is what put reranking on two levels and not three.
 uv run python scripts/rerank_ceiling.py ver_… [ver_… …] [--rerank MODEL --levels brief,standard]
 
+# How many refusals are wrong, from the same eval sets, ≈0$. Every question in
+# them is answerable from the corpus, so a refusal is false by construction.
+# This is what decided against a second retrieval round; re-run it after a
+# large import before re-deciding.
+uv run python scripts/refusal_census.py ver_… [ver_… …] [--deep N] [--json out.json]
+
 # Measure the speech rate the video gate projects a correction bill from.
 # Free — captions and metadata cost nothing and no transcription job is started.
 # See doc/VIDEO.md; the constant it feeds was a guess until 2026-09-05.
@@ -761,6 +767,57 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
 - **`off_corpus` and `insufficient_evidence` are different states.** The first
   means nothing cleared `topicality_gate`'s dense floor, the second means the
   corpus was searched and came up short. They have different fixes.
+- **A refusal is almost always honest, and that is measured rather than
+  assumed — so there is no second retrieval round.** Re-asking a refused
+  question with a rewritten query costs a generation call per refusal on the
+  stage that is already **87% of every dollar this product has spent**, so
+  whether to build it turns on one number: how many refusals are *wrong*.
+  **The durable record cannot answer it, and that is itself a decision working
+  as intended.** `activities/asking.py::_record` maps a refusal onto
+  `succeeded`, correctly — "the corpus does not cover this" is an answer about
+  the corpus and not a fault of the run — so all 44 `ask` runs in this catalog
+  carry no outcome at all. `run.error_kind` is not the place to put one either:
+  `20260831140000_run_blocked` exists precisely because a succeeded row carrying
+  an error kind is "a contradiction a reader has to already know about to
+  interpret". `conversation_turn` is the only durable refusal record and held
+  **seven**, five of them from before `_settle` carried a reason.
+  So `scripts/refusal_census.py` synthesises the sample instead of counting one.
+  The eval sets are 640 questions whose answer is **known to be in the corpus**,
+  so every one the gate refuses is a false refusal by construction. Measured
+  2026-09-22 at **0 embedding tokens**, because the `evaluating` stage already
+  asked every one of them:
+
+  | book | refused (library) | refused (version) | of 80 |
+  |---|---|---|---|
+  | 01 El Reto de Dios | 0 | 0 | 0.0% |
+  | 01 RetoDeDios (re-cut) | 2 | 3 | 2.5% |
+  | 02 Puertas Eternas | 1 | 2 | 1.2% |
+  | 03 El Fruto Eterno | 0 | 4 | 0.0% |
+  | **04 Tesoros Dios Me Dio** | **9** | **28** | **11.2%** |
+  | 05 Código Jesús | 0 | 2 | 0.0% |
+  | 06 Sexo en la Biblia | 0 | 0 | 0.0% |
+  | 07 Llaves del Poder | 1 | 1 | 1.2% |
+  | | **13 (2.0%)** | **40 (6.2%)** | |
+
+  **Five of the eight books refuse nothing at all, and one book is 69% of every
+  false refusal in the corpus.** `04 Tesoros` is the recorded outlier — recall@5
+  0.338, dense-only 0.200, so not a fusion problem — and excluding it the rate
+  is **4 in 560, 0.71%**. Two more figures kill the loop rather than merely
+  ranking it down: of the 13 refusals the target chunk was the library's **best
+  in zero** cases, and **beyond rank 300 of its own library in four**. A
+  rewriter moves the query; it cannot reach a passage the embedding space does
+  not connect to the question at all, and a floor change cannot help a question
+  whose right answer was never first.
+  What the census actually found is that **refusals concentrate in a badly
+  indexed document**, where the remedy is re-indexing that document rather than
+  paying on every question in the product to paper over it. Re-run it after a
+  large import before re-deciding; the rate is the thing that would move.
+  **Quote the library-scope figure, not the version-scope one.**
+  `retrieve.search` is scoped to a library, so 2.0% is what a person meets;
+  `rerank_ceiling.py` gates at version scope because a recall measurement must
+  be scoped to the document it is about (`runner.evaluate` refuses an unscoped
+  one). The two differ by three times, and the census prints both so neither
+  can be quoted by accident.
 - **Asking has an effort level, and what it may *not* reach is the interesting
   half.** `brief`/`standard`/`thorough` move `top_k`, the fused candidate limit,
   the per-leg prefetch width and `claims_per_chunk` together;

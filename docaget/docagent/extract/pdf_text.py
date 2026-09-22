@@ -66,6 +66,19 @@ SOFT_HYPHEN_RE = re.compile("\u00ad\\s*")
 MULTI_SPACE_RE = re.compile(r"  +")
 
 # A page with less than this much text has no usable text layer -> OCR.
+#
+# **It recommends; it does not discard.** The two questions it used to answer at
+# once are different: "is this page worth running OCR over" is a judgement about
+# the *scan*, and "should we keep the characters we already extracted" is not a
+# judgement at all — text that came out of the page belongs in the stream.
+# Coupling them deleted real prose. Measured over the 84 PDFs in `libros/`:
+# 146 of 3,514 pages fall under the threshold, **122 of which
+# `_filter_header_footer` empties anyway**, so the coupling only ever decided 24
+# — among them two sentence tails (`teológica nunca del todo dirimida.`,
+# `la iglesia tradicional.`) which, because a paragraph flushes at each page's
+# last row, were lost whole rather than truncated. The rest are short structural
+# labels (`ADN NOTAS`, `ADN << TALLER > DE TRABAJO`) and four `Gracias.`, which
+# are the running-header problem and belong to `header_patterns`, not here.
 MIN_TEXT_PER_PAGE = 40
 
 
@@ -111,8 +124,12 @@ def extract(path: str, rules: DocRules) -> Extracted:
 
             rows = _page_rows(page, pno)
             if sum(len(r.text) for r in rows) < MIN_TEXT_PER_PAGE:
+                # Recorded, not acted on: this page is a candidate for OCR and
+                # whatever text it did yield still goes downstream. A page that
+                # really has nothing costs nothing — `rows` is empty, so
+                # `_filter_header_footer` returns nothing and the `if not kept`
+                # below skips it exactly as this `continue` used to.
                 ev.pages_without_text.append(pno)
-                continue
 
             for r in rows:
                 line_counter[r.text] += 1

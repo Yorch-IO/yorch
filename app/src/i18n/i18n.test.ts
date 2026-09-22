@@ -115,4 +115,35 @@ describe("translation bundles", () => {
       expect(Object.keys(es.nav), `nav.${name} is missing from es`).toContain(name);
     }
   });
+
+  it("labels every stage the worker can emit", () => {
+    // The same hole, in the second place it exists. `ChatScreen` renders
+    // ``t(`chat.stage.${stage}`, { defaultValue: t("chat.thinking") })``, and
+    // that fallback is deliberate — a window older than the plane must not
+    // print a raw key for a stage it has never heard of. What it also does is
+    // hide the reverse: a stage added *here* with no label degrades every turn
+    // to the generic "thinking" line, silently, and the dead-key scan marks
+    // `chat.stage.*` as used either way.
+    //
+    // So the worker's own call sites are the list. A source scan rather than a
+    // run, for the reason `stages.parity.spec.ts` dumps its module instead of
+    // trusting a committed fixture: what must not drift is the set, and the set
+    // is written down in exactly two files.
+    const roots = ["../worker/brainworker/answering/service.py",
+                   "../worker/brainworker/chat/service.py"];
+    const emitted = new Set<string>();
+    for (const rel of roots) {
+      const src = readFileSync(join(process.cwd(), rel), "utf8");
+      for (const m of src.matchAll(/\bon_stage\(\s*"([a-z_]+)"/g)) emitted.add(m[1]!);
+      for (const m of src.matchAll(/(?<!def )\bstage\(\s*"([a-z_]+)"/g)) emitted.add(m[1]!);
+    }
+    expect(emitted.size, "no stage call sites found; the scan is looking at the wrong shape")
+      .toBeGreaterThan(3);
+    for (const stage of emitted) {
+      expect(Object.keys(en.chat.stage), `chat.stage.${stage} is missing from en`)
+        .toContain(stage);
+      expect(Object.keys(es.chat.stage), `chat.stage.${stage} is missing from es`)
+        .toContain(stage);
+    }
+  });
 });

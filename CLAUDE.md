@@ -877,6 +877,30 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
   (`discoveryengine.googleapis.com`) that needed no extra role here — checked
   by calling it. `BRAIN_RERANK_MODEL=` (empty) turns it off everywhere
   without touching the ladder.
+- **The lexical leg earns its place, and weighting its query does not.**
+  Measured 2026-09-22 over the 640 eval questions at $0, because the question
+  vectors are cached: hybrid beats dense-only by **+0.0219 at `brief`, +0.0359
+  at `standard` and +0.0625 at `thorough`**, all outside the ±0.014 pooled
+  margin. So BM25 adds real recall and **adds the most exactly where the
+  reranker adds the least** — the two are complementary, which is worth knowing
+  before anyone proposes dropping a leg. The per-book table in the retrieval
+  baseline shows dense-only ahead on three books and is the wrong scope to read
+  this off.
+  **What does not help is RAGFlow's query weighting, and the mechanism for it
+  does not exist here anyway.** They extract `entity / aliases / fact_type /
+  qualifiers` from a planning call and repeat the entity and qualifier terms to
+  weight the lexical leg. Repeating a term does literally nothing here:
+  `bm25.query_sparse_vector` puts **1.0 on each *distinct* term and dedupes**,
+  so the port is two changes and the load-bearing one is the weighting, not the
+  extraction. Built as a free experiment anyway — capitalised tokens, numerals
+  and scripture references weighted above the rest, which is a proxy for the
+  same four aspects with no model in the path — and at weights 1.5, 2.0 and 3.0
+  **nothing moves**: the largest excursion at any level is 0.006, inside the
+  margin. The reason is structural and worth keeping: Qdrant's
+  `modifier: idf` already weights rare terms on the *document* side, so a proper
+  noun in a question arrives boosted, and boosting it again from the query side
+  boosts it twice. An LLM choosing those terms better cannot help when the
+  mechanism that would use the choice has no effect.
 - **Parent-child retrieval is measured and not built — and deciding it cost
   $2.05, not the re-chunking the plan assumed.** RAGFlow indexes small children
   for matching and serves the *parent* to the model
@@ -3571,17 +3595,6 @@ session's files.
   over, and whether the model then proposes a pattern that *validates* is not
   answerable without spending.
 
-- **A page with a text layer can be discarded as having none.**
-  `MIN_TEXT_PER_PAGE = 40` (`extract/pdf_text.py:259`) skips a page whose rows
-  total fewer than 40 characters and appends it to `pages_without_text`, which
-  the evidence then reports as "run with --ocr to transcribe them". Measured
-  2026-09-03 across the 84 PDFs: **26 pages are discarded while holding real
-  text**, among them `Cartilla ADN 2022.pdf`'s `PRESENTACIÓN` (page 2), its six
-  `TALLER DE TRABAJO` pages and its three `NOTAS` pages. The threshold is a
-  judgement about when a page is worth OCR and the fix is to separate that
-  question from whether to keep the text already extracted; nobody has chosen a
-  number.
-
 - **Two ways an `.xlsx` loses rows, both measured on a named synthetic workbook
   and neither on real data, because there is no spreadsheet anywhere in this
   repository.** `_find_header` (`extract/excel.py:255`) extends a multi-row
@@ -3727,6 +3740,31 @@ maintained by hand drifts, and one that has drifted is worse than none.
   `prepaid !== null`, and a control plane older than the field sends no key at
   all — `undefined !== null` is true, so it read `undefined.correctionHits` and
   took the whole gate down rather than costing it one line.
+
+- **A page with a text layer was discarded as having none, and no number
+  needed choosing after all.** `MIN_TEXT_PER_PAGE = 40` answered two questions
+  at once: "is this page worth running OCR over", which is a judgement about the
+  scan, and "should we keep the characters we already extracted", which is not a
+  judgement at all. The record said the fix was to separate them and that
+  "nobody has chosen a number" — **measuring showed no number was wanted**. The
+  threshold recommends now and discards nothing; the `continue` is gone.
+  Re-measured over the 84 PDFs before touching it, and the shape is what settled
+  it: **146 of 3,514 pages fall under the threshold and 122 of those
+  `_filter_header_footer` empties anyway**, so the coupling only ever decided
+  **24**. Two of those are sentence tails — `teológica nunca del todo dirimida.`
+  and `la iglesia tradicional.` — and because a paragraph flushes at each page's
+  last row they were lost *whole* rather than truncated. Most of the rest are
+  repeated structural labels (`ADN NOTAS`, `ADN << TALLER > DE TRABAJO`), which
+  are the `header_patterns` problem and belong there rather than here.
+  The removal is safe for a reason rather than permissive: a genuinely blank
+  page yields no rows, so `_filter_header_footer` returns nothing and the
+  `if not kept` guard below skips it exactly as the `continue` used to — which
+  is what a test asserts. Paragraph count over the corpus moved **16,717 →
+  16,749** and the OCR recommendation is unchanged at **146 pages**, which was
+  the property that had to survive: the constant still means what it meant, and
+  `pdf_ocr._pages_without_text` still uses it as a threshold because *there* it
+  is one. The two fully scanned books in the corpus (53 and 59 pages, 0 bytes)
+  still flag every page.
 
 - **A refused correction kept no record of what was refused, so `verify`'s
   false-positive rate had never been measured.** `correct_paragraphs` `continue`s

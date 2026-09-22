@@ -3222,27 +3222,6 @@ session's files.
   refetches it while `waiting(run)` still holds — the handler gets the right
   outcome for a reason that has nothing to do with the handler.
 
-- **The desktop app forces a video's semantics off at the gate, so the stage
-  `_recommended` deliberately stopped forcing off is unreachable — and the gate
-  quotes it anyway.** `VideoGateReview.tsx:63` sends `extractSemantics: false`
-  in every approval, under a comment saying "a video run has no profile,
-  semantics, eval-set or tuning stage at all". That was true until
-  `598a9a0` added the stage, and `_recommended` was changed in the same commit
-  to pass the caller's choice through precisely so a person could tick it —
-  its docstring spells out why forcing it off would be "worse than useless".
-  Two consequences, and the second is the one that matters. A reader who wants
-  this video on the Graph screen **cannot** get it from the app: the stage runs
-  only if `approval.options.extract_semantics` is true and the client always
-  says false. And because `_recommended` keeps the ingest-time value, a user who
-  ticked semantics on the Import screen is shown an estimate that **quotes** it
-  — measured at **$0.6532 against $0.2258** on a 76-minute talk — for a run that
-  then does not do it. Over-reporting is the permitted direction for a *bill*,
-  but this is not a cautious estimate; it is a quote for work the client has
-  already decided to skip. Found 2026-09-15 while adding the EPUB switch, which
-  travels through the same spread and is unaffected. The fix is a third checkbox
-  in that component, or dropping the forced `false` and letting `...stages`
-  carry it as every other switch does.
-
 - **`DocumentGraph` shows a label where it means a count.** `DocumentGraph.tsx:671`
   renders `t("graph.shared", { count: item.sharedConcepts })` under every outer
   document card. `graph.shared` is `"Concepts in"` / `"Conceptos en"` and carries
@@ -3801,6 +3780,43 @@ maintained by hand drifts, and one that has drifted is worse than none.
   `pdf_ocr._pages_without_text` still uses it as a threshold because *there* it
   is one. The two fully scanned books in the corpus (53 and 59 pages, 0 bytes)
   still flag every page.
+
+- **A video's semantics stage was unreachable from the app, and the gate quoted
+  it anyway — and three tests agreed with the defect.** Fixed 2026-09-22.
+  `VideoGateReview` sent `extractSemantics: false` in every approval, under a
+  comment saying "a video run has no profile, semantics, eval-set or tuning
+  stage at all". True when written; `598a9a0` added the stage, and
+  `_recommended` was changed in the same commit to pass the caller's choice
+  through **precisely so a person could tick it** — its docstring spells out why
+  forcing it off would be "worse than useless".
+  Two harms. A reader who wanted the video on the Graph screen **could not get
+  it from the app at all**: `library_mentions` derives its nodes from the
+  `MENTIONS` edges this stage writes, and the stage runs only when
+  `approval.options.extract_semantics` is true. And because `_recommended` keeps
+  the ingest-time value, the gate **quoted** the stage — **$0.6532 against
+  $0.2258** on a 76-minute talk — for a run the client had already decided to
+  skip. Over-reporting is the permitted direction for a *bill*; this was not a
+  cautious estimate but a quote for work that was never going to happen.
+  **There was a second, independent hop, and it is why nobody could have fixed
+  this in one place.** `RecommendedStages` declared `correct` and `embed` in
+  **both** Rust and TypeScript, while the worker sends the whole
+  `StageOptions` — so serde discarded the field on the way through, exactly as
+  it still does to `Answer.effort`. The switch could not have been seeded from
+  the recommendation even if somebody had written one.
+  **And three tests pinned the bug, one per layer.** `offers only the two
+  switches this workflow has a stage for` asserted two; `never approves a stage
+  the video workflow cannot run` asserted `extractSemantics === false`; and
+  Rust's `a_video_gate_travels_python_to_webview_the_other_way` asserted
+  `out["recommended"].get("extractSemantics").is_none()` under the comment "the
+  seven switches a video run has no stage for are dropped rather than offered".
+  Each was right when written and each outlived the fact it encoded. A test that
+  names a count, or asserts an absence, is a test that has to be revisited when
+  the thing it counts changes — which is the argument this file already makes
+  about a number maintained by hand.
+  The fix is a third checkbox, seeded from the recommendation and defaulting to
+  **unticked** when the field is absent: an older plane forced the stage off, so
+  its estimate does not quote it, and opening ticked against that estimate would
+  be the under-reporting failure this product refuses outright.
 
 - **The second gate showed the *first* gate's report, and told the reader
   "Nothing has been paid for yet" over a run that had spent $0.58.** Fixed

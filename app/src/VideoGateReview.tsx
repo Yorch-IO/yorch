@@ -24,8 +24,20 @@ export function duration(seconds: number): string {
  * would be a number nobody measured, presented at the moment somebody decides
  * whether to spend.
  *
- * Two switches, not seven. A video run has no profile, semantics, eval-set or
- * tuning stage at all, so offering those would quote work that cannot happen.
+ * Three switches, not seven, and it used to be two. A video run has no profile,
+ * eval-set or tuning stage, so offering those would quote work that cannot
+ * happen — but it **does** have a semantics stage, added after the first real
+ * video shipped with an empty Graph screen, and this component went on forcing
+ * `extractSemantics: false` in every approval under a comment saying it did
+ * not. Two harms. A reader who wanted the video on the Graph screen could not
+ * get it from the app at all, because the stage runs only when
+ * `approval.options.extract_semantics` is true and the client always said
+ * false. And `_recommended` keeps the caller's own choice on purpose, so the
+ * gate *quoted* the stage — **$0.6532 against $0.2258** on a 76-minute talk —
+ * for a run the client had already decided to skip. Over-reporting is the
+ * permitted direction for a bill; this was not a cautious estimate, it was a
+ * quote for work that was never going to happen.
+ *
  * They open on what the probe recommends: correction is worth it for automatic
  * captions, which arrive with no punctuation, and not for a manual track or for
  * Amazon's own output, which are already punctuated.
@@ -44,6 +56,12 @@ export function VideoGateReview({
   const { t } = useTranslation();
   const [correct, setCorrect] = useState(report.recommended?.correct ?? false);
   const [embed, setEmbed] = useState(report.recommended?.embed ?? true);
+  // `?? false` and not `?? true`: an older plane's `_recommended` forced this
+  // off, so its estimate does not quote it, and opening ticked against that
+  // estimate would be the under-reporting failure this product refuses.
+  const [semantics, setSemantics] = useState(
+    report.recommended?.extractSemantics ?? false,
+  );
 
   const { probe } = report;
   const source = probe.chosen
@@ -60,7 +78,7 @@ export function VideoGateReview({
       ...stages,
       correct,
       embed,
-      extractSemantics: false,
+      extractSemantics: semantics,
       learnProfile: false,
       generateEvalset: false,
       tune: false,
@@ -129,6 +147,17 @@ export function VideoGateReview({
             onChange={() => setEmbed((c) => !c)}
           />
           <span>{t("import.stageEmbed")}</span>
+        </label>
+        {/* The stage that decides two thirds of the bill, and the only route a
+            video has onto the Graph screen: `library_mentions` derives its
+            nodes from `MENTIONS` edges, which come from here. */}
+        <label>
+          <input
+            type="checkbox"
+            checked={semantics}
+            onChange={() => setSemantics((c) => !c)}
+          />
+          <span>{t("import.stageSemantics")}</span>
         </label>
       </fieldset>
       {/* Why the box starts where it does. Three cases, not two: at this gate

@@ -445,6 +445,11 @@ export interface Transcribed {
 export interface RecommendedStages {
   correct: boolean;
   embed: boolean;
+  /** Declared because it was being dropped: the worker sends the whole
+   *  `StageOptions` and Rust discarded every field it did not name, so the one
+   *  switch worth two thirds of a video's bill never arrived. See the Rust
+   *  struct for why this is three fields and not all of them. */
+  extractSemantics: boolean;
 }
 
 /** A video run's gate.

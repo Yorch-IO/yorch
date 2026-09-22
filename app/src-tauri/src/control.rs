@@ -1411,6 +1411,18 @@ pub struct VideoGateReport {
 pub struct RecommendedStages {
     pub correct: bool,
     pub embed: bool,
+    /// **Declared because it was being dropped.** The worker sends the whole
+    /// `StageOptions` here and serde discards what this struct does not name —
+    /// the same silent hop the `Answer` struct already loses `effort` through.
+    /// So the one field that decides two thirds of a video's bill never reached
+    /// the webview, and the gate could not have offered a switch for it even if
+    /// somebody had written one.
+    ///
+    /// Three fields and not all of `StageOptions`: these are the stages a video
+    /// run actually has and whose boxes this gate renders. A fourth becoming
+    /// reachable on that path needs a line here, or it repeats this exactly.
+    #[serde(default)]
+    pub extract_semantics: bool,
 }
 
 /// Mirrors `brainworker.pipeline.ProfileRules` — the flattened rules, not the
@@ -4708,7 +4720,7 @@ mod request_direction {
             "transcript": null,
             "warnings": [],
             "recommended": {
-                "correct": true, "embed": true, "extract_semantics": false,
+                "correct": true, "embed": true, "extract_semantics": true,
                 "generate_evalset": false, "learn_profile": false,
                 "ignore_profile": false, "review_correction": false,
                 "tune": false, "condense_descriptions": false
@@ -4726,9 +4738,19 @@ mod request_direction {
         assert_eq!(out["probe"]["canonicalUrl"], "https://youtu.be/dQw4w9WgXcQ");
         assert!(out["probe"].get("duration_s").is_none());
         assert_eq!(out["recommended"]["correct"], true);
-        // The seven switches a video run has no stage for are dropped rather
-        // than offered.
-        assert!(out["recommended"].get("extractSemantics").is_none());
+        // **This assertion used to be `is_none()`, and in asserting that it
+        // pinned the bug.** It was written when a video run had no semantics
+        // stage, so dropping the field was right; the stage was added after,
+        // `_recommended` began passing the caller's choice through on purpose,
+        // and this went on discarding it — so the switch worth two thirds of a
+        // video's bill never reached the webview and the gate could not offer
+        // it. Two sibling tests, one in TypeScript and one here, agreed with
+        // the defect the same way.
+        assert_eq!(out["recommended"]["extractSemantics"], true);
+        // The switches a video run genuinely has no stage for are still
+        // dropped rather than offered.
+        assert!(out["recommended"].get("learnProfile").is_none());
+        assert!(out["recommended"].get("tune").is_none());
     }
 
     #[test]

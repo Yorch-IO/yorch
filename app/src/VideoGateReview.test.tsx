@@ -78,7 +78,9 @@ const report = (kind: "manual" | "auto" | null): VideoGateReport => ({
         } as never),
   transcript: null,
   warnings: [],
-  recommended: { correct: kind === "auto", embed: true },
+  // The whole `StageOptions` is what the worker sends; `_recommended` passes
+  // `extract_semantics` through on purpose rather than forcing it off.
+  recommended: { correct: kind === "auto", embed: true, extractSemantics: true },
 });
 
 const renderGate = (kind: "manual" | "auto" | null) => {
@@ -134,18 +136,24 @@ describe("the video gate", () => {
     expect(boxes(manual.container)[0]?.checked).toBe(false);
   });
 
-  it("offers only the two switches this workflow has a stage for", () => {
+  it("offers a switch for every stage this workflow has, and no others", () => {
+    // **This test used to expect two, and in expecting two it pinned the bug.**
+    // The semantics stage was added to the video path after this component was
+    // written; the component went on forcing it off and the test went on
+    // agreeing with it. Profile learning, the eval set and tuning have no video
+    // stage and are still absent.
     const { container } = renderGate("auto");
-    expect(boxes(container)).toHaveLength(2);
+    expect(boxes(container)).toHaveLength(3);
   });
 
   it("never approves a stage the video workflow cannot run", () => {
-    // The document defaults have semantics, profile learning and the eval set
-    // on. Passing those through would quote work that has no stage at all.
+    // Profile learning, the eval set and tuning have no video stage at all, so
+    // passing them through would quote work that cannot happen. Semantics is
+    // *not* in that list any more and asserting it here is what kept it out of
+    // reach: see the test below.
     const { container, onDecide } = renderGate("auto");
     fireEvent.click(approve(container));
     const options = onDecide.mock.calls[0]?.[1] as StageOptions;
-    expect(options.extractSemantics).toBe(false);
     expect(options.learnProfile).toBe(false);
     expect(options.generateEvalset).toBe(false);
     expect(options.tune).toBe(false);
@@ -192,5 +200,48 @@ describe("the video gate", () => {
     // separate problem.
     const { container } = renderGate(null);
     expect(container.textContent).not.toContain("no tiene subtítulos");
+  });
+
+  it("approves the semantics stage the gate quoted", () => {
+    // **The defect, and it cost twice.** The stage runs only when
+    // `approval.options.extract_semantics` is true and this component sent
+    // false in every approval — so a video could not reach the Graph screen
+    // from the app at all, `library_mentions` deriving its nodes from the
+    // `MENTIONS` edges this stage writes. And `_recommended` keeps the caller's
+    // choice on purpose, so the gate *quoted* the stage: $0.6532 against
+    // $0.2258 on a 76-minute talk, for work the client had already decided to
+    // skip. Not a cautious estimate — a quote for something never going to run.
+    const { container, onDecide } = renderGate("auto");
+    fireEvent.click(approve(container));
+    expect((onDecide.mock.calls[0]?.[1] as StageOptions).extractSemantics).toBe(true);
+  });
+
+  it("lets the reader turn semantics off, and then it is off", () => {
+    const { container, onDecide } = renderGate("auto");
+    const semantics = boxes(container)[2] as HTMLInputElement;
+    expect(semantics.checked).toBe(true);
+    fireEvent.click(semantics);
+    fireEvent.click(approve(container));
+    expect((onDecide.mock.calls[0]?.[1] as StageOptions).extractSemantics).toBe(false);
+  });
+
+  it("opens unticked against a plane that does not send the field", () => {
+    // An older plane's `_recommended` forced semantics off, so its estimate
+    // does not quote it. Opening ticked against that estimate would be the
+    // under-reporting failure this product refuses outright — and `undefined`
+    // is exactly what a field Rust used to drop looks like from here.
+    const onDecide = vi.fn();
+    const stale = { ...report("auto"), recommended: { correct: true, embed: true } };
+    const { container } = render(
+      <VideoGateReview
+        report={stale as never}
+        stages={DEFAULT_STAGES}
+        busy={false}
+        onDecide={onDecide}
+      />,
+    );
+    expect((boxes(container)[2] as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(approve(container));
+    expect((onDecide.mock.calls[0]?.[1] as StageOptions).extractSemantics).toBe(false);
   });
 });

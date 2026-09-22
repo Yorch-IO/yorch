@@ -36,6 +36,11 @@ KINDS: dict[str, str] = {
     # Extraction, before any learned rules are applied.
     "raw_text": "raw.txt",
     "evidence": "evidence.json",
+    # Where each paragraph of the text stream sits in the original document.
+    # A *sidecar*, keyed by paragraph index, because the byte stream itself may
+    # not carry position tags: `char_span` is a byte-exact slice of it, and
+    # correction would be handed the tags as prose. See `ParagraphPosition`.
+    "positions": "positions.jsonl",
     # Rule learning.
     "proposal": "proposal.json",
     "validation": "validation.json",

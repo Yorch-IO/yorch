@@ -810,6 +810,64 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
   (`discoveryengine.googleapis.com`) that needed no extra role here — checked
   by calling it. `BRAIN_RERANK_MODEL=` (empty) turns it off everywhere
   without touching the ladder.
+- **A citation names the page it was quoted from, and the join key is the
+  paragraph index.** Added 2026-09-22. `ChunkNode.page` was declared, written
+  by `_MERGE_CHUNKS`, returned by `queries.py` and **set by nothing** —
+  `activities/ingest.py` read `row.get("page")` off a row `chunk_row` never put
+  one in, which is `document_version.page_count` in a second place — so
+  `_locator`'s `p. {page}` branch had been unreachable since it was written.
+  `extract/pdf_text.py` now emits a `positions` sidecar, one row per paragraph
+  carrying the page and the union box of its rows, and `chunk_row` looks the
+  page up by `para_from`.
+  **A sidecar, never a tag inside the text.** RAGFlow appends
+  `@@page\tx0\tx1\ttop\tbottom##` to each line, which survives arbitrary
+  merge logic for free and is impossible here: invariant #1 makes `Chunk.text`
+  a byte-exact slice, correction would be handed the tags as prose, and
+  `verify` would refuse the paragraphs that lost them. **The paragraph index is
+  the one key that survives the whole pipeline** — `join_paragraphs` writes
+  `\n\n`, `split_paragraphs` reproduces `0..N-1`, correction is keyed by
+  paragraph index and structurally cannot merge two, and `para_from`/`para_to`
+  index exactly that sequence. A byte offset would not survive correction; this
+  does, which is why the sidecar written against the *extracted* stream is
+  still correct for the *corrected* one.
+  **The hazard is one filter, not two.** `extract` dropped empties itself and
+  again inside `join_paragraphs`, and a positions list filtered by either rule
+  alone goes one out of step at the first paragraph the *other* drops — after
+  which every citation names a confidently wrong page, silently, and a wrong
+  page is worse than none. `extract.kept_paragraphs` is the single filter and
+  assigns `para` from what survives it; verified by reverting to the two-rule
+  behaviour and watching two tests go red.
+  **Measured over the 84 PDFs before anything downstream was wired**: 16,717
+  paragraphs, **16,717 positions — 100% coverage**, no document whose counts
+  disagree, no page sequence that goes backwards, no degenerate box, and zero
+  paragraphs spanning a page break (`is_last` flushes at each page's final
+  row, so `page_to` is honest and currently always equal to `page`). Then 97
+  paragraphs sampled across 20 PDFs and checked against the real page:
+  **97 of 97**. The one apparent miss was the *checker* — page 9 holds
+  `conven\xadcional` with a soft hyphen that extraction repairs — which is
+  worth knowing before anybody writes the same check again.
+  **And the consequence this file predicted was wrong, in the safe direction.**
+  `citation_id` is `digest(chunk_id, locator)`, so a locator gaining a part
+  looked like it would re-mint every `cit_` in the corpus. It does not: a run
+  written before the sidecar has no `page` on any row, `ChunkNode.page` stays
+  `None`, and the locator is byte-identical to the one that minted the id. Only
+  a version actually **re-indexed** gets pages and new ids, and
+  `project_structure` already prunes the citations it did not produce. No
+  corpus-wide re-projection is needed.
+  Verified end to end on the running stack: a 20-page PDF imported through the
+  real gate, `positions` written, **50 of 50 chunks placed, pages 1–20,
+  non-decreasing**, and the graph reading
+  `Procrastinacion · p. 1 · [0:1012]`. **Free plane, both planes' graph reads
+  and both clients get the page for free**, because it rides in the locator
+  string every client already renders; the *typed* `page` field is real for the
+  first time and is what an "open the PDF here" would use. The crop RAGFlow
+  draws — the cited lines stitched into a PNG with 120 px of context dimmed —
+  is deliberately not built: it needs somewhere to put the image, where
+  `DOWNLOADABLE`'s allowlist argument applies.
+  One thing the work turned up in passing: a fixture page of 37 characters was
+  discarded as having no text layer, which is the recorded `MIN_TEXT_PER_PAGE`
+  defect reproducing itself on demand.
+
 - **Retrieval can be probed from the Explore screen, and the probe is a
   sandbox that says so.** Added 2026-09-21. `brainworker/proberetrieval.py`
   had been pure, tested, and reachable from a shell and a chunk id and from

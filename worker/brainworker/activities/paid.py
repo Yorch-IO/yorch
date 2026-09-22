@@ -431,7 +431,24 @@ async def chunk_final(
     chunks = build_chunks(data, paragraphs, chunk_rules(rules), kind_classifier(rules))
     # One row schema, written through one function — see `indexing.chunk_row`,
     # which sits beside `StoredChunk.from_row`, the reader it must agree with.
-    rows = [indexing_chunk_row(c) for c in chunks]
+    #
+    # The positions are read by *filename* from this run's own directory, like
+    # the text two lines above, rather than threaded in as a parameter: the
+    # arity of an activity is load-bearing here — Temporal maps payloads onto
+    # parameters by count and a changed one is the recorded `'dict' object has
+    # no attribute 'source_path'` failure three frames from its cause.
+    #
+    # And the paragraph index is what makes this sound across correction: the
+    # sidecar was written against the *extracted* stream and this is chunking
+    # the *corrected* one, but correction is keyed by paragraph index and
+    # structurally cannot merge two, so paragraph `n` is the same paragraph in
+    # both. A byte offset would not have survived; this does.
+    # The preview's reader, not a second copy: the gate and the index must
+    # not disagree about what page a chunk is on.
+    from .ingest import _pages_from_sidecar
+
+    pages = _pages_from_sidecar(run_id)
+    rows = [indexing_chunk_row(c, pages=pages) for c in chunks]
     ref = _record(run_id, "chunks", store.write_jsonl("chunks", rows))
     kinds = Counter(c.kind for c in chunks)
     return Chunked(

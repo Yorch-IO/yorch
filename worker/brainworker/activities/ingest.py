@@ -630,6 +630,19 @@ async def extract_text(
             run_id, text_kind, store.write_bytes(text_kind, extracted.text or b"")
         )
         structured = False
+        # Written only when the extractor could place its paragraphs. A `.txt`
+        # has no pages and a spreadsheet has no paragraphs, and an empty file
+        # here would be indistinguishable from a document whose positions were
+        # lost — so there is simply no artifact, which is the same distinction
+        # `/project-summary` draws between "could not ask" and "zero".
+        if extracted.positions:
+            _record(
+                run_id,
+                "positions",
+                store.write_jsonl(
+                    "positions", [_asdict(pos) for pos in extracted.positions]
+                ),
+            )
 
     return Extraction(
         text=text_ref,
@@ -695,6 +708,11 @@ async def preview_chunks(
     paragraphs = split_paragraphs(data)
     chunks = build_chunks(data, paragraphs, chunk_rules(rules), kind_classifier(rules))
 
+    # The same page the indexed chunk will carry, so the gate's preview does
+    # not say less about the document than the index it is about to buy. Read
+    # by filename from this run's own directory, as `chunk_final` does — and
+    # absent for a source with no positions, which is most of them.
+    preview_pages = _pages_from_sidecar(run_id)
     rows = [
         {
             "index": c.index,
@@ -704,6 +722,8 @@ async def preview_chunks(
             "text": c.text,
             "char_from": c.char_from,
             "char_to": c.char_to,
+            **({"page": preview_pages[c.para_from]}
+               if c.para_from in preview_pages else {}),
         }
         for c in chunks
     ]
@@ -756,6 +776,31 @@ async def preview_chunks(
         chunks_are_final=not options.correct and not will_learn,
         warnings=warnings,
     )
+
+
+def _pages_from_sidecar(run_id: str) -> dict[int, int]:
+    """This run's paragraph-to-page table, or an empty one.
+
+    Read by filename rather than through a payload, so no activity's arity
+    changes — Temporal maps payloads onto parameters by count, and the
+    recorded `'dict' object has no attribute 'source_path'` failure is what a
+    changed one looks like three frames from its cause.
+
+    Best-effort and silent. A `.txt` has no pages, and a preview that refused
+    to render over a missing sidecar would block a document whose only fault is
+    having none.
+    """
+    import json
+
+    from ..artifacts import KINDS
+    from ..indexing import pages_by_paragraph
+
+    path = _settings().workspace / "runs" / run_id / KINDS["positions"]
+    try:
+        rows = [json.loads(l) for l in path.read_text("utf-8").splitlines() if l]
+    except (OSError, ValueError):
+        return {}
+    return pages_by_paragraph(rows)
 
 
 def measure_prepaid(text: "ArtifactRef", run_id: str) -> "Prepaid | None":

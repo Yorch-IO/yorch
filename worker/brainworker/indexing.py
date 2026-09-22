@@ -100,8 +100,20 @@ class StoredChunk:
         return " > ".join(p for p in (self.chapter, self.section) if p)
 
 
+def pages_by_paragraph(rows: "Sequence[dict[str, Any]] | None") -> dict[int, int]:
+    """A paragraph index to the page it is on, from the `positions` sidecar.
+
+    A dict rather than a list because a stream with no positions is a real and
+    ordinary case — a `.txt` has no pages — and a sparse lookup makes "this
+    paragraph has no page" the same answer as "this document has none, so no
+    chunk gets one", which is what must render as absence rather than as 0.
+    """
+    return {int(r["para"]): int(r["page"]) for r in (rows or []) if r.get("page")}
+
+
 def chunk_row(chunk: Any, *, start_s: float | None = None,
-              end_s: float | None = None) -> dict[str, Any]:
+              end_s: float | None = None,
+              pages: "dict[int, int] | None" = None) -> dict[str, Any]:
     """One row of ``chunks.jsonl``, written by every stage that writes one.
 
     A function rather than a dict literal at each call site, and it lives here
@@ -117,6 +129,14 @@ def chunk_row(chunk: Any, *, start_s: float | None = None,
     ``start_s``/``end_s`` are absent for a document, which is what keeps
     ``project_structure``'s ``row.get`` returning ``None`` and the locator on
     its byte-range branch.
+
+    ``page`` is the page the chunk *starts* on, looked up by ``para_from``
+    against the extraction's `positions` sidecar. It is the field that makes
+    `ChunkNode.page` — declared, written by `_MERGE_CHUNKS`, returned by the
+    graph, and set by nothing until now — and wakes the `p. {page}` branch
+    `_locator` has carried unreachable since it was written. Absent when the
+    document has no positions, never 0: a citation naming a page the reader
+    cannot find is worse than one naming none.
     """
     row: dict[str, Any] = {
         "index": chunk.index,
@@ -133,6 +153,9 @@ def chunk_row(chunk: Any, *, start_s: float | None = None,
         "para_from": chunk.para_from,
         "para_to": chunk.para_to,
     }
+    page = (pages or {}).get(chunk.para_from)
+    if page is not None:
+        row["page"] = page
     if start_s is not None:
         row["start_s"] = start_s
         row["end_s"] = end_s

@@ -17,7 +17,7 @@ Callers branch on which field is populated.
 from __future__ import annotations
 
 import pathlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from ..chunk import Chunk, DocRules
@@ -56,6 +56,43 @@ class Evidence:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class ParagraphPosition:
+    """Where one paragraph of the joined stream sits in the original document.
+
+    **A sidecar, never a tag inside the text.** The obvious implementation —
+    the one RAGFlow uses, an ``@@page\tx0\tx1\ttop\tbottom##`` sentinel
+    appended to each line — survives arbitrary merge logic for free and is
+    impossible here: invariant #1 says ``Chunk.text`` is a byte-exact slice of
+    the source, the correction pass would be handed the tags as prose, and
+    ``correct.verify`` would refuse the paragraphs that lost them.
+
+    The join key is the **paragraph index**, and it is the one key that
+    survives the whole pipeline: ``join_paragraphs`` writes ``\n\n`` between
+    paragraphs, ``chunk.split_paragraphs`` reproduces ``0..N-1`` against that
+    same separator, correction is keyed by paragraph index and structurally
+    cannot merge two, and ``Chunk.para_from``/``para_to`` index exactly that
+    sequence. A byte offset would not survive correction; this does.
+
+    ``page`` is where the paragraph *starts*, which is the page a reader would
+    be taken to. ``page_to`` differs only for a paragraph that runs across a
+    page break, and it is carried rather than hidden because "this quote spans
+    two pages" is a fact about the citation.
+
+    The box is the union of the rows on the starting page, in PDF user units
+    with **y growing downward** — PyMuPDF's convention, not the PDF-native one,
+    the same inversion `_filter_header_footer` documents.
+    """
+
+    para: int
+    page: int
+    page_to: int
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
 @dataclass
 class Extracted:
     """Result of extraction. Exactly one of ``text`` / ``chunks`` is populated."""
@@ -63,6 +100,11 @@ class Extracted:
     text: bytes | None = None
     chunks: list[Chunk] | None = None
     evidence: Evidence = field(default_factory=Evidence)
+    #: One row per paragraph of ``text``, or empty when the extractor cannot
+    #: know — a plain ``.txt`` has no pages and a spreadsheet has no paragraphs.
+    #: Empty is "not knowable", never "page 0": a citation that names a page
+    #: the reader cannot find is worse than one that names none.
+    positions: list[ParagraphPosition] = field(default_factory=list)
 
     @property
     def is_structured(self) -> bool:
@@ -144,6 +186,33 @@ def short_line_candidates(text: bytes) -> list[str]:
         if len(seen) >= SHORT_LINE_SAMPLE:
             break
     return list(seen)
+
+
+def kept_paragraphs(
+    pairs: "list[tuple[str, ParagraphPosition | None]]",
+) -> "tuple[list[str], list[ParagraphPosition]]":
+    """Strip, drop the empties, and renumber — **once**, for both lists.
+
+    The hazard this exists for is silent and total: ``extract`` filtered its
+    paragraphs twice, here and again inside ``join_paragraphs``, so a list of
+    positions filtered by either rule alone would go one out of step at the
+    first paragraph the *other* rule dropped — and every citation after it
+    would name a confidently wrong page. A wrong page is worse than no page,
+    and nothing downstream could tell the two apart.
+
+    So there is one filter, and ``para`` is assigned here from the surviving
+    order rather than carried in from before it.
+    """
+    texts: list[str] = []
+    positions: list[ParagraphPosition] = []
+    for text, pos in pairs:
+        stripped = text.strip()
+        if not stripped:
+            continue
+        if pos is not None:
+            positions.append(replace(pos, para=len(texts)))
+        texts.append(stripped)
+    return texts, positions
 
 
 def join_paragraphs(paragraphs: list[str]) -> bytes:

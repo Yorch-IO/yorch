@@ -28,7 +28,13 @@ from dataclasses import dataclass
 import fitz  # PyMuPDF
 
 from ..chunk import DocRules, heading_level, ChunkRules
-from . import Evidence, Extracted, join_paragraphs
+from . import (
+    Evidence,
+    Extracted,
+    ParagraphPosition,
+    join_paragraphs,
+    kept_paragraphs,
+)
 
 # Bare page numbers that sit above the footer cutoff zone.
 PAGE_NUMBER_RE = re.compile(r"^\d{1,4}$")
@@ -72,6 +78,13 @@ class _Row:
     #: share a baseline — see `_page_rows`. Last, with a default, so nothing
     #: that builds a row positionally has to change.
     x0: float = 0.0
+    #: The right-hand edge, and the page this row is on. `get_text("dict")`
+    #: hands back all four bbox values and this module kept three of them; the
+    #: page existed only as `extract`'s loop variable and was attached to
+    #: nothing. Both are here so a paragraph can say *where* it is, which is
+    #: what a citation needs to open the original — see `ParagraphPosition`.
+    x1: float = 0.0
+    page: int = 0
 
 
 def extract(path: str, rules: DocRules) -> Extracted:
@@ -80,7 +93,13 @@ def extract(path: str, rules: DocRules) -> Extracted:
     header_res = rules.header_res()
 
     paragraphs: list[str] = []
+    #: One position per entry of `paragraphs`, built in lockstep and filtered
+    #: with it exactly once — see `extract.kept_paragraphs`.
+    positions: list[ParagraphPosition] = []
     current: list[str] = []
+    #: The rows that made up `current`, so a flushed paragraph can say where it
+    #: came from. Cleared with `current` at every flush; the two are one state.
+    current_rows: list[_Row] = []
     all_gaps: list[float] = []
     line_counter: Counter[str] = Counter()
 
@@ -90,7 +109,7 @@ def extract(path: str, rules: DocRules) -> Extracted:
             height = page.rect.height or 841.0
             ev.page_height = height
 
-            rows = _page_rows(page)
+            rows = _page_rows(page, pno)
             if sum(len(r.text) for r in rows) < MIN_TEXT_PER_PAGE:
                 ev.pages_without_text.append(pno)
                 continue
@@ -123,18 +142,22 @@ def extract(path: str, rules: DocRules) -> Extracted:
                 )
                 if is_heading and current:
                     paragraphs.append(" ".join(current))
-                    current = []
+                    positions.append(_position_of(current_rows))
+                    current, current_rows = [], []
                 current.append(line)
+                current_rows.append(row)
 
                 is_last = i == len(kept) - 1
                 gap_big = not is_last and (kept[i + 1].y0 - row.y0) > threshold
                 if is_last or gap_big or is_heading:
                     if current:
                         paragraphs.append(" ".join(current))
-                        current = []
+                        positions.append(_position_of(current_rows))
+                        current, current_rows = [], []
 
     if current:
         paragraphs.append(" ".join(current))
+        positions.append(_position_of(current_rows))
 
     ev.median_line_gap = _median(all_gaps) if all_gaps else 0.0
     # Header/footer candidates: lines seen on a good share of pages.
@@ -145,8 +168,15 @@ def extract(path: str, rules: DocRules) -> Extracted:
         if n >= threshold_pages and len(text) < 120
     }
 
-    cleaned = [_clean_text(p) for p in paragraphs]
-    cleaned = [p for p in cleaned if p]
+    # One filter for both lists, and the paragraph index assigned from what
+    # survives it. Filtering them separately — which is what two `if p` passes
+    # amounted to — puts the positions one out of step at the first paragraph
+    # either rule drops, and every citation after it names a confidently wrong
+    # page. See `extract.kept_paragraphs`.
+    assert len(positions) == len(paragraphs), "a paragraph was flushed without its rows"
+    cleaned, placed = kept_paragraphs(
+        list(zip((_clean_text(p) for p in paragraphs), positions))
+    )
 
     ev.numbered_lines = [
         p for p in cleaned if heading_level(p, chunk_rules) > 0
@@ -161,10 +191,39 @@ def extract(path: str, rules: DocRules) -> Extracted:
             "run with --ocr to transcribe them"
         )
 
-    return Extracted(text=join_paragraphs(cleaned), evidence=ev)
+    return Extracted(text=join_paragraphs(cleaned), evidence=ev, positions=placed)
 
 
-def _page_rows(page: "fitz.Page") -> list[_Row]:
+def _position_of(rows: list[_Row]) -> ParagraphPosition:
+    """Where a paragraph is, from the rows that composed it.
+
+    The page is the **first** row's: that is where a reader would be taken,
+    and it is what makes the page sequence non-decreasing across a document.
+    `page_to` is the last row's, which differs only for a paragraph that runs
+    across a break — carried rather than hidden, because "this quote spans two
+    pages" is a fact about the citation.
+
+    The box unions only the rows on the starting page. A union across a break
+    would be a rectangle covering nothing, since the two pages' coordinate
+    spaces are unrelated.
+
+    `para` is a placeholder here; `kept_paragraphs` assigns the real one from
+    the order that survives filtering, so there is one place it can be wrong.
+    """
+    first = rows[0]
+    on_page = [r for r in rows if r.page == first.page]
+    return ParagraphPosition(
+        para=-1,
+        page=first.page,
+        page_to=rows[-1].page,
+        x0=min(r.x0 for r in on_page),
+        y0=min(r.y0 for r in on_page),
+        x1=max(r.x1 for r in on_page),
+        y1=max(r.y1 for r in on_page),
+    )
+
+
+def _page_rows(page: "fitz.Page", pno: int = 0) -> list[_Row]:
     """Visual rows from PyMuPDF's line bboxes, top to bottom.
 
     ``get_text("dict")`` already groups spans into lines, which is the work the
@@ -181,7 +240,7 @@ def _page_rows(page: "fitz.Page") -> list[_Row]:
             if not text:
                 continue
             x0, y0, x1, y1 = line["bbox"]
-            rows.append(_Row(y0=y0, y1=y1, text=text, x0=x0))
+            rows.append(_Row(y0=y0, y1=y1, text=text, x0=x0, x1=x1, page=pno))
     # Left to right within a baseline, which is the order a person reads them.
     # The tiebreak used to be the row's own *text*, so every line sharing a
     # baseline with another came out in dictionary order: two-column tables,

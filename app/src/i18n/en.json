@@ -610,7 +610,8 @@
       "tabla_resumen": "table summary",
       "diapositiva": "slide",
       "transcripcion": "transcript"
-    }
+    },
+    "page": "p. {{page}}"
   },
   "provider": {
     "title": "Provider",

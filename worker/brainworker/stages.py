@@ -314,6 +314,7 @@ ASK_COST_STAGES: tuple[str, ...] = (
 ARTIFACT_STAGES: dict[str, str] = {
     "evidence": "extracting",
     "raw_text": "extracting",
+    "positions": "extracting",
     "extracted_text": "extracting",
     "structured_chunks": "extracting",
     "preview_chunks": "previewing",

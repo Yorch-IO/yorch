@@ -238,6 +238,14 @@ export function ExploreScreen() {
                         Qdrant payloads and used in filters — so the UI maps them
                         to localised labels rather than renaming them. */}
                     <span className="kind">{t(`explore.kind.${c.kind}`)}</span>
+                    {/* The page the chunk starts on, for a source that has
+                        pages. Null for a `.txt`, a spreadsheet or a
+                        transcript, and rendered as nothing rather than as
+                        "p. 0" — a page a reader cannot find teaches them not
+                        to trust the locator. */}
+                    {c.page !== null && (
+                      <span className="model">{t("explore.page", { page: c.page })}</span>
+                    )}
                     <span className="model">
                       [{c.charStart}:{c.charEnd}]
                     </span>

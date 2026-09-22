@@ -33,7 +33,7 @@ use control::{
     Control, ConversationDetail, ConversationStarted, Conversations,
     DocumentDetail, DocumentMetadata, DocumentMetadataResult,
     NewConversation, NewTurn, TurnStarted,
-    GateReport, Health, IngestRequest, Libraries, Library, LibraryGraph, Outline, PingResult,
+    CorrectionReport, GateReport, Health, IngestRequest, Libraries, Library, LibraryGraph, Outline, PingResult,
     ProjectSummary, Question, RebuildReport, RelatedDocuments, Removal, RunAudit,
     RunEventPage, RunListPage, SectionChunks,
     RunState, StageOptions, StagedSource, StartedRun, VersionConcepts, VersionStatistics,
@@ -633,6 +633,20 @@ async fn ingest_start(
 async fn ingest_gate(state: State<'_, AppState>, workflow_id: String) -> Result<Option<GateReport>> {
     let control = state.control().await?;
     control.gate(&workflow_id).await
+}
+
+/// What correction did, for the gate that asks whether to pay for the rest.
+///
+/// A second command rather than more fields on `ingest_gate`, because the gate
+/// report is frozen before any money is spent and this is about money already
+/// spent.
+#[tauri::command]
+async fn ingest_correction(
+    state: State<'_, AppState>,
+    workflow_id: String,
+) -> Result<Option<CorrectionReport>> {
+    let control = state.control().await?;
+    control.correction(&workflow_id).await
 }
 
 /// One step of getting a video ready, for a window that would otherwise sit
@@ -1856,6 +1870,7 @@ pub fn run() {
             stage_source,
             ingest_start,
             ingest_gate,
+            ingest_correction,
             video_start,
             video_gate,
             genres,

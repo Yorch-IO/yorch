@@ -643,6 +643,39 @@ dl.preview dd {
   margin: 0;
 }
 
+/* Six short counts, so blocks rather than `dl.preview`'s label/value column:
+   stacked, the values indent under their labels and the panel reads as a
+   sangria rather than as figures. `auto-fit` covers the narrow case without a
+   media query, which is why this rule does not carry one — every other grid in
+   this file that needs one declares it below its own rule. */
+.correction-counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.75rem 1.25rem;
+  margin: 1rem 0;
+}
+
+.correction-counts > div {
+  display: flex;
+  flex-direction: column-reverse;
+}
+
+.correction-counts dt {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.correction-counts dd {
+  margin: 0;
+  font-size: 1.35em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The line the old panel got backwards, so it is the one that reads first. */
+.correction-spent {
+  font-weight: 600;
+}
+
 /* A warning here is not decoration: it carries the fact that the previewed
    chunks are not the indexed ones, and that a profile collision may be silently
    applying another family's heading rules. */

@@ -23,10 +23,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RunListItem } from "./api";
 import { QUEUE_LIMIT, unfinished, useImportQueue, waiting } from "./importQueue";
 
-const { runsList, runStatus, ingestGate, videoGate, audioGate } = vi.hoisted(() => ({
+const { runsList, runStatus, ingestGate, ingestCorrection, videoGate, audioGate } =
+  vi.hoisted(() => ({
   runsList: vi.fn(),
   runStatus: vi.fn(),
   ingestGate: vi.fn(),
+  ingestCorrection: vi.fn(),
   videoGate: vi.fn(),
   audioGate: vi.fn(),
 }));
@@ -35,7 +37,10 @@ vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
   return {
     ...actual,
-    api: { ...actual.api, runsList, runStatus, ingestGate, videoGate, audioGate },
+    api: {
+      ...actual.api, runsList, runStatus, ingestGate, ingestCorrection,
+      videoGate, audioGate,
+    },
   };
 });
 
@@ -63,6 +68,7 @@ function row(over: Partial<RunListItem> = {}): RunListItem {
 beforeEach(() => {
   vi.clearAllMocks();
   ingestGate.mockResolvedValue(null);
+  ingestCorrection.mockResolvedValue(null);
 });
 
 afterEach(() => vi.useRealTimers());
@@ -224,4 +230,39 @@ it("asks an audio run for its own gate, and renders it as a video gate", async (
   expect(videoGate).not.toHaveBeenCalled();
   expect(ingestGate).not.toHaveBeenCalled();
   expect(result.current.items[0]?.gate).toBeNull();
+});
+
+
+it("asks about the correction at the second gate, and not about the first gate's report", async () => {
+  // Both gates park with `state = 'awaiting_approval'` — the second one is a
+  // *stage* — so the state alone cannot tell them apart, which is how one came
+  // to render the other's numbers. Asking `/gate` here would fetch a report
+  // frozen before any money was spent, so this is one request fewer per poll
+  // as well as the right one.
+  runsList.mockResolvedValue({
+    runs: [row({ state: "awaiting_approval", stage: "awaiting_correction_review" })],
+    nextBefore: null,
+  });
+  ingestCorrection.mockResolvedValue({
+    paragraphs: 210, changed: 30, rejected: 0, missing: 0, cacheHits: 0,
+    spend: { stage: "correction", model: "m", inputTokens: 1, outputTokens: 1, usd: 0.5834 },
+  });
+
+  const { result } = renderHook(() => useImportQueue(null));
+  await waitFor(() => expect(result.current.items[0]?.correction).not.toBeNull());
+  expect(result.current.items[0]!.correction!.paragraphs).toBe(210);
+  expect(ingestGate).not.toHaveBeenCalled();
+});
+
+it("still asks about the gate at the first one", async () => {
+  /** Guards the guard: a predicate that answered `true` everywhere would pass
+   *  the test above while silently taking the first gate's panel away. */
+  runsList.mockResolvedValue({
+    runs: [row({ state: "awaiting_approval", stage: "awaiting_approval" })],
+    nextBefore: null,
+  });
+  const { result } = renderHook(() => useImportQueue(null));
+  await waitFor(() => expect(result.current.items).toHaveLength(1));
+  await waitFor(() => expect(ingestGate).toHaveBeenCalled());
+  expect(ingestCorrection).not.toHaveBeenCalled();
 });

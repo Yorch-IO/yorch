@@ -1275,5 +1275,20 @@
     "spanWarning": "Un fragmento editado deja de ser una porción byte a byte del original, así que su cita deja de nombrar un rango de bytes y dice «editado». El original se conserva y Deshacer lo restaura.",
     "isEdited": "Reescrito a mano.",
     "isHidden": "Oculto de las respuestas."
+  },
+  "correction": {
+    "title": "Qué hizo la corrección",
+    "intro": "La corrección ya se ejecutó y ya se pagó. Estos son sus resultados; aprobar los indexa, cancelar detiene el run y no se gasta nada más.",
+    "paragraphs": "Párrafos",
+    "changed": "Corregidos",
+    "unchanged": "Se dejaron como estaban",
+    "rejected": "Correcciones rechazadas",
+    "missing": "No devueltos",
+    "cached": "Gratis desde caché",
+    "spent": "La corrección costó ${{usd}}. Los precios son multiplicadores de terceros sobre conteos de tokens medidos.",
+    "spentUnknown": "La corrección ya se pagó; este modelo no tiene precio registrado.",
+    "rejectedNote": "Una corrección rechazada conserva el texto original del párrafo — una mejora declinada, nunca un daño.",
+    "approve": "Indexar este texto",
+    "cancel": "Cancelar el run"
   }
 }

@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   api,
+  type CorrectionReport,
   type GateReport,
   type RunListItem,
   type RunProgress,
@@ -55,6 +56,16 @@ export interface QueueItem {
    *  `rebuild-gate` was split out to avoid. */
   gate: GateReport | null;
   videoGate: VideoGateReport | null;
+  /** What correction did, present only at the *second* gate.
+   *
+   *  Exclusive with `gate` on purpose. `IngestWorkflow._report` is assigned
+   *  once, before the first gate, and never cleared, so at the second one
+   *  `/gate` still answers with the pre-correction preview and an *estimate*
+   *  for correction — on a run that has already been billed for it. Rendering
+   *  it there told a person "nothing has been paid for yet" over $0.5834
+   *  spent, with the figure on the row directly above. Fetching the correction
+   *  instead is also one request fewer per poll. */
+  correction: CorrectionReport | null;
 }
 
 /** A run the catalog thinks has not finished.
@@ -71,6 +82,19 @@ export const unfinished = (run: RunListItem): boolean => run.finishedAt === null
  *  queue cannot reach. */
 export const waiting = (run: RunListItem): boolean =>
   run.state === "awaiting_approval";
+
+/** Whether this item is at the *second* gate rather than the first.
+ *
+ *  Both park with `state = 'awaiting_approval'` — the second gate is a stage,
+ *  not a state — so the state alone cannot tell them apart, which is exactly
+ *  how one came to render the other's report. */
+export const reviewingCorrection = (item: {
+  run: RunListItem;
+  stage: string | null;
+}): boolean =>
+  waiting(item.run) &&
+  (item.stage === "awaiting_correction_review" ||
+    item.run.stage === "awaiting_correction_review");
 
 /**
  * The queue.
@@ -98,6 +122,9 @@ export function useImportQueue(libraryFilter: string | null) {
   // Which gates have already been fetched, so a run parked for seven days is
   // not re-asked every five seconds for a report that cannot change.
   const gates = useRef(new Map<string, GateReport | VideoGateReport>());
+  // Its own map, not a second value in `gates`: both are keyed by workflow id,
+  // and one would overwrite the other for the run that has both.
+  const corrections = useRef(new Map<string, CorrectionReport>());
 
   const poll = useCallback(async () => {
     let page;
@@ -148,8 +175,19 @@ export function useImportQueue(libraryFilter: string | null) {
         // started it. Asking for a gate it cannot render would be one 404 per
         // poll for nothing.
         const elsewhere = run.kind === "transform";
+        const second = reviewingCorrection({ run, stage });
+        let fixed = corrections.current.get(run.workflowId) ?? null;
+        if (fixed === null && second) {
+          try {
+            fixed = await api.ingestCorrection(run.workflowId);
+            if (fixed) corrections.current.set(run.workflowId, fixed);
+          } catch {
+            // Same reading as the gate's 404: nothing the person can act on,
+            // and the row still renders with its state and its stage.
+          }
+        }
         let cached = gates.current.get(run.workflowId) ?? null;
-        if (cached === null && waiting(run) && !elsewhere) {
+        if (cached === null && waiting(run) && !elsewhere && !second) {
           try {
             cached =
               run.kind === "audio"
@@ -170,6 +208,7 @@ export function useImportQueue(libraryFilter: string | null) {
           progress,
           gate: isVideo ? null : (cached as GateReport | null),
           videoGate: isVideo ? (cached as VideoGateReport | null) : null,
+          correction: fixed,
         };
       }),
     );

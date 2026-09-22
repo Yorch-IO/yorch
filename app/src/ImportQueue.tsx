@@ -17,6 +17,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { CorrectionReview } from "./CorrectionReview";
 import { GateReview } from "./GateReview";
 import { VideoGateReview } from "./VideoGateReview";
 import { RunAudit } from "./RunAudit";
@@ -333,7 +334,28 @@ function Row({
           />
         )}
 
-      {waiting(run) && item.gate && (
+      {/* The second gate gets its own panel, fed by its own route. Rendering
+          `GateReview` here showed the *first* gate's report — frozen before
+          any money was spent — so it quoted an estimate for correction on a
+          run already billed for it and said nothing had been paid for, with
+          the real figure on the row directly above. */}
+      {item.correction && (
+        <CorrectionReview
+          report={item.correction}
+          stages={stages}
+          busy={deciding}
+          onDecide={(approved, options) => {
+            setDeciding(true);
+            // The same `finally` as the panels below, for the same recorded
+            // incident: a refused approval used to leave both buttons disabled
+            // with no way to retry.
+            void Promise.resolve(
+              onDecide(run.workflowId, approved, options),
+            ).finally(() => setDeciding(false));
+          }}
+        />
+      )}
+      {waiting(run) && item.gate && !item.correction && (
         <GateReview
           report={item.gate}
           stages={stages}

@@ -1286,6 +1286,37 @@ pub struct GateReport {
     pub profile: Option<ProfileDecision>,
 }
 
+/// What correction actually did, for the *second* gate.
+///
+/// The second gate used to render `GateReport`, which `IngestWorkflow._report`
+/// assigns once before the *first* gate and never clears — so it showed a
+/// pre-correction chunk count and an *estimate* for correction, on a run that
+/// had already been billed for it. Measured on a real run: the gate offered
+/// "50 chunks, correction $0.161821" where the truth was 210 paragraphs, 30
+/// corrected and **$0.133921 already spent**.
+///
+/// **The two artifact refs are dropped on purpose**, unlike the recorded
+/// `Answer` case where `effort` and `style_effort` went missing by accident:
+/// `corrected.txt` and `correction-report.json` are not in `DOWNLOADABLE`, so
+/// a path the webview cannot fetch is a field it cannot use.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct CorrectionReport {
+    pub paragraphs: u32,
+    pub changed: u32,
+    /// Corrections the gate refused — a lost scripture reference, number or
+    /// proper noun. The paragraph keeps its original text, so this is a count
+    /// of improvements declined and never of damage done.
+    pub rejected: u32,
+    /// Paragraphs the model did not return at all.
+    pub missing: u32,
+    /// Paragraphs that cost nothing because they were corrected before. Worth
+    /// showing beside the bill: it is what makes a re-import cheap, and a
+    /// reader deciding whether to pay for embedding should see it.
+    pub cache_hits: u32,
+    pub spend: Spend,
+}
+
 /// One caption track a video offers.
 ///
 /// `kind` is `manual` or `auto`, and the distinction is not cosmetic: an
@@ -3302,6 +3333,23 @@ impl Control {
     pub async fn gate(&self, workflow_id: &str) -> Result<Option<GateReport>> {
         match self
             .get::<GateReport>(&format!("/runs/{workflow_id}/gate"), HEALTH_TIMEOUT)
+            .await
+        {
+            Ok(report) => Ok(Some(report)),
+            Err(AppError::ControlStatus { status: 409, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// What correction did, which the gate cannot say.
+    ///
+    /// Its own route because `gate` answers from a report frozen before the
+    /// first gate. A 409 is `Ok(None)` exactly as `gate` models it, so a screen
+    /// polling for the second gate reads "keep waiting" the same way.
+    pub async fn correction(&self, workflow_id: &str) -> Result<Option<CorrectionReport>> {
+        match self
+            .get::<CorrectionReport>(
+                &format!("/runs/{workflow_id}/correction"), HEALTH_TIMEOUT)
             .await
         {
             Ok(report) => Ok(Some(report)),

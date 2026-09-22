@@ -1275,5 +1275,20 @@
     "spanWarning": "An edited chunk is no longer a byte-exact slice of the original, so its citation stops naming a byte range and says «editado» instead. The original is kept and Undo restores it.",
     "isEdited": "Rewritten by hand.",
     "isHidden": "Hidden from answers."
+  },
+  "correction": {
+    "title": "What correction did",
+    "intro": "Correction has already run and been paid for. These are its results; approving indexes them, cancelling stops the run and nothing further is spent.",
+    "paragraphs": "Paragraphs",
+    "changed": "Corrected",
+    "unchanged": "Left as they were",
+    "rejected": "Corrections declined",
+    "missing": "Not returned",
+    "cached": "Free from cache",
+    "spent": "Correction cost ${{usd}}. Prices are third-party multipliers over measured token counts.",
+    "spentUnknown": "Correction has been paid for; this model has no price on record.",
+    "rejectedNote": "A declined correction keeps the paragraph's original text — an improvement refused, never damage done.",
+    "approve": "Index this text",
+    "cancel": "Cancel the run"
   }
 }

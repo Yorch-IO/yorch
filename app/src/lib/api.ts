@@ -901,6 +901,31 @@ export interface GateReport {
   profile: ProfileDecision | null;
 }
 
+/** What correction actually did, for the *second* gate.
+ *
+ * A type of its own because `GateReport` is frozen before the *first* gate:
+ * `IngestWorkflow._report` is assigned once and never cleared, so rendering it
+ * at the second gate quoted an estimate for correction on a run already billed
+ * for it, over a chunk count measured before correction moved every offset.
+ * Measured on a real run: the gate offered "50 chunks, correction $0.161821"
+ * where the truth was 210 paragraphs, 30 corrected, **$0.133921 spent**.
+ *
+ * Counts and spend, never a diff. What changed lives in
+ * `correction-report.json`, which is not downloadable; a true count is worth
+ * more than a false preview. */
+export interface CorrectionReport {
+  paragraphs: number;
+  changed: number;
+  /** Corrections the gate refused, for losing a scripture reference, a number
+   *  or a proper noun. The paragraph keeps its original text, so this counts
+   *  improvements declined and never damage done. */
+  rejected: number;
+  missing: number;
+  /** Paragraphs that cost nothing because they had been corrected before. */
+  cacheHits: number;
+  spend: Spend;
+}
+
 /** Where the rules that will chunk this document came from.
  *
  * `reused` is free and automatic — a family already learned these rules.
@@ -2473,6 +2498,10 @@ export const api = {
   /** null while the free stages are still running — a normal first answer. */
   ingestGate: (workflowId: string) =>
     invoke<GateReport | null>("ingest_gate", { workflowId }),
+  /** What correction did. `null` while it has not run — a 409, which the
+   *  screen must read as "keep waiting" exactly as it reads the gate's. */
+  ingestCorrection: (workflowId: string) =>
+    invoke<CorrectionReport | null>("ingest_correction", { workflowId }),
   /**
    * Start indexing a video. No staging call precedes this: there is no file.
    *

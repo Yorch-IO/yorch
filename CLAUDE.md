@@ -3199,30 +3199,6 @@ session's files.
   from the run that preceded the `_choose_track` fix by twelve minutes. Nothing
   indexes it, nothing charged for it, and nothing cleans it up either.
 
-- **The second gate shows the *first* gate's report, and tells the reader
-  "Nothing has been paid for yet" over a run that has spent $0.58.** Seen in the
-  real window 2026-09-15 on `Conferencias Teologia Social`, parked at
-  `awaiting_correction_review` with `$0.5834` of correction already billed — the
-  figure is on the queue row directly above the panel that denies it. The panel
-  went on to offer "No profile exists for this family of documents yet. One will
-  be learned after approval", for a run whose profile had been learned an hour
-  earlier, and a chunk count (299) measured *before* the correction that has
-  since changed every offset.
-  Two causes, and neither is the renderer's. `self._report` is assigned once, at
-  `workflows/ingest.py:353`, before the first gate, and **never cleared** — so
-  `GET /runs/{id}/gate` keeps answering with the pre-correction preview and
-  estimate for the rest of the run. And the thing that should be shown instead
-  does not exist on the wire at all: `IngestWorkflow.correction` is a
-  `@workflow.query` with **zero callers** — no route on either plane, no screen
-  in either client. `grep` finds the definition and nothing else.
-  So the one gate whose whole purpose is "look at what correction did before you
-  pay to embed it" cannot show what correction did, and fills the space with
-  numbers that are not merely stale but false at the moment somebody decides.
-  This file already recorded the weak version ("returns correction *counts*
-  rather than a diff, so the UI cannot show what changed"); the counts are not
-  reachable either. The fix is a route per plane over the existing query, and a
-  panel that keys on the stage rather than reusing `GateReport`.
-
 - **`deciding` is a one-way latch — and this entry is stale: it was fixed and
   the record was not updated.** Checked 2026-09-18 while adding a third gate to
   the same component: `ImportQueue.tsx` now clears it in a `finally` on both
@@ -3825,6 +3801,42 @@ maintained by hand drifts, and one that has drifted is worse than none.
   `pdf_ocr._pages_without_text` still uses it as a threshold because *there* it
   is one. The two fully scanned books in the corpus (53 and 59 pages, 0 bytes)
   still flag every page.
+
+- **The second gate showed the *first* gate's report, and told the reader
+  "Nothing has been paid for yet" over a run that had spent $0.58.** Fixed
+  2026-09-22. Two causes and neither was the renderer's. `IngestWorkflow._report`
+  is assigned once, before the first gate, and **never cleared**, so
+  `GET /runs/{id}/gate` answers with the pre-correction preview and estimate for
+  the rest of the run. And what should have been shown instead did not exist on
+  the wire at all: `IngestWorkflow.correction` was a `@workflow.query` with
+  **zero callers** in any of the three checkouts — `grep` found the definition
+  and nothing else. So the one gate whose whole purpose is "look at what
+  correction did before you pay to embed it" could not show what correction did,
+  and filled the space with numbers that were not merely stale but false at the
+  moment somebody decides.
+  Measured on a real run before the fix, the two answers side by side: the panel
+  offered **"50 chunks · correction $0.161821 estimated · profile: default"**
+  where the truth was **210 paragraphs, 30 corrected, $0.133921 already spent**.
+  A quote for money already gone, presenting the decision as still ahead.
+  `GET /runs/{id}/correction` is the route, `CorrectionReview.tsx` the panel,
+  and three decisions hold it together. **Both gates park with
+  `state = 'awaiting_approval'`** — the second one is a *stage* — so the state
+  alone cannot tell them apart, which is precisely how one came to render the
+  other's report; `reviewingCorrection` keys on the stage and the queue fetches
+  one or the other, **never both**, which is also one request fewer per poll.
+  **Counts and spend, not a diff**: what changed lives in
+  `correction-report.json`, which is not in `DOWNLOADABLE`, and a true count is
+  worth more than a false preview. And **`usd: null` renders as "paid for, no
+  price on record"** and never as `$0.000000` — the `ledger.py` rule arriving at
+  the one screen where reading a missing price as free would be the same lie in
+  a smaller font.
+  **Two things the screenshot caught that no assertion could**: the counts
+  rendered as an indented list because `.correction-counts` had no rule, and
+  `className="primary"` matched **nothing in the stylesheet** — a dead class
+  that would have rotted unseen, on a panel whose sibling styles both buttons
+  the same way anyway.
+  **Free plane and desktop. The paid plane has no route yet**, so the second
+  gate still shows the stale report there — a gap on the record, not a fix.
 
 - **A refused correction kept no record of what was refused, so `verify`'s
   false-positive rate had never been measured.** `correct_paragraphs` `continue`s

@@ -72,6 +72,7 @@ const item = (
   progress: over.progress ?? null,
   gate: over.gate ?? null,
   videoGate: over.videoGate ?? null,
+  correction: over.correction ?? null,
   run: run(over.run),
 });
 
@@ -416,4 +417,42 @@ it("says a run is waiting for this machine, and offers Amazon beside it", async 
   await waitFor(() =>
     expect(document.body.textContent).toContain(t("queue.transcribeSwitched")),
   );
+});
+
+it("at the second gate shows what correction did, and not the first gate's report", () => {
+  // **The defect this was written against.** Both gates park with
+  // `state = 'awaiting_approval'` — the second one is a *stage* — so the row
+  // could not tell them apart and rendered `GateReview` at both. That report is
+  // `IngestWorkflow._report`, assigned once before the first gate and never
+  // cleared: at the second gate it quotes an *estimate* for correction on a run
+  // already billed for it, over a chunk count measured before correction moved
+  // every offset. Seen in the real window on a run with $0.5834 spent, under a
+  // panel reading "nothing has been paid for yet" with the figure on the row
+  // directly above it.
+  const { container } = draw([
+    item({
+      run: { state: "awaiting_approval", stage: "awaiting_correction_review" },
+      stage: "awaiting_correction_review",
+      // Both are present on a real run at this moment. That is the whole trap:
+      // the stale one is not missing, it is merely wrong.
+      gate: gateReport(),
+      correction: {
+        paragraphs: 210,
+        changed: 30,
+        rejected: 0,
+        missing: 0,
+        cacheHits: 0,
+        spend: {
+          stage: "correction",
+          model: "gemini-3.6-flash",
+          inputTokens: 1,
+          outputTokens: 1,
+          usd: 0.5834,
+        },
+      },
+    }),
+  ]);
+  expect(container.textContent).toContain("0.583400");
+  // The stale preview's chunk count must be nowhere on the panel.
+  expect(container.textContent).not.toContain("299");
 });

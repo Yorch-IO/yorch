@@ -612,6 +612,54 @@ async def gate(workflow_id: str) -> dict[str, Any]:
     return asdict(report)
 
 
+@app.get("/runs/{workflow_id}/correction")
+async def correction(workflow_id: str) -> dict[str, Any]:
+    """What correction actually did, for the *second* gate.
+
+    A route of its own rather than more fields on `/gate`, because the two
+    answer different questions at different moments and the gate's answer is
+    frozen. `IngestWorkflow._report` is assigned once, before the first gate,
+    and never cleared — so for the rest of the run `/gate` keeps serving the
+    pre-correction preview and estimate. At the second gate that is not merely
+    stale, it is false at the moment somebody decides: seen in the real window
+    on a run parked at `awaiting_correction_review` with **$0.5834 of
+    correction already billed**, under a panel reading "nothing has been paid
+    for yet" and offering to learn a profile that had been learned an hour
+    earlier, over a chunk count measured before the correction that moved every
+    offset.
+    The query this serves has existed since the second gate did and had **zero
+    callers** — no route on either plane, no screen in either client — so the
+    one gate whose whole purpose is "look at what correction did before you pay
+    to embed it" could not show what correction did, and filled the space with
+    the other gate's numbers.
+
+    Counts and spend, not a diff. The diff lives in the `correction-report.json`
+    artifact, which carries the refused proposals too and is not in
+    `DOWNLOADABLE`; what this fixes is the lie, and a true count is worth more
+    than a false preview. A run that has not corrected yet answers 409, the same
+    shape `/gate` uses so the screen's "keep waiting" reading is unchanged.
+    """
+    handle = (await temporal()).get_workflow_handle(workflow_id)
+    try:
+        report = await handle.query(IngestWorkflow.correction)
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail={"kind": "run_not_found", "message": f"{type(e).__name__}: {e}"},
+        ) from e
+    if report is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "kind": "correction_not_ready",
+                "message": "la corrección aún no ha terminado",
+                "stage": await handle.query(IngestWorkflow.stage),
+                "run_state": await _run_state(handle),
+            },
+        )
+    return asdict(report)
+
+
 @app.post("/runs/{workflow_id}/approve")
 async def approve(workflow_id: str, approval: Approval) -> dict[str, str]:
     """Answer the gate. This is the call that can start spending money."""

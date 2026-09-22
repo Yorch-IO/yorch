@@ -810,6 +810,79 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
   (`discoveryengine.googleapis.com`) that needed no extra role here — checked
   by calling it. `BRAIN_RERANK_MODEL=` (empty) turns it off everywhere
   without touching the ladder.
+- **A person can rewrite a chunk, hide it from answers, or undo either — and
+  an edited chunk gives up its byte-exact span, deliberately.** Added
+  2026-09-22. RAGFlow's loudest claim is *"visualization of text chunking to
+  allow human intervention"*, and this repository's own record is the argument:
+  a table of contents indexed as chapters, `2. Ibídem.` promoted to a heading,
+  428 of 4,239 chunks carrying a citation as their breadcrumb — every one a
+  chunk somebody could have fixed in ten seconds and could not.
+  **What it costs, once and plainly**: an edited chunk's text is no longer a
+  byte-exact slice of any stream this product holds, so invariant #1 does not
+  hold for it and `auditversion.choose_stream` cannot check it. That was traded
+  for the thing it buys. `brainworker/editing.py` owns the order across the
+  three stores; `chunk_override` is the Prisma table
+  (`20260922120000_chunk_override`), `run.kind = 'edit'` the second migration.
+  Seven decisions, each of which fails silently if it is wrong.
+  **The edited text is substituted before the engine embeds**, never patched
+  into the payload afterwards — otherwise retrieval matches what the chunk used
+  to say and the screen shows what it now says. The **sparse vector is rebuilt
+  too, on the version's own `avgdl`**: `doc_sparse_vector` divides by it and
+  `index_chunks` computes it per version, so a chunk re-weighted against any
+  other figure lands on a different scale from its siblings — the recorded
+  cross-book BM25 skew, reproduced *inside* one book by the one write that
+  touches a chunk alone.
+  **The exclusion is `disabled` read as a `must_not`, never `enabled: true`.**
+  This is the correction the plan needed: a positive flag has to be present on
+  every point to mean anything, so adopting one hides all 8,050 existing points
+  unless a backfill runs and never misses — a corpus that vanishes from
+  retrieval while every log line reads as healthy. Phrased as the exception,
+  absence means visible, which is what every existing point already says, and
+  the worst a missed write can do is leave something visible that was visible
+  yesterday. `Qdrant._filter` grew a fourth shape for it and `Excluded` is a
+  type rather than a bare `True`, because a caller passing the bare value would
+  get an equality and retrieve *only* the hidden chunks. It is **scope, not a
+  narrowing**: absent from `ALLOWED_FILTERS`, assigned beside `tenant_id`.
+  **An override is keyed by content.** `replaced_sha256` is what stops a
+  correction being reapplied by index to a different passage after a re-cut —
+  one corrected profile took a document from 600 to 631 chunks — and an orphan
+  is **reported, never dropped**: an edit that vanished without a word is worse
+  than one that stopped being applied.
+  **An edited chunk keeps its locator and trades the byte range for
+  `editado`.** `answer._verify` drops a citation whose chunk has no locator, so
+  an empty one would make every edited chunk silently uncitable — the opposite
+  of what editing is for. And because `citation_id` is `digest(chunk_id,
+  locator)`, the citation is **re-minted** (`projection.recite_chunk`, old
+  detached before new is merged): without that an edited chunk keeps a citation
+  printing a byte range into a stream its text is no longer a slice of, which
+  reads perfectly.
+  **An edit re-verifies that chunk's claims** (`projection.reverify_claims`),
+  and a quote that no longer checks out costs the claim its span, not its
+  existence — the rule already applied when a quote is first located, applied
+  again at the one other moment the text under a claim can move. It is the one
+  writer allowed to clear a span, because `_MERGE_CLAIMS` is deliberately
+  monotonic about them.
+  **Three defects were found by running it, none of which any test could
+  see.** The first real edit **recorded no charge at all** — the run row was
+  opened and `record_cost` was never called, which is exactly what
+  `20260922130000_run_kind_edit` exists to prevent, reproduced in the same
+  commit that wrote the migration. The **probe did not apply the exclusion**,
+  so a hidden chunk showed up ranking third in a probe of a search that would
+  never return it — the probe's own contract, broken by the probe; it carries
+  the exclusion now on the production legs, keeps looking without it on the
+  placing legs, and names `hidden` as a gate, because that is the only gate
+  whose remedy is a person rather than a parameter. And the **citation was not
+  re-minted**, found by reading the graph after a real edit.
+  Verified end to end on the running stack: two chunks rewritten and one
+  hidden, both rewrites ranking on their *new* words at ranks 1 and 3, the
+  hidden one absent from `/ask`'s evidence and from the probe (39 → 38
+  candidates), `Procrastinacion · p. 2 · editado` in the graph beside an
+  untouched `· p. 3 · [6063:7262]`, and `edit-embedding $0.000005` in the
+  ledger. **Free plane and desktop; the paid plane holds the two migrations and
+  the stage fork and serves no route, and there is no Angular screen** — both
+  decisions on the record, made with the count at the top of this file in view.
+  Screenshotted at 1100 px in both themes before commit.
+
 - **A citation names the page it was quoted from, and the join key is the
   paragraph index.** Added 2026-09-22. `ChunkNode.page` was declared, written
   by `_MERGE_CHUNKS`, returned by `queries.py` and **set by nothing** —

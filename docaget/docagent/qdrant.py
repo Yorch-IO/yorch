@@ -108,6 +108,20 @@ class CollectionInfo:
     legacy: bool  # single unnamed vector, i.e. pre-hybrid schema
 
 
+@dataclass(frozen=True)
+class Excluded:
+    """A filter value meaning "every point except the ones carrying this".
+
+    Its own type rather than a magic string, because the whole point is that
+    the shape is chosen by the value: a caller that passed the bare `True` a
+    `disabled` flag is set to would get an equality and retrieve *only* the
+    disabled chunks — the exact inversion of what it asked for, returning
+    plausible results and failing nowhere.
+    """
+
+    value: Any
+
+
 class QdrantError(RuntimeError):
     pass
 
@@ -409,28 +423,49 @@ class Qdrant:
     # --- retrieval ----------------------------------------------------------
 
     def _filter(self, filters: dict[str, Any]) -> dict | None:
-        """A payload filter from a plain dict, in three shapes by value.
+        """A payload filter from a plain dict, in four shapes by value.
 
         A string is an equality — the scope every search carries. A list is
         `match any`, for a field that is itself a list on the point, like a
         chunk's scripture references. A dict of `gte`/`lte` is a `range`, for
-        an integer such as a recording's day. The caller chooses the shape by
-        the value it passes and never spells Qdrant's syntax itself, which is
-        what keeps the allowlist in `retrieve.search` the only place a filter
-        is decided.
+        an integer such as a recording's day. And an `Excluded` is a
+        `must_not`, for a flag whose *absence* is the ordinary state. The
+        caller chooses the shape by the value it passes and never spells
+        Qdrant's syntax itself, which is what keeps the allowlist in
+        `retrieve.search` the only place a filter is decided.
+
+        **Why `must_not` exists rather than an `enabled: true` equality.** A
+        positive flag has to be present on every point to mean anything, so
+        adopting one silently hides every point written before it — 8,050 of
+        them here — unless a backfill runs first and never misses. The failure
+        is a corpus that vanishes from retrieval while every log line reads as
+        healthy, which is the worst shape of failure this product has. Phrased
+        as an exclusion, absence means *included*, which is exactly what every
+        existing point already says; the worst a missed write can then do is
+        leave a chunk visible that somebody wanted hidden, and it was visible
+        yesterday anyway. No backfill, and the two failure directions are not
+        remotely equal.
         """
         if not filters:
             return None
-        must = []
+        must: list[dict[str, Any]] = []
+        must_not: list[dict[str, Any]] = []
         for k, v in sorted(filters.items()):
-            if isinstance(v, dict):
+            if isinstance(v, Excluded):
+                must_not.append({"key": k, "match": {"value": v.value}})
+            elif isinstance(v, dict):
                 bounds = {b: v[b] for b in ("gte", "lte", "gt", "lt") if b in v}
                 must.append({"key": k, "range": bounds})
             elif isinstance(v, (list, tuple, set)):
                 must.append({"key": k, "match": {"any": sorted(v)}})
             else:
                 must.append({"key": k, "match": {"value": v}})
-        return {"must": must}
+        out: dict[str, Any] = {}
+        if must:
+            out["must"] = must
+        if must_not:
+            out["must_not"] = must_not
+        return out or None
 
     def search(self, vector: list[float], opts: SearchOpts) -> list[Hit]:
         """Dense-only, sparse-only, or hybrid retrieval with RRF fusion.

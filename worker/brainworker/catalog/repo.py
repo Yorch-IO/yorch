@@ -286,6 +286,29 @@ class ConversationTurn:
     answered_at: datetime | None
 
 
+@dataclass(frozen=True)
+class ChunkOverride:
+    """What a person changed about one chunk after it was indexed."""
+
+    version_id: str
+    chunk_index: int
+    #: The text they wrote, or None when they only hid it.
+    text: str | None
+    disabled: bool
+    #: sha256 of the chunk text this was written against. The reason this is
+    #: keyed by content and not only by index: `chunk_index` is not stable
+    #: across a re-cut, and reapplying by index alone attaches a correction to
+    #: a different passage — which reads exactly like a good one.
+    replaced_sha256: str
+    edited_by: str = ""
+
+    def applies_to(self, text: str) -> bool:
+        """Whether this override is still about the chunk in front of it."""
+        import hashlib
+
+        return hashlib.sha256(text.encode("utf-8")).hexdigest() == self.replaced_sha256
+
+
 @dataclass
 class Cost:
     """Token counts with a price applied, kept apart from each other.
@@ -1982,3 +2005,78 @@ class Catalog:
                 "WHERE conversation_id = %s AND turn_seq = %s",
                 (conversation_id, turn_seq),
             )
+
+    # -- chunk overrides ----------------------------------------------------
+
+    def save_chunk_override(
+        self,
+        version_id: str,
+        chunk_index: int,
+        *,
+        text: str | None,
+        disabled: bool,
+        replaced_sha256: str,
+        edited_by: str = "",
+    ) -> None:
+        """Record an edit, or replace the one that was there.
+
+        **The tenant is derived in the INSERT** from the version this hangs
+        off, like `record_artifact`, `record_cost` and `record_profile_warning`
+        — so an override and its document cannot disagree about who owns them,
+        and no caller can get it wrong at one of the sites.
+
+        A version this organisation does not own matches no row and writes
+        nothing: the `SELECT` *is* the ownership predicate, the same shape
+        `open_turn` uses, and splitting it out would make an id authorization —
+        which the free plane's `/reindex` already records as a silent
+        cross-tenant write.
+        """
+        if text is None and not disabled:
+            # A row that changes nothing is not a fact worth storing, and the
+            # table's CHECK refuses it anyway. Deleting is what "undo" means.
+            self.clear_chunk_override(version_id, chunk_index)
+            return
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO chunk_override
+                       (version_id, chunk_index, tenant_id, text, disabled,
+                        replaced_sha256, edited_by)
+                SELECT %s, %s, v.tenant_id, %s, %s, %s, %s
+                  FROM document_version v WHERE v.id = %s
+                ON CONFLICT (version_id, chunk_index) DO UPDATE
+                   SET text = EXCLUDED.text,
+                       disabled = EXCLUDED.disabled,
+                       replaced_sha256 = EXCLUDED.replaced_sha256,
+                       edited_by = EXCLUDED.edited_by,
+                       edited_at = now()
+                """,
+                (version_id, chunk_index, text, disabled, replaced_sha256,
+                 edited_by, version_id),
+            )
+
+    def clear_chunk_override(self, version_id: str, chunk_index: int) -> None:
+        """Undo an edit. The chunk goes back to what the run produced, which is
+        why the original is never overwritten in any store."""
+        with self._conn() as conn:
+            conn.execute(
+                "DELETE FROM chunk_override "
+                "WHERE version_id = %s AND chunk_index = %s",
+                (version_id, chunk_index),
+            )
+
+    def chunk_overrides(self, version_id: str) -> list[ChunkOverride]:
+        """Every edit against this version, by chunk index."""
+        with self._conn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                rows = cur.execute(
+                    """
+                    SELECT version_id, chunk_index, text, disabled,
+                           replaced_sha256, edited_by
+                      FROM chunk_override
+                     WHERE version_id = %s
+                     ORDER BY chunk_index
+                    """,
+                    (version_id,),
+                ).fetchall()
+        return [ChunkOverride(**r) for r in rows]

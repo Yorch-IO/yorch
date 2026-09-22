@@ -146,7 +146,7 @@ def search(
     magnitude under the answering call — and a stage that spends without a row is
     exactly how the ledger came to be missing every question ever asked.
     """
-    from docagent.qdrant import Qdrant, SearchOpts, diversify
+    from docagent.qdrant import Excluded, Qdrant, SearchOpts, diversify
 
     # RETRIEVAL_QUERY, not RETRIEVAL_DOCUMENT. The model embeds questions and
     # passages asymmetrically on purpose (invariant #5) and using one task for
@@ -229,6 +229,17 @@ def search(
     # key in still loses it here. Two guards for one property, because this is
     # the property.
     filters["tenant_id"] = question.tenant_id
+    # A chunk somebody hid is hidden from *every* question, so this is scope
+    # and not a narrowing a caller may request — the same argument
+    # `ALLOWED_FILTERS` makes about `tenant_id`, and the same two guards: it is
+    # absent from that allowlist and assigned here regardless.
+    #
+    # **An exclusion, never `enabled: true`.** A positive flag has to be
+    # present on every point to mean anything, so adopting one would hide every
+    # point written before it — and a corpus that vanishes from retrieval while
+    # every log line reads as healthy is the worst failure this product has.
+    # Absence means visible, which is what all 8,050 existing points say.
+    filters["disabled"] = Excluded(True)
 
     # Resolved once, here, and passed down. Every number below moves with the
     # level except `MIN_SCORE`, which is the floor and is deliberately fixed.

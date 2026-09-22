@@ -75,6 +75,13 @@ class ChunkNode:
     start_s: float | None = None
     end_s: float | None = None
     qdrant_point_id: str | None = None
+    #: Whether a person rewrote this chunk's text after it was indexed.
+    #:
+    #: It changes what the locator says, and that is the whole reason it is
+    #: here: an edited chunk's `char_span` no longer indexes any stream this
+    #: product holds, so printing a byte range would be a pointer at nothing.
+    #: See `_locator`.
+    edited: bool = False
 
 
 @dataclass(frozen=True)
@@ -440,7 +447,15 @@ def _locator(version: VersionNode, chunk: ChunkNode) -> str:
         parts.append(f"diapositiva {chunk.slide}")
     if title := _title_for(version, chunk):
         parts.append(title)
-    parts.append(f"[{chunk.char_start}:{chunk.char_end}]")
+    # **An edited chunk trades its byte range for a marker, and never loses
+    # the locator.** Its text is no longer a slice of any stream this product
+    # holds, so the range would point at nothing — but `answer._verify` drops
+    # a citation whose chunk has no locator, so returning an empty one here
+    # would make every edited chunk silently uncitable. That is the recorded
+    # "a vector-only plan came back with no verifiable citation" failure,
+    # reached from a new direction, and it is the opposite of what editing is
+    # for. A reader is told a person touched it instead.
+    parts.append("editado" if chunk.edited else f"[{chunk.char_start}:{chunk.char_end}]")
     return " · ".join(parts)
 
 
@@ -917,6 +932,99 @@ OPTIONAL MATCH (c)-[m:MENTIONS]->(k:Concept)
 WHERE NOT (c.id + '|' + k.id) IN coalesce($mention_keys, [])
 RETURN count(DISTINCT cl) AS claims, count(m) AS mentions
 """
+
+
+_CLAIMS_ON_CHUNK = """
+MATCH (cl:Claim {source_chunk_id: $chunk_id})
+WHERE cl.quote IS NOT NULL
+RETURN cl.id AS id, cl.quote AS quote
+"""
+
+_DROP_CLAIM_SPAN = """
+UNWIND $ids AS id
+MATCH (cl:Claim {id: id})
+SET cl.quote = NULL, cl.quote_char_start = NULL, cl.quote_char_end = NULL
+"""
+
+
+_RECITE = """
+MATCH (c:Chunk {id: $chunk_id})
+OPTIONAL MATCH (c)-[:CITES]->(old:Citation)
+DETACH DELETE old
+WITH c
+MERGE (cit:Citation {id: $id})
+SET cit.locator = $locator, cit.page = $page,
+    cit.section_title = $section_title, cit.version_id = $version_id,
+    cit.tenant_id = $tenant_id
+MERGE (c)-[:CITES]->(cit)
+RETURN cit.id AS id
+"""
+
+
+def recite_chunk(graph: Any, chunk_id: str, locator: str, *, version_id: str,
+                 tenant_id: str, page: Any = None, section_title: Any = None) -> str:
+    """Re-mint one chunk's citation under a locator that has changed.
+
+    **`citation_id` is `digest(chunk_id, locator)`**, so a locator that gains
+    an `editado` marker is a *different* citation, not the same one with new
+    text. `project_structure` handles that by pruning the citations it did not
+    produce — but an edit is not a projection and has nothing to hang that off,
+    so the replacement happens here, in one statement, old detached before new
+    is merged.
+
+    Without it an edited chunk keeps a citation printing a byte range into a
+    stream its text is no longer a slice of: a pointer at nothing, on the one
+    surface whose whole job is to be checkable. It reads perfectly.
+    """
+    from .schema import citation_id
+
+    cid = citation_id(chunk_id, locator)
+    graph.write(_RECITE, {
+        "chunk_id": chunk_id, "id": cid, "locator": locator, "page": page,
+        "section_title": section_title, "version_id": version_id,
+        "tenant_id": tenant_id,
+    })
+    return cid
+
+
+def reverify_claims(graph: Any, chunk_id: str, text: str) -> dict[str, int]:
+    """Re-check every claim's quote against a chunk whose text just changed.
+
+    **A quote that no longer checks out costs the claim its span, not its
+    existence** — the rule this product already applies when a quote is first
+    located, applied again at the one other moment the text under a claim can
+    move. The claim is still a reading of a chunk a person can open; what it
+    loses is the pointer that would have taken them to the exact sentence.
+
+    Without this, editing a chunk leaves claims attached to it quoting words it
+    no longer contains, and *they read exactly like good ones* — which is the
+    recorded stale-claim failure `prune_semantics` was built for, reached from
+    a new direction: there the chunk was re-cut, here a person rewrote it.
+
+    `quoting.find` is the same matcher the extractor used, not a second copy:
+    two that tolerated different things would let one accept quotes the other
+    refuses with neither of them failing.
+
+    Matched on `source_chunk_id` rather than through `DERIVED_FROM`, because
+    that is the property `_MERGE_CLAIMS` writes and the one an orphan claim
+    still carries — the 214 this graph holds are orphans precisely because
+    their chunk is gone, and a traversal would silently skip them.
+
+    Note what this deliberately undoes: `_MERGE_CLAIMS` is *monotonic* about
+    quotes on purpose (`coalesce`, so a replay cannot null out a span the graph
+    already has). This is the one writer allowed to clear one, and it is
+    allowed because the text the span pointed into no longer exists.
+    """
+    from .. import quoting
+
+    rows = graph.write(_CLAIMS_ON_CHUNK, {"chunk_id": chunk_id})
+    stale = [
+        r["id"] for r in rows
+        if r["quote"] and quoting.find(r["quote"], text) is None
+    ]
+    if stale:
+        graph.write(_DROP_CLAIM_SPAN, {"ids": stale})
+    return {"claims": len(rows), "unverified": len(stale)}
 
 
 def prune_semantics(

@@ -1264,6 +1264,32 @@ export interface ProviderSettings {
 // what `semantic` and `confidence` are for — an edge a model suggested and an
 // edge read off a table of contents have different standing as evidence.
 
+/** What applying one edit actually did, per store. */
+export interface EditOutcome {
+  versionId: string;
+  chunkIndex: number;
+  /** False when the edit only hid the chunk, so nothing was re-embedded. */
+  reindexed: boolean;
+  /** Claims whose quote no longer appears in the new text and therefore lost
+   *  their span — not their existence. */
+  claimsChecked: number;
+  claimsUnverified: number;
+  usd: number;
+}
+
+/** An edit somebody made, as the catalog holds it. */
+export interface ChunkOverrideRow {
+  chunkIndex: number;
+  text: string | null;
+  disabled: boolean;
+  editedBy: string;
+}
+
+export interface VersionOverrides {
+  versionId: string;
+  overrides: ChunkOverrideRow[];
+}
+
 /** One retrieval leg's account of a chunk being placed. `rank` is `null` when
  *  the chunk was outside the window searched — "below where we looked" and
  *  "first" must never be the same value. */
@@ -2824,6 +2850,23 @@ export const api = {
     versionId?: string;
     effort?: AskEffort;
   }) => invoke<ProbeReport>("explore_probe", args),
+  /** Rewrite a chunk, hide it from retrieval, or undo either.
+   *
+   *  `text: null` with `disabled: false` is an **undo**: the override is
+   *  deleted and the chunk goes back to exactly what the run produced, which
+   *  is why the original is never overwritten in any store.
+   *
+   *  It re-embeds one chunk — about $0.000002 — and the response says what it
+   *  cost and how many claims lost their quote span. */
+  exploreEditChunk: (args: {
+    versionId: string;
+    chunkIndex: number;
+    text?: string | null;
+    disabled?: boolean;
+    editedBy?: string;
+  }) => invoke<EditOutcome>("explore_edit_chunk", args),
+  exploreOverrides: (versionId: string) =>
+    invoke<VersionOverrides>("explore_overrides", { versionId }),
   exploreRelated: (versionId: string) =>
     invoke<RelatedDocuments>("explore_related", { versionId }),
   exploreClaims: (conceptId: string) =>

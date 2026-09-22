@@ -1539,6 +1539,40 @@ async def link_duplicate(
         proj.project_structure(graph, version)
 
 
+def _chunk_overrides(version_id: str) -> dict[int, Any]:
+    """This version's edits, by chunk index. Best-effort, like every other
+    catalog read in a stage that must not fail over bookkeeping."""
+    try:
+        with Catalog(_settings().database_url, pooled=False,
+                     timeout=RECORD_TIMEOUT) as catalog:
+            return {o.chunk_index: o for o in catalog.chunk_overrides(version_id)}
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not read chunk overrides for %s: %s", version_id, e)
+        return {}
+
+
+def _applied(row: dict, overrides: dict[int, Any]):
+    """The override for this row, or None when there is none *or* when it no
+    longer fits — `chunk_index` is not stable across a re-cut, so an override
+    reapplied by index alone would attach a correction to another passage."""
+    override = overrides.get(row.get("index"))
+    if override is None or not override.applies_to(row.get("text", "")):
+        return None
+    return override
+
+
+def _edited_text(row: dict, overrides: dict[int, Any]) -> str:
+    override = _applied(row, overrides)
+    if override is None or override.text is None:
+        return row.get("text", "")
+    return override.text
+
+
+def _is_edited(row: dict, overrides: dict[int, Any]) -> bool:
+    override = _applied(row, overrides)
+    return override is not None and override.text is not None
+
+
 @activity.defn(name="project_structure")
 async def project_structure(
     request: IngestRequest,
@@ -1557,16 +1591,24 @@ async def project_structure(
     store = ArtifactStore(settings.workspace, run_id)
     rows = list(store.iter_jsonl(chunks_ref))
 
+    # The same edits the index applies, applied to the graph — so Explore, a
+    # claim's quote and a citation's locator all describe the text a reader is
+    # actually served. A projection that showed the original while retrieval
+    # served the edit would make the two disagree about the same chunk, which
+    # is the one thing a citation exists to rule out.
+    overrides = _chunk_overrides(registered.version_id)
+
     nodes, paths = section_tree(rows)
 
     chunks = [
         proj.ChunkNode(
             ordinal=row.get("index", i),
             kind=row.get("kind", "cuerpo"),
-            text=row.get("text", ""),
+            text=_edited_text(row, overrides),
             char_start=row.get("char_from", 0),
             char_end=row.get("char_to", 0),
             section_path=paths.get(_heading_titles(row)),
+            edited=_is_edited(row, overrides),
             page=row.get("page"),
             # `sheet` and `slide` were declared on ChunkNode, written by
             # `_MERGE_CHUNKS` and rendered by `_locator` — and set by nothing,

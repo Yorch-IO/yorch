@@ -1235,7 +1235,8 @@
     "gate": {
       "prefetch": "la prebúsqueda — ninguna pata lo llevó a la fusión",
       "fusion": "la fusión — compitió en RRF y perdió",
-      "diversify": "el tope por sección — una política sobre sus vecinos, no sobre su puntuación"
+      "diversify": "el tope por sección — una política sobre sus vecinos, no sobre su puntuación",
+      "hidden": "está oculto — alguien retiró este pasaje de la recuperación"
     },
     "leg": "Pata",
     "rank": "Posición",
@@ -1258,5 +1259,21 @@
     "dropped": "descartado",
     "passage": "Pasaje",
     "spent": "Esta sonda gastó {{tokens}} tokens de embedding ({{hits}} de caché) y ${{usd}} en reordenación — no queda registrado en ningún sitio."
+  },
+  "edit": {
+    "rewrite": "Reescribir",
+    "close": "Cancelar",
+    "hide": "Ocultar de las respuestas",
+    "show": "Mostrar en las respuestas",
+    "undo": "Deshacer",
+    "text": "El texto que debe llevar este fragmento",
+    "save": "Guardar y reindexar",
+    "saving": "Guardando…",
+    "failed": "No se pudo aplicar la edición.",
+    "done": "Aplicada. La reindexación costó ${{usd}}.",
+    "claimsLostTheirSpan": "{{n}} afirmación(es) citaban palabras que este fragmento ya no contiene y perdieron su posición — no su existencia.",
+    "spanWarning": "Un fragmento editado deja de ser una porción byte a byte del original, así que su cita deja de nombrar un rango de bytes y dice «editado». El original se conserva y Deshacer lo restaura.",
+    "isEdited": "Reescrito a mano.",
+    "isHidden": "Oculto de las respuestas."
   }
 }

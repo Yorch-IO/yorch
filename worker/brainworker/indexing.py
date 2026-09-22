@@ -27,7 +27,15 @@ log = logging.getLogger(__name__)
 #: library is a shelf inside an organisation, and every other key here narrows
 #: within one.
 PAYLOAD_INDEXES = ("tenant_id", "library_id", "version_id", "kind", "document_id",
-                   "source_name", "scripture_refs", "scripture_chapters")
+                   "source_name", "scripture_refs", "scripture_chapters",
+                   # Written only on a chunk somebody hid, and read as a
+                   # `must_not`. **Never as `enabled: true`**: a positive flag
+                   # has to be present on every point to mean anything, so
+                   # adopting one hides every point written before it — 8,050
+                   # of them — unless a backfill runs and never misses. Phrased
+                   # as the exception, absence means visible, which is what
+                   # every existing point already says.
+                   "disabled")
 #: Payload fields indexed as integers rather than keywords: a `range` filter
 #: over an unindexed field scans the collection, and `recorded_day` is what a
 #: date range narrows on.
@@ -162,6 +170,63 @@ def chunk_row(chunk: Any, *, start_s: float | None = None,
     return row
 
 
+def apply_overrides(
+    chunks: "list[StoredChunk]", overrides: "dict[int, Any]"
+) -> "tuple[list[StoredChunk], list[Any]]":
+    """Substitute what a person wrote, and report what no longer fits.
+
+    Applied **before** the engine embeds, so the dense vector, the BM25 sparse
+    vector, the scripture filters and the stored payload are all of the same
+    words. Replacing the text in the payload alone would retrieve on what the
+    chunk used to say and display what it now says — plausible, and wrong in a
+    way nothing downstream could see.
+
+    An override whose `replaced_sha256` no longer matches the chunk at its
+    index is **orphaned and returned**, never applied: `chunk_index` is not
+    stable across a re-cut, and reapplying by index alone attaches a person's
+    correction to a different passage. Returned rather than dropped, because a
+    screen has to be able to say "this edit no longer fits the document" — and
+    a correction that vanished without a word is worse than one that stopped
+    being applied.
+
+    `embed_text` moves with the text. It is what the vector is made from, and a
+    chunk whose text changed while its embed text did not would be findable
+    only by the words it no longer contains.
+    """
+    import dataclasses
+
+    out: list[StoredChunk] = []
+    orphans: list[Any] = []
+    seen: set[int] = set()
+    for chunk in chunks:
+        override = overrides.get(chunk.index)
+        if override is None:
+            out.append(chunk)
+            continue
+        seen.add(chunk.index)
+        if not override.applies_to(chunk.text):
+            orphans.append(override)
+            out.append(chunk)
+            continue
+        if override.text is None:
+            out.append(chunk)
+            continue
+        breadcrumb = chunk.breadcrumb()
+        out.append(
+            dataclasses.replace(
+                chunk,
+                text=override.text,
+                _embed_text=(
+                    f"{breadcrumb}\n\n{override.text}" if breadcrumb else override.text
+                ),
+            )
+        )
+    # An override pointing at an index the document no longer has is orphaned
+    # for the same reason, and is the shape a re-cut that *shrank* produces.
+    orphans.extend(o for i, o in overrides.items() if i not in seen)
+    return out, orphans
+
+
 class QdrantWriter:
     """Stamps this organisation's identity onto every point the engine produces.
 
@@ -186,6 +251,7 @@ class QdrantWriter:
         dimensions: int,
         recorded_day: int | None = None,
         source_name: str = "",
+        overrides: "dict[int, Any] | None" = None,
     ) -> None:
         self._q = qdrant
         self.tenant_id = tenant_id
@@ -202,6 +268,16 @@ class QdrantWriter:
         #: existing caller and every existing point are unchanged.
         self.recorded_day = recorded_day
         self.source_name = source_name
+        #: What a person changed about this version's chunks, by chunk index.
+        #:
+        #: Applied **here, at index time, from the catalog** rather than poked
+        #: into a point afterwards. `upsert` writes the payload as a whole dict
+        #: and Qdrant replaces it, so a flag set out of band is wiped by the
+        #: next re-index or rebuild — silently, which is the "ids survive while
+        #: what they point at changes" family this repository has recorded
+        #: twice. The catalog is the source of truth and the index is derived
+        #: from it, which is the same ordering `removal.py` states.
+        self.overrides = overrides or {}
         #: Read by `runner.index_chunks`, which refuses to write vectors from a
         #: model this collection does not already hold. Two models of equal width
         #: are interchangeable to Qdrant and not to the cosine.
@@ -262,12 +338,45 @@ class QdrantWriter:
                     "char_span": [r.chunk.char_from, r.chunk.char_to],
                     "cell_ref": r.chunk.cell_ref,
                     **self._filterable(r.chunk.text),
+                    **self._override(r.chunk),
                 },
             )
             for r in rows
         ]
         self._q.upsert(points)
         return len(points)
+
+    def _override(self, chunk: Any) -> dict[str, Any]:
+        """What a person changed about this chunk, as payload.
+
+        Two keys, both *absent* unless somebody edited the chunk, and that is
+        the whole design. `disabled` is read as a `must_not` so absence means
+        visible, and `edited` marks a chunk whose `char_span` no longer
+        verifies against any stream this product holds, so a reader is told
+        rather than left to assume.
+
+        **The edited *text* is not here**, and that is the point: it is
+        substituted by `apply_overrides` before the engine ever sees the chunk,
+        so the vector, the BM25 sparse vector, the scripture filters and the
+        payload are all of the same words. Replacing it in the payload alone
+        would have retrieved on what the chunk used to say and displayed what
+        it now says — plausible, and wrong in a way nothing could see.
+
+        **An override that no longer matches its chunk is ignored, not
+        applied.** `chunk_index` is not stable across a re-cut — one corrected
+        profile took a document from 600 chunks to 631 — so reapplying by index
+        alone would attach a person's correction to a different passage and
+        read exactly like a good one. The orphan is left in the catalog for a
+        screen to report; silently dropping it would be the same mistake with
+        the evidence removed.
+        """
+        override = self.overrides.get(chunk.index)
+        if override is None or not override.applies_to(chunk.text):
+            return {}
+        out: dict[str, Any] = {"edited": True}
+        if override.disabled:
+            out["disabled"] = True
+        return out
 
     def _filterable(self, text: str) -> dict[str, Any]:
         """The payload fields a `Question` may narrow on beyond the scope.

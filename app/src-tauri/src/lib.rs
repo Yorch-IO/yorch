@@ -1607,6 +1607,33 @@ async fn explore_chunk_context(
 }
 
 #[tauri::command]
+async fn explore_edit_chunk(
+    state: State<'_, AppState>,
+    version_id: String,
+    chunk_index: u32,
+    text: Option<String>,
+    disabled: Option<bool>,
+    edited_by: Option<String>,
+) -> Result<control::EditOutcome> {
+    let control = state.control().await?;
+    let body = control::ChunkEdit {
+        text,
+        disabled: disabled.unwrap_or(false),
+        edited_by: edited_by.unwrap_or_default(),
+    };
+    control.edit_chunk(&version_id, chunk_index, &body).await
+}
+
+#[tauri::command]
+async fn explore_overrides(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> Result<control::VersionOverrides> {
+    let control = state.control().await?;
+    control.version_overrides(&version_id).await
+}
+
+#[tauri::command]
 async fn explore_probe(
     state: State<'_, AppState>,
     library_id: String,
@@ -1855,6 +1882,8 @@ pub fn run() {
             explore_section_chunks,
             explore_chunk_context,
             explore_probe,
+            explore_edit_chunk,
+            explore_overrides,
             explore_concepts,
             explore_related,
             explore_claims,

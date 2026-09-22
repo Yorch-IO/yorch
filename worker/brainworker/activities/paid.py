@@ -49,6 +49,7 @@ from ..pipeline import (
     TuneOutcome,
 )
 from ..indexing import (
+    apply_overrides,
     INTEGER_INDEXES, PAYLOAD_INDEXES, QdrantWriter, StoredChunk, version_scope,
 )
 from ..indexing import chunk_row as indexing_chunk_row
@@ -490,6 +491,25 @@ def _filterable_facts(settings, registered: Registered) -> tuple[int | None, str
 EPOCH_ORDINAL = 719163
 
 
+def _overrides_for(registered: Registered) -> dict[int, Any]:
+    """This version's edits, by chunk index, or none at all.
+
+    Unpooled and wrapped, like every other catalog read in a paid stage: a pool
+    retries a refused connection in the background, so a catalog that is merely
+    down turns one immediate error into a ten-second stall — and an indexing
+    run that failed because nobody had edited anything would be the worse
+    trade. A catalog that cannot be read costs the edits, not the index.
+    """
+    try:
+        with Catalog(_settings().database_url, pooled=False) as catalog:
+            rows = catalog.chunk_overrides(registered.version_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not read chunk overrides for %s: %s",
+                    registered.version_id, e)
+        return {}
+    return {o.chunk_index: o for o in rows}
+
+
 @activity.defn(name="embed_and_index")
 async def embed_and_index(
     run_id: str,
@@ -528,6 +548,20 @@ async def embed_and_index(
         )
 
     chunks = [StoredChunk.from_row(r) for r in rows]
+    # What a person changed, substituted **before** the engine embeds, so the
+    # dense vector, the sparse vector, the scripture filters and the payload
+    # are all of the same words. An override that no longer matches its chunk
+    # is orphaned rather than applied — `chunk_index` is not stable across a
+    # re-cut — and is logged rather than dropped, because an edit that vanished
+    # without a word is worse than one that stopped being applied.
+    overrides = _overrides_for(registered)
+    chunks, orphaned = apply_overrides(chunks, overrides)
+    if orphaned:
+        log.warning(
+            "run %s: %d chunk override(s) no longer fit this version and were "
+            "not applied (indices %s)",
+            run_id, len(orphaned), sorted(o.chunk_index for o in orphaned),
+        )
     embedder = CachedEmbedder(
         _provider(),
         _embed_cache_dir(settings),
@@ -582,6 +616,10 @@ async def embed_and_index(
             dimensions=settings.gemini.embedding_dimensions,
             recorded_day=recorded_day,
             source_name=source_name,
+            # The flags only: the edited *text* is already in `chunks` above,
+            # so the writer marks a chunk as edited or hidden and never has to
+            # know what it now says.
+            overrides=overrides,
         )
         beating = asyncio.ensure_future(beat())
         try:

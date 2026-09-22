@@ -1235,7 +1235,8 @@
     "gate": {
       "prefetch": "the prefetch — neither leg carried it to fusion",
       "fusion": "fusion — it competed in RRF and lost",
-      "diversify": "the per-section cap — a policy about its neighbours, not its score"
+      "diversify": "the per-section cap — a policy about its neighbours, not its score",
+      "hidden": "it is hidden — somebody removed this passage from retrieval"
     },
     "leg": "Leg",
     "rank": "Rank",
@@ -1258,5 +1259,21 @@
     "dropped": "dropped",
     "passage": "Passage",
     "spent": "This probe spent {{tokens}} embedding tokens ({{hits}} from cache) and ${{usd}} reranking — recorded nowhere."
+  },
+  "edit": {
+    "rewrite": "Rewrite",
+    "close": "Cancel",
+    "hide": "Hide from answers",
+    "show": "Show in answers",
+    "undo": "Undo",
+    "text": "The text this chunk should carry",
+    "save": "Save and re-index",
+    "saving": "Saving…",
+    "failed": "The edit could not be applied.",
+    "done": "Applied. Re-embedding cost ${{usd}}.",
+    "claimsLostTheirSpan": "{{n}} claim(s) quoted words this chunk no longer contains and lost their span — not their existence.",
+    "spanWarning": "An edited chunk is no longer a byte-exact slice of the original, so its citation stops naming a byte range and says «editado» instead. The original is kept and Undo restores it.",
+    "isEdited": "Rewritten by hand.",
+    "isHidden": "Hidden from answers."
   }
 }

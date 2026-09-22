@@ -78,3 +78,55 @@ def test_an_off_corpus_question_delivers_nothing_and_pays_for_no_ranking(
     assert not [c for c in report["candidates"] if c["delivered_rank"]]
     assert off_topic.rank_calls == []
     assert "refused as off-corpus" in report["target"]["note"]
+
+
+def test_the_probe_excludes_a_hidden_chunk_exactly_as_production_does(
+    settings, on_topic, indexed, library, monkeypatch
+):
+    """The probe's whole contract is that it reproduces the retrieval
+    production runs. It did not carry the exclusion, and the first hidden
+    chunk showed up ranking third in a probe of a search that would never
+    return it."""
+    from docagent.qdrant import Excluded
+
+    seen: list[dict] = []
+    from docagent import qdrant as q
+
+    original = q.Qdrant.search
+
+    def spy(self, vector, opts):
+        seen.append(dict(opts.filters))
+        return original(self, vector, opts)
+
+    monkeypatch.setattr(q.Qdrant, "search", spy)
+    on_topic.settings.rerank_model = ""
+    probe(settings, _req(library, effort="brief"), provider=on_topic)
+
+    # The two *placing* legs look without it — "where would this rank if it
+    # were not hidden" is the question somebody probing a hidden chunk asks —
+    # and the two production legs carry it.
+    served = [f for f in seen if isinstance(f.get("disabled"), Excluded)]
+    assert len(served) == 2, f"production's legs must carry the exclusion: {seen}"
+    assert all("disabled" not in f for f in seen if f not in served)
+
+
+def test_a_hidden_chunk_is_named_as_hidden_and_not_as_a_width_problem(
+    settings, on_topic, indexed, library
+):
+    """The only gate whose remedy is a person rather than a parameter.
+    Reporting `prefetch` would send somebody to tune a number that was never
+    in the way — the failure `where_lost` exists to prevent."""
+    on_topic.settings.rerank_model = ""
+    target = indexed["payload"]["chunk_id"]
+
+    plain = probe(settings, _req(library, chunk_id=target, effort="brief"),
+                  provider=on_topic)
+    assert plain["target"]["verdict"]["lost_at"] != "hidden"
+
+    from brainworker.probing import _is_hidden
+
+    class _Hit:
+        payload = {"chunk_id": target, "disabled": True}
+
+    assert _is_hidden([_Hit()], [], target) is True
+    assert _is_hidden([], [], target) is False

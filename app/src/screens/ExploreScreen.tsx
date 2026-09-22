@@ -8,6 +8,7 @@ import {
   errorMessage,
   type Claim,
   type ChunkContext,
+  type ChunkOverrideRow,
   type Concept,
   type DocumentRow,
   type RelatedDocument,
@@ -15,6 +16,7 @@ import {
   type Section,
 } from "../lib/api";
 import { useLibraries } from "../lib/libraries";
+import { ChunkEditor } from "./ChunkEditor";
 import { RetrievalProbe } from "./RetrievalProbe";
 
 /** Marks a result a model proposed rather than one read off the document.
@@ -48,6 +50,11 @@ export function ExploreScreen() {
   const [sectionId, setSectionId] = useState<string | null>(null);
   const [chunks, setChunks] = useState<ChunkRow[]>([]);
   const [context, setContext] = useState<ChunkContext | null>(null);
+  //: What a person has changed about this version's chunks, by chunk index.
+  //: Refetched after every edit rather than patched locally: the catalog is
+  //: the source of truth and the screen is a view of it, which is the same
+  //: ordering `removal.py` states about the stores.
+  const [overrides, setOverrides] = useState<Map<number, ChunkOverrideRow>>(new Map());
 
   const [concepts, setConcepts] = useState<Concept[] | null>(null);
   const [conceptId, setConceptId] = useState<string | null>(null);
@@ -91,11 +98,13 @@ export function ExploreScreen() {
     setClaims([]);
     setBusy(true);
     try {
-      const [outline, semantic, neighbours] = await Promise.all([
+      const [outline, semantic, neighbours, edits] = await Promise.all([
         api.exploreOutline(id),
         api.exploreConcepts(id),
         api.exploreRelated(id),
+        api.exploreOverrides(id),
       ]);
+      setOverrides(new Map(edits.overrides.map((o) => [o.chunkIndex, o])));
       setSections(outline.sections);
       setConcepts(semantic.concepts);
       setRelated(neighbours.documents);
@@ -129,6 +138,17 @@ export function ExploreScreen() {
       setError(e);
     }
   }, []);
+
+  const reloadEdits = useCallback(async () => {
+    if (!versionId) return;
+    try {
+      const edits = await api.exploreOverrides(versionId);
+      setOverrides(new Map(edits.overrides.map((o) => [o.chunkIndex, o])));
+      if (sectionId) setChunks((await api.exploreSectionChunks(sectionId)).chunks);
+    } catch (e) {
+      setError(e);
+    }
+  }, [versionId, sectionId]);
 
   const openConcept = useCallback(async (id: string) => {
     setConceptId(id);
@@ -229,9 +249,11 @@ export function ExploreScreen() {
               {chunks.map((c) => (
                 <li
                   key={c.id}
-                  className={
-                    context?.chunkId === c.id ? "chunk active" : "chunk"
-                  }
+                  className={[
+                    "chunk",
+                    context?.chunkId === c.id ? "active" : "",
+                    overrides.get(c.ordinal)?.disabled ? "hidden" : "",
+                  ].filter(Boolean).join(" ")}
                 >
                   <div className="chunk-head">
                     {/* Chunk kinds stay Spanish on the wire — they are stored in
@@ -257,6 +279,23 @@ export function ExploreScreen() {
                     </button>
                   </div>
                   <p className="chunk-text">{c.text}</p>
+                  {/* Marked, because an edited chunk's `char_span` no longer
+                      indexes any stream this product holds and a hidden one
+                      answers no question — neither is visible from the text. */}
+                  {overrides.get(c.ordinal)?.disabled && (
+                    <p className="warn">{t("edit.isHidden")}</p>
+                  )}
+                  {(overrides.get(c.ordinal)?.text ?? null) !== null && (
+                    <p className="notice">{t("edit.isEdited")}</p>
+                  )}
+                  {versionId && (
+                    <ChunkEditor
+                      chunk={c}
+                      versionId={versionId}
+                      override={overrides.get(c.ordinal)}
+                      onDone={() => void reloadEdits()}
+                    />
+                  )}
                 </li>
               ))}
             </ul>

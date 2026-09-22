@@ -289,6 +289,12 @@ STAGE_FOR_COST: dict[str, str] = {
 #: *question* is an `ask` run and not a pipeline: it has no gate, so it has no
 #: stage vocabulary to belong to, exactly like the three above it.
 ASK_COST_STAGES: tuple[str, ...] = (
+    # One chunk re-embedded because a person rewrote it. Like the three below
+    # it, an edit has no gate and therefore no pipeline whose stage vocabulary
+    # it could belong to — but a charge that maps to nothing must still be
+    # *named*, or it renders under the trailing `stage: null` heading beside
+    # the charges that belong to nobody.
+    "edit-embedding",
     "planning",
     "ask-embedding",
     # The cross-encoder over the fused candidates, at the levels that measured

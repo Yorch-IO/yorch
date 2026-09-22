@@ -64,6 +64,19 @@ def _ids(hits: list[Any]) -> list[str]:
     return [str(h.payload.get("chunk_id") or "") for h in hits]
 
 
+def _is_hidden(dense: list[Any], sparse: list[Any], target: str) -> bool:
+    """Whether the chunk carries the flag retrieval excludes on.
+
+    Read off the *placing* legs, which are run without the exclusion — so the
+    probe can answer "hidden" rather than reporting the chunk as absent, which
+    is the finding a reader would have to guess at.
+    """
+    for hit in (*dense, *sparse):
+        if str(hit.payload.get("chunk_id") or "") == target:
+            return bool(hit.payload.get("disabled"))
+    return False
+
+
 def _score_of(hits: list[Any], target: str) -> "float | None":
     for h in hits:
         if str(h.payload.get("chunk_id") or "") == target:
@@ -77,7 +90,7 @@ def probe(settings: config.Settings, req: ProbeRequest, provider: Any = None) ->
     a probe is exercised end to end against the real stores without a network
     call. The route passes nothing and gets the real one."""
     from docagent.bm25 import tokenize
-    from docagent.qdrant import Qdrant, SearchOpts, diversify
+    from docagent.qdrant import Excluded, Qdrant, SearchOpts, diversify
 
     from .activities.paid import EMBED_WORKERS, CachedEmbedder, _embed_cache_dir
     from .indexing import version_scope
@@ -86,9 +99,17 @@ def probe(settings: config.Settings, req: ProbeRequest, provider: Any = None) ->
     from .providers.ranking import usd_for
 
     budget = budget_for(req.effort)
-    filters: dict[str, str] = {"library_id": req.library_id, "tenant_id": req.tenant_id}
+    filters: dict[str, Any] = {"library_id": req.library_id, "tenant_id": req.tenant_id}
     if req.version_id:
         filters = {**filters, **version_scope(req.tenant_id, req.version_id)}
+    # The exclusion production carries. Leaving it off showed a hidden chunk
+    # ranking third in a probe of a search that would never return it — this
+    # module's own contract, broken by the module: a probe that explains a
+    # retrieval production never ran is worse than none. The *placing* legs
+    # below deliberately keep looking without it, because "where would this
+    # rank if it were not hidden" is the question somebody probing a hidden
+    # chunk is actually asking.
+    served = {**filters, "disabled": Excluded(True)}
 
     provider = provider or Provider(settings.gemini)
     embedder = CachedEmbedder(
@@ -115,12 +136,12 @@ def probe(settings: config.Settings, req: ProbeRequest, provider: Any = None) ->
         # same count `retrieve.search` reports as `evidence.dense`.
         gate = q.search(
             vector, SearchOpts(limit=budget.top_k, min_score=MIN_SCORE, dense_only=True,
-                               query_text=req.question, filters=filters),
+                               query_text=req.question, filters=served),
         )
         # And the search production actually issues.
         fused = q.search(
             vector, SearchOpts(limit=budget.candidate_limit, min_score=MIN_SCORE,
-                               query_text=req.question, filters=filters,
+                               query_text=req.question, filters=served,
                                prefetch_limit=budget.prefetch_limit),
         )
 
@@ -221,6 +242,21 @@ def probe(settings: config.Settings, req: ProbeRequest, provider: Any = None) ->
         )
         verdict["rrf_rank"] = pr.rank_of(rrf_order, target)
         verdict["rerank_score"] = rerank_scores.get(target)
+        # **Named before every other gate**, because it is the only one whose
+        # remedy is a person rather than a parameter. A hidden chunk is absent
+        # from the fused list for a reason that has nothing to do with the
+        # floor, the prefetch widths or `diversify` — and reporting one of
+        # those would send somebody to tune a number that was never in the way,
+        # which is exactly what `where_lost` exists to prevent.
+        if _is_hidden(dense_hits, sparse_hits, target):
+            verdict["verdict"] = {
+                "reached": False,
+                "lost_at": "hidden",
+                "detail": "alguien ocultó este fragmento de la recuperación",
+                "remedy": "vuelve a mostrarlo desde la pantalla de Explorar",
+                "note": "los tramos de abajo lo sitúan igualmente, para "
+                        "responder dónde quedaría si no estuviera oculto",
+            }
         if not on_topic:
             verdict["note"] = (
                 "the question itself was refused as off-corpus: nothing cleared "

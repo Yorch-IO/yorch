@@ -3221,6 +3221,81 @@ async def probe_retrieval(library_id: str, body: ProbeBody) -> dict[str, Any]:
     return report
 
 
+@dataclass
+class ChunkEdit:
+    """What a person changed about one chunk.
+
+    `text: null` with `disabled: false` is an **undo**: the override is deleted
+    and the chunk goes back to exactly what the run produced, which is why the
+    original is never overwritten in any store.
+    """
+
+    text: Annotated[str | None, Field(max_length=100_000)] = None
+    disabled: bool = False
+    edited_by: Annotated[str, Field(max_length=200)] = ""
+
+
+@app.put("/versions/{version_id}/chunks/{chunk_index}")
+async def edit_chunk(version_id: str, chunk_index: int, body: ChunkEdit) -> dict[str, Any]:
+    """Rewrite a chunk, hide it from retrieval, or undo either.
+
+    **This gives up the byte-exact `char_span`** for the chunk it touches —
+    invariant #1, the property the whole engine is built around — and that was
+    a deliberate trade for the thing it buys: a wrong chunk can be made right.
+    This product's own record is the argument: a table of contents indexed as
+    chapters, `2. Ibídem.` promoted to a heading, 428 of 4,239 chunks carrying
+    a citation as their breadcrumb, and not one of them fixable.
+
+    It spends — one embedding, about $0.000002 — so it opens a `run.kind =
+    'edit'` row, for the reason every kind migration since
+    `20260831160000_run_kind_ask` has repeated: `record_cost` derives its
+    tenant from the run a charge hangs off, so no run row means no bookkeeping
+    of any kind.
+
+    `brainworker/editing.py` owns the order across the three stores, so no
+    caller can get it wrong and a second plane cannot drift from it.
+    """
+    from ..editing import EditRefused, edit_chunk as apply_edit
+
+    s = settings()
+    if not s.gemini.configured:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "kind": "provider_unconfigured",
+                "message": "Falta BRAIN_GEMINI_PROJECT_ID: no se puede reindexar el fragmento.",
+            },
+        )
+    try:
+        outcome = await asyncio.to_thread(
+            apply_edit, s,
+            tenant_id=LEGACY_TENANT_ID, version_id=version_id,
+            chunk_index=chunk_index, text=body.text, disabled=body.disabled,
+            edited_by=body.edited_by,
+        )
+    except EditRefused as e:
+        # 404 for a chunk that is not there, 503 for a store that is not
+        # answering — the same split `activate` makes, and never a 403: a
+        # version another organisation owns must be indistinguishable from one
+        # that does not exist.
+        status = 503 if e.kind.endswith("_unreachable") else 404
+        raise HTTPException(status_code=status,
+                            detail={"kind": e.kind, "message": str(e)}) from e
+    return asdict(outcome)
+
+
+@app.get("/versions/{version_id}/overrides")
+def version_overrides(version_id: str) -> dict[str, Any]:
+    """Every edit against this version, so a screen can mark what was touched."""
+    s = settings()
+    with Catalog(s.database_url) as catalog:
+        rows = catalog.chunk_overrides(version_id)
+    return {
+        "version_id": version_id,
+        "overrides": [asdict(o) for o in rows],
+    }
+
+
 @app.get("/versions/{version_id}/concepts")
 def version_concepts(
     version_id: str, confidence_floor: float = 0.6, limit: int = 50

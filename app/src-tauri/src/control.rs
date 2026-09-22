@@ -671,6 +671,52 @@ pub struct StageEstimate {
     pub usd_high: Option<f64>,
 }
 
+/// What a person changed about one chunk. `text: None` with `disabled: false`
+/// is an **undo**: the override is deleted and the chunk goes back to exactly
+/// what the run produced.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChunkEdit {
+    pub text: Option<String>,
+    pub disabled: bool,
+    pub edited_by: String,
+}
+
+/// What applying one edit actually did, per store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct EditOutcome {
+    pub version_id: String,
+    pub chunk_index: u32,
+    /// False when the edit only hid the chunk, so nothing was re-embedded.
+    pub reindexed: bool,
+    /// Claims whose quote no longer appears in the new text and therefore lost
+    /// their span — not their existence.
+    #[serde(default)]
+    pub claims_checked: u32,
+    #[serde(default)]
+    pub claims_unverified: u32,
+    #[serde(default)]
+    pub usd: f64,
+}
+
+/// An edit somebody made, as the catalog holds it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct ChunkOverrideRow {
+    pub chunk_index: u32,
+    pub text: Option<String>,
+    pub disabled: bool,
+    #[serde(default)]
+    pub edited_by: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct VersionOverrides {
+    pub version_id: String,
+    pub overrides: Vec<ChunkOverrideRow>,
+}
+
 /// What the caches already hold, so a re-import is not quoted as a first one.
 /// `None` on the estimate means nothing measured it, which is not the same as
 /// "nothing is cached" and must not render as it.
@@ -3725,6 +3771,28 @@ impl Control {
 
     pub async fn concept_claims(&self, concept_id: &str) -> Result<ConceptClaims> {
         self.get(&format!("/concepts/{concept_id}/claims"), EXPLORE_TIMEOUT)
+            .await
+    }
+
+    /// Rewrite a chunk, hide it from retrieval, or undo either. Re-embeds one
+    /// chunk, so the Explore timeout is the right one — this is a single
+    /// embedding and three short writes, not a pipeline.
+    pub async fn edit_chunk(
+        &self,
+        version_id: &str,
+        chunk_index: u32,
+        body: &ChunkEdit,
+    ) -> Result<EditOutcome> {
+        self.post_json(
+            &format!("/versions/{version_id}/chunks/{chunk_index}"),
+            body,
+            EXPLORE_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn version_overrides(&self, version_id: &str) -> Result<VersionOverrides> {
+        self.get(&format!("/versions/{version_id}/overrides"), EXPLORE_TIMEOUT)
             .await
     }
 

@@ -378,3 +378,112 @@ def test_a_repeated_question_books_no_embedding_charge(
     # did not run are different facts — but it carries nothing.
     assert again.input_tokens == 0, "a cached query embedding was billed again"
     assert again.usd in (0, 0.0, None)
+
+
+# --- reranking ----------------------------------------------------------------
+#
+# The ranking API is a network call to a service the test suite must never
+# reach, so the provider double scripts it. What is asserted is the contract
+# around it: which levels call it, that its order wins, that its failure loses
+# nothing, and that its charge lands under a stage the ledger can name.
+#
+# The order assertions go through `_rerank` directly rather than through two
+# `search` calls compared against each other: RRF leaves ties, and the fused
+# order of tied candidates is not stable across calls, so "same as the previous
+# call" is not a property this index has.
+
+from types import SimpleNamespace
+
+
+def _reranking(provider, script=None):
+    provider.settings.rerank_model = "semantic-ranker-default-005"
+    provider.rank_script = script
+    return provider
+
+
+def _hits(*texts):
+    return [SimpleNamespace(payload={"text": t}, score=0.1) for t in texts]
+
+
+def test_the_rerankers_order_replaces_the_fused_order(on_topic, library):
+    from brainworker.answering.retrieve import _rerank
+
+    def reversed_scores(texts):
+        n = len(texts)
+        return [i / n for i in range(n)]  # later = higher
+
+    out = _rerank(_reranking(on_topic, reversed_scores), question(library), _hits("a", "b", "c"), None)
+    assert [h.payload["text"] for h in out] == ["c", "b", "a"]
+    assert on_topic.rank_calls == [(question(library).text, 3)]
+
+
+def test_a_narrow_level_hands_the_whole_fused_list_to_the_reranker(
+    settings, on_topic, library
+):
+    """End to end: `brief` reranks, and what it reranks is the candidate list,
+    not the four it will serve — the point is to promote from outside `top_k`."""
+    from brainworker.answering.effort import budget_for
+
+    evidence = search(settings, _reranking(on_topic), question(library, effort="brief"), vector_only())
+    assert evidence
+    assert len(on_topic.rank_calls) == 1
+    _, ranked = on_topic.rank_calls[0]
+    assert len(evidence) <= budget_for("brief").top_k < ranked <= budget_for("brief").candidate_limit
+
+
+def test_a_level_measured_inside_the_noise_does_not_pay_for_a_call(
+    settings, on_topic, library
+):
+    search(settings, _reranking(on_topic), question(library, effort="thorough"), vector_only())
+    assert on_topic.rank_calls == []
+
+
+def test_an_empty_model_turns_reranking_off_without_touching_the_ladder(
+    settings, on_topic, library
+):
+    on_topic.settings.rerank_model = ""
+    search(settings, on_topic, question(library, effort="brief"), vector_only())
+    assert on_topic.rank_calls == []
+
+
+def test_a_ranking_failure_keeps_the_fused_order_and_books_nothing(on_topic, library):
+    """Losing 0.07 of recall on one question is a better trade than refusing it,
+    and a call that was never billed must not appear in the ledger."""
+    from brainworker.answering.retrieve import _rerank
+    from brainworker.providers import ProviderError
+
+    hits = _hits("a", "b", "c")
+    spend: list = []
+    failing = _reranking(on_topic, ProviderError("502", kind="provider_unavailable", retryable=True))
+    assert _rerank(failing, question(library), hits, spend) == hits
+    assert on_topic.rank_calls, "the call was attempted"
+    assert spend == []
+
+
+def test_the_charge_is_booked_under_a_stage_the_ledger_can_name(settings, on_topic, library):
+    """`ask-rerank` is declared in `ASK_COST_STAGES` — the recorded way this goes
+    wrong is a charge written under a name nothing maps, rendering beside the
+    charges that belong to nobody."""
+    from brainworker.providers.ranking import usd_for
+    from brainworker.stages import ASK_COST_STAGES
+
+    spend: list = []
+    search(settings, _reranking(on_topic), question(library, effort="standard"), vector_only(), spend)
+    rows = [s for s in spend if s.stage == "ask-rerank"]
+    assert len(rows) == 1
+    assert rows[0].stage in ASK_COST_STAGES
+    assert rows[0].input_tokens == 0 and rows[0].output_tokens == 0
+    assert rows[0].usd == usd_for(on_topic.rank_calls[-1][1]) > 0
+
+
+def test_an_off_corpus_question_is_refused_before_anything_is_paid_to_rerank(
+    settings, off_topic, library
+):
+    """The first live question after reranking shipped was a refusal that had
+    booked $0.001 to reorder its own examples."""
+    spend: list = []
+    with pytest.raises(OffCorpus):
+        search(settings, _reranking(off_topic), question(library, "asdfgh qwerty zxcvb", effort="brief"),
+               vector_only(), spend)
+    assert off_topic.rank_calls == []
+    assert not [s for s in spend if s.stage == "ask-rerank"]

@@ -172,6 +172,11 @@ BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789 \
 BRAIN_DATABASE_URL="postgresql://brain:$BRAIN_PG_PASSWORD@127.0.0.1:5532/brain" \
 uv run python scripts/audit_version.py ver_… [--measure] [--json out.json]
 
+# How much a perfect reranker could recover, from the eval sets on disk, ≈$0;
+# `--rerank semantic-ranker-default-005` also measures the real one ($1 per
+# 1,000 questions). This is what put reranking on two levels and not three.
+uv run python scripts/rerank_ceiling.py ver_… [ver_… …] [--rerank MODEL --levels brief,standard]
+
 # Measure the speech rate the video gate projects a correction bill from.
 # Free — captions and metadata cost nothing and no transcription job is started.
 # See doc/VIDEO.md; the constant it feeds was a guess until 2026-09-05.
@@ -775,6 +780,36 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
   filter renders `class-validator` failures in that same FastAPI shape on
   purpose. A hand-rolled kind would have made the two planes answer one bad
   request two different ways.
+- **The fused candidates are reranked at `brief` and `standard`, and not at
+  `thorough` — and which levels is a measurement, not a budget.** Added
+  2026-09-21 after the product had had *no* reranker of any kind. Measured
+  first, built second, on the 640 eval questions the eight books already carry
+  (`worker/scripts/rerank_ceiling.py`, ≈$0 because every question vector is
+  cached): a *perfect* reranker over the fused list could recover **+0.100
+  recall at `brief`, +0.073 at `standard`, +0.020 at `thorough`** against a
+  pooled bootstrap margin of about ±0.014 — so `thorough` was inside the noise
+  before a model was ever called, because 48 of 120 already holds nearly
+  everything RRF reached. Then the real one, Vertex AI's Ranking API
+  (`semantic-ranker-default-005`): **+0.094 and +0.066**, sixteen of sixteen
+  (book, level) pairs up and none down, MRR inside the served window up about
+  0.2, p50 0.22 s. It sits at exactly one line — between `q.search` and
+  `diversify` in `retrieve.search` — and reorders only what RRF already
+  reached, which is what keeps `off_corpus` meaning what it means.
+  Four things that are decisions. **It runs after the topicality gate**: the
+  first live question after it shipped was a refusal that had paid $0.001 to
+  reorder its own examples. **A ranking failure keeps the fused order and
+  books nothing** — losing 0.07 of recall on one question is a better trade
+  than refusing it. **The score is passed through, never re-normalised**
+  (RAGFlow's `_normalize_rank` contract: min-max only an unbounded provider),
+  and the reranker reads `text`, never `embed_text`. And **it is billed per
+  query, not per token** — `$1.00 / 1,000` queries of up to 100 records, read
+  off the pricing page rather than a third-party table, so `ask-rerank` rows
+  carry zero tokens and a dollar figure; the stage is declared in
+  `ASK_COST_STAGES` and forked into `src/runs/stages.ts`. No key, no new
+  dependency, `locations/global`, a different service
+  (`discoveryengine.googleapis.com`) that needed no extra role here — checked
+  by calling it. `BRAIN_RERANK_MODEL=` (empty) turns it off everywhere
+  without touching the ladder.
 - **Two retrieval knobs are deliberately off the effort ladder, for two
   different reasons.** `MIN_SCORE` is the topicality floor and the recorded
   sweep already settled it: 0.50 scored best of everything tried and is wrong,

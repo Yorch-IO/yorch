@@ -218,6 +218,13 @@ class Gemini:
     #: ``gemini-embedding-001`` is **no longer served** — listing the endpoint's
     #: models on 2026-08-19 returned 23 ids and this is the only embedding one.
     embedding_model: str = "gemini-embedding-2"
+    #: The cross-encoder that reorders the fused candidates before `diversify`
+    #: at the effort levels `effort.py` marks — a different service from Gemini
+    #: (``discoveryengine``), same project, same ADC, ``global``. Empty turns
+    #: reranking off everywhere without touching the ladder, which is the
+    #: switch a deployment without that API enabled needs. Measured before it
+    #: existed: `providers/ranking.py`.
+    rerank_model: str = "semantic-ranker-default-005"
     #: Reasoning budget in tokens, or None for the model's own default.
     #:
     #: The largest single cost lever in the product, and invisible unless you go
@@ -528,6 +535,7 @@ def load() -> Settings:
             model=_env("BRAIN_GEMINI_MODEL", "gemini-3.6-flash"),
             embedding_model=_env("BRAIN_EMBEDDING_MODEL", "gemini-embedding-2"),
             embedding_dimensions=int(_env("BRAIN_EMBEDDING_DIMENSIONS", "3072")),
+            rerank_model=_env("BRAIN_RERANK_MODEL", "semantic-ranker-default-005"),
             thinking_budget=(
                 int(raw) if (raw := _env("BRAIN_THINKING_BUDGET", "")) else None
             ),

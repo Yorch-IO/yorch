@@ -291,6 +291,11 @@ STAGE_FOR_COST: dict[str, str] = {
 ASK_COST_STAGES: tuple[str, ...] = (
     "planning",
     "ask-embedding",
+    # The cross-encoder over the fused candidates, at the levels that measured
+    # worth it. Declared here *before* the first charge was written, because
+    # the recorded way this goes wrong is a stage that spends under a name
+    # nothing maps and renders beside charges that belong to nobody.
+    "ask-rerank",
     "answering",
     "channel-synthesis",
 )

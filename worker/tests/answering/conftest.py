@@ -117,8 +117,28 @@ class VectorProvider:
             # than crashed into.
             stage_thinking: dict[str, int | None] = {}
             thinking_budget: int | None = None
+            # Empty by default so no retrieval test here reaches the ranking
+            # API by accident; the tests that exercise the rerank pass set it
+            # and hand `rank` a scripted answer.
+            rerank_model = ""
 
         self.settings = _S()
+        #: What `rank` should answer with, or an exception to raise. `None`
+        #: means "score every text 0.5", which changes no order.
+        self.rank_script = None
+        self.rank_calls: list[tuple[str, int]] = []
+
+    def rank(self, query: str, texts: list[str]):
+        from brainworker.providers.ranking import Ranked
+
+        self.rank_calls.append((query, len(texts)))
+        if isinstance(self.rank_script, Exception):
+            raise self.rank_script
+        if callable(self.rank_script):
+            scores = self.rank_script(texts)
+        else:
+            scores = [0.5] * len(texts)
+        return Ranked(scores=scores, records=len(texts), seconds=0.0)
 
     def embed(self, texts, *, task, workers=6):
         from brainworker.providers.gemini import Embedding, Usage

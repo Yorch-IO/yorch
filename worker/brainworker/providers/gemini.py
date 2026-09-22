@@ -229,6 +229,7 @@ class Provider:
             )
         self.settings = settings
         self._client: genai.Client | None = None
+        self._ranker = None
 
     @property
     def client(self) -> genai.Client:
@@ -253,6 +254,24 @@ class Provider:
                     kind="provider_no_credentials",
                 ) from e
         return self._client
+
+    # -- ranking -----------------------------------------------------------
+
+    def rank(self, query: str, texts: list[str]):
+        """Score `texts` against `query` with the Ranking API; see
+        `providers/ranking.py` for the measurement and the contract.
+
+        On the provider for the same reason embedding is: one object per
+        process holds every outbound client, and the test double that stands
+        in for it is typed like it — a double that lacks a method the code
+        under test calls fails with an AttributeError instead of exercising
+        the path.
+        """
+        from .ranking import Ranker
+
+        if self._ranker is None:
+            self._ranker = Ranker(self.settings.project_id, self.settings.rerank_model)
+        return self._ranker.rank(query, texts)
 
     # -- retry -------------------------------------------------------------
 

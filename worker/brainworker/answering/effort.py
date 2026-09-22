@@ -95,6 +95,20 @@ class Budget:
     #: `thorough` in `BUDGETS`: any number named here has to be shown to beat
     #: the model's own choice, not merely to look generous.
     thinking_override: int | None = None
+    #: Whether the fused candidates are reordered by a cross-encoder before
+    #: `diversify` picks `top_k` of them. **Measured per level, and it is the
+    #: measurement that turns it off at `thorough`**, not a budget: on 640 eval
+    #: questions over eight books (2026-09-21, `scripts/rerank_ceiling.py`) a
+    #: *perfect* reranker could recover +0.100 recall at `brief` and +0.073 at
+    #: `standard`, against a pooled noise margin of ±0.014 — and the real one
+    #: recovered +0.094 and +0.066, no book worse. At `thorough` the ceiling is
+    #: +0.020, inside the noise, because 48 of 120 already holds nearly
+    #: everything the fused list reached. A level that reranks pays $0.001 a
+    #: question (one query per hundred candidates) and about 0.22 s.
+    #:
+    #: The switch that turns it off *everywhere* is `Gemini.rerank_model`
+    #: being empty; this flag says which levels it is worth at all.
+    rerank: bool = False
     #: How developed the answer should be, appended *below* the six answering
     #: rules — which are not editable from anywhere and win any disagreement
     #: with this. It is the one part of the prompt an organisation may rewrite,
@@ -122,6 +136,7 @@ BUDGETS: dict[str, Budget] = {
         candidate_limit=20,
         prefetch_limit=50,
         claims_per_chunk=2,
+        rerank=True,
         style=(
             "Responde en pocas frases, directo a lo que se pregunta. Da lo que "
             "los fragmentos sostienen sobre esa pregunta concreta y nada más; "
@@ -136,6 +151,11 @@ BUDGETS: dict[str, Budget] = {
         candidate_limit=40,
         prefetch_limit=50,
         claims_per_chunk=3,
+        # The one number in this row that is *not* what the product served
+        # before the ladder existed, and the test that pins the rest of the
+        # row against the old constants says so by name. Measured: +0.066
+        # recall@8 pooled, 8 of 8 books up. See `Budget.rerank`.
+        rerank=True,
         style=(
             "Responde en uno o dos párrafos. Cubre los puntos principales que "
             "los fragmentos sostienen sobre la pregunta, cada uno con su cita."
@@ -199,6 +219,9 @@ BUDGETS: dict[str, Budget] = {
         candidate_limit=120,
         prefetch_limit=150,
         claims_per_chunk=4,
+        # Off by measurement, not by economy: the ceiling here is +0.020, and
+        # a call that cannot beat the noise margin is latency for nothing.
+        rerank=False,
         style=(
             "Desarrolla la respuesta: recorre cada punto distinto que los "
             "fragmentos sostengan sobre la pregunta, uno por uno, explicando "

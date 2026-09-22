@@ -268,6 +268,27 @@ def search(
             ),
         )
 
+    # The cross-encoder sits exactly here: after RRF has decided *which*
+    # `candidate_limit` chunks are in play and before `diversify` decides which
+    # `top_k` of them the model reads. Measured before it was built (see
+    # `providers/ranking.py`): +0.094 recall@4 and +0.066 recall@8 on 640
+    # questions, no book worse, and nothing at `thorough`, which is why the
+    # level decides. What it reorders is the fused list and only the order —
+    # a chunk RRF never reached is still unreachable, which is what keeps
+    # `topicality_gate`'s verdict and `off_corpus` meaning what they mean.
+    #
+    # A ranking failure is not a retrieval failure. The fused order is what
+    # the product served for months; losing 0.07 of recall on one question
+    # is a worse trade than refusing it, so the error is logged, the charge is
+    # not booked (nothing was billed), and the question proceeds.
+    #
+    # `on_topic` first: an off-corpus question is refused three lines down
+    # with its nearest fragments as examples, and reordering examples is a
+    # billed call for nothing — the first live question after this shipped
+    # was exactly that, $0.001 on a refusal.
+    if on_topic and budget.rerank and provider.settings.rerank_model and hits:
+        hits = _rerank(provider, question, hits, spend)
+
     # `PER_SECTION` is a diversity policy rather than a volume one and stays off
     # the ladder — `diversify` backfills in score order when the cap leaves it
     # short, so a wider `top_k` is filled either way. See `effort.py`.
@@ -280,6 +301,42 @@ def search(
         raise OffCorpus(nearby=evidence[:3])
 
     return _expand(settings, question, plan, evidence, budget, top_k)
+
+
+def _rerank(provider: Provider, question: Question, hits: list, spend: "list | None") -> list:
+    """Reorder the fused candidates by the ranking model's score.
+
+    The reranker reads `text`, never `embed_text`, and its score replaces the
+    *order* — the RRF score on each hit is left as it was, because a reciprocal
+    rank and a relevance probability are not the same number and
+    `Evidence.score` has always carried the former.
+    """
+    from ..providers import ProviderError
+    from ..providers.ranking import usd_for
+
+    texts = [h.payload.get("text") or "" for h in hits]
+    try:
+        ranked = provider.rank(question.text, texts)
+    except ProviderError as e:
+        log.warning("reranking skipped, fused order kept (%s): %s", e.kind, e)
+        return hits
+    order = sorted(range(len(hits)), key=lambda i: -ranked.scores[i])
+    if spend is not None:
+        from ..pipeline import Spend
+
+        # No tokens: this API bills per query of up to a hundred records, so
+        # the token columns would be a lie in either direction. The dollar
+        # figure is the list price, sourced in `providers/ranking.py`.
+        spend.append(
+            Spend(
+                stage="ask-rerank",
+                model=provider.settings.rerank_model,
+                input_tokens=0,
+                output_tokens=0,
+                usd=usd_for(ranked.records),
+            )
+        )
+    return [hits[i] for i in order]
 
 
 def _expand(

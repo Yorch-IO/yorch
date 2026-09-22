@@ -338,6 +338,7 @@
         "transcription": "transcripción",
         "planning": "planificación",
         "ask-embedding": "vector de la pregunta",
+        "ask-rerank": "reordenación",
         "answering": "respuesta",
         "epub-metadata": "título y autor"
       }

@@ -43,6 +43,26 @@ def test_standard_is_exactly_what_the_product_served_before_effort_existed():
     assert standard.prefetch_limit == 50
     assert standard.claims_per_chunk == 3
     assert standard.thinking_override is None
+    # And the one deliberate exception, named so this docstring stays true:
+    # reranking did not exist before 2026-09-21 and `standard` carries it now
+    # because it was measured worth +0.066 recall@8 — see `Budget.rerank`.
+    assert standard.rerank is True
+
+
+def test_reranking_is_on_exactly_where_it_was_measured_to_pay():
+    """The flag follows the ceiling measurement, not the width.
+
+    +0.100 and +0.073 of recall were reachable at `brief` and `standard` and
+    +0.020 at `thorough`, against a ±0.014 margin. A level whose ceiling is
+    inside the noise must not pay a call for it — and a future level added to
+    the ladder gets `False` until somebody measures it, which is the default.
+    """
+    assert budget_for("brief").rerank is True
+    assert budget_for("standard").rerank is True
+    assert budget_for("thorough").rerank is False
+    from brainworker.answering.effort import Budget
+
+    assert Budget(top_k=1, candidate_limit=1, prefetch_limit=1, claims_per_chunk=1).rerank is False
 
 
 def test_the_default_level_is_the_one_that_changes_nothing():

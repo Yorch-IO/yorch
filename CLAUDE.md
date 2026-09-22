@@ -188,6 +188,11 @@ uv run python scripts/rerank_ceiling.py ver_… [ver_… …] [--rerank MODEL --
 # large import before re-deciding.
 uv run python scripts/refusal_census.py ver_… [ver_… …] [--deep N] [--json out.json]
 
+# What parent-child retrieval could buy and what it would cost, from the same
+# eval sets. Free without `--rerank`; with it, both legs are reranked and it
+# bills about $2 for 640 questions. This is what decided against re-chunking.
+uv run python scripts/parent_ceiling.py ver… [ver… …] [--rerank] [--json out.json]
+
 # Measure the speech rate the video gate projects a correction bill from.
 # Free — captions and metadata cost nothing and no transcription job is started.
 # See doc/VIDEO.md; the constant it feeds was a guess until 2026-09-05.
@@ -872,6 +877,68 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
   (`discoveryengine.googleapis.com`) that needed no extra role here — checked
   by calling it. `BRAIN_RERANK_MODEL=` (empty) turns it off everywhere
   without touching the ladder.
+- **Parent-child retrieval is measured and not built — and deciding it cost
+  $2.05, not the re-chunking the plan assumed.** RAGFlow indexes small children
+  for matching and serves the *parent* to the model
+  (`rag/nlp/search.py::retrieval_by_children`). Its whole recall benefit is that
+  a near miss becomes a hit: if the retriever returns chunk 41 and the answer is
+  in 42, serving the unit holding both captures it. That is
+  `parent_recall@top_k − chunk_recall@top_k`, and it is measurable against the
+  index that already exists.
+  **The premise that this needs a full re-embedding pass is wrong for a
+  *window* parent.** `chunk_index // k` is assembled at read time out of chunks
+  already indexed — nothing is embedded and nothing is written — so
+  `scripts/parent_ceiling.py` settled it on the same 640 questions at **0
+  embedding tokens** plus $2.05 of ranking calls. Only a parent whose own text
+  is indexed would need that pass, and this says whether one would ever earn it.
+  **The structural parent does not exist on this corpus.** `(chapter, section)`
+  is the obvious parent, and `build_chunks` consumes a heading paragraph — so
+  **17 of 59 documents on disk are a single section**, the largest being **500
+  chunks and 450,329 characters**. For a third of the corpus "the parent" is the
+  whole book. Same upstream defect the transform probe hit, arriving at a third
+  feature.
+  **The window ceiling is real, and reranking halves it — which was a prediction
+  before it was a number.** A better chunk ordering leaves fewer near misses for
+  a parent to rescue:
+
+  | parent | ceiling at `brief` | reranked | at `standard` | reranked |
+  |---|---|---|---|---|
+  | w2 | +0.0219 | +0.0109 | +0.0219 | +0.0109 |
+  | w3 | +0.0312 | +0.0109 | +0.0312 | +0.0156 |
+  | w4 | +0.0375 | +0.0156 | +0.0453 | +0.0125 |
+  | w6 | +0.0500 | +0.0250 | +0.0563 | +0.0234 |
+  | section | +0.1047 | +0.0469 | +0.0906 | +0.0391 |
+
+  **And the comparison is read at equal *characters*, never at equal unit
+  count.** A parent is bigger by construction, so putting 8 parents beside 8
+  chunks compares two prompts of different sizes and calls the larger one
+  better. What a parent has to beat is what those same characters buy spent on
+  more chunks — and with both sides reranked, **not one window parent does**:
+  `brief` loses by 0.013–0.022 at every width, `standard` ties. The only
+  positive rows are `section` at **106,640 and 131,730 characters a question**,
+  19–32x the prompt, against a plain baseline that has run out of `MAX_TOP_K` —
+  a win over a clamp rather than over a curve, and 3x past the budget where the
+  recorded citation curve turns down (19.5 citations at 38,863 characters, 15.0
+  at 49,578).
+  **The product argument is independent of all of that and is what settles it.**
+  A w6 parent is about 5,000 characters where a chunk is 800, so either the
+  citation names the parent — the byte-exact locator, this product's core
+  property, six times coarser — or the model cites a *child* out of a parent it
+  read, which is attribution across six units. That is the regime this
+  codebase already measured as unreliable and is why semantic extraction is one
+  chunk per call. And what `thorough` is *for* is citations (19.5 against 5),
+  not recall; trading a coarser locator for +0.02 recall on the level whose
+  whole purpose is attribution density is backwards.
+  **One defect came out of building the measurement, and it is the shape this
+  file keeps recording.** In `--rerank` mode the ceiling leg was reranked and
+  the plain-chunk curve was not, so the reranker's own +0.094 was credited to
+  the parent: on one book every row of the verdict read "parent wins by +0.05 to
+  +0.075" — four times the pooled margin — and the same data through the fixed
+  version reads ties and plain wins. A comparison that looks sound and silently
+  compares two different things, which is precisely what this measurement exists
+  to avoid concluding. `reordered` is the only place either leg may rank
+  anything now, and two tests pin it: one that no call reaches past it, one that
+  **both** legs go through it. Verified by reposing each shape separately.
 - **A concept's display name is the majority spelling, and the resolution pass
   RAGFlow built is measured and deliberately not.** Added 2026-09-22.
   `_MERGE_CONCEPTS` set `k.name` under `ON CREATE SET`, so whichever document

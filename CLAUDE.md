@@ -3851,8 +3851,24 @@ maintained by hand drifts, and one that has drifted is worse than none.
   `className="primary"` matched **nothing in the stylesheet** — a dead class
   that would have rotted unseen, on a panel whose sibling styles both buttons
   the same way anyway.
-  **Free plane and desktop. The paid plane has no route yet**, so the second
-  gate still shows the stale report there — a gap on the record, not a fix.
+  **All four surfaces, and the count at the top of this file is why.** Free
+  plane, paid plane (`runs.service.correction`, `assertOwned` before the query
+  because a Temporal query answers for a run whoever asks), desktop, and the
+  Angular client — where the same defect was **worse**. That client offers
+  `review_correction` on its Import screen and then emitted `settled` on the
+  first approval, which unmounts the gate component: so the second gate was
+  never rendered there *at all*, and a run that asked for one waited seven days
+  and timed out having already been billed for correction. Nothing failed
+  anywhere. It now switches phase instead of settling, reads
+  `/runs/{id}/correction`, and stops polling `/gate` — continuing would be a
+  request per interval for numbers that screen must not show.
+  **`correction_not_ready` had to be forked three times** — Python, the paid
+  plane, the web client — and the two TypeScript unions are closed, so the
+  compiler caught each half-done fork where nothing would have on the Python
+  side. That is the recorded cross-repo failure with a compiler under it.
+  Angular's specs are typechecked against both tsconfigs and **not executed**:
+  `@angular/build:unit-test` wants Node >= 22.22.3 and this machine has
+  20.19.4, so key parity and placeholder matching were checked by hand.
 
 - **A refused correction kept no record of what was refused, so `verify`'s
   false-positive rate had never been measured.** `correct_paragraphs` `continue`s

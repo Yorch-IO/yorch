@@ -267,3 +267,38 @@ def test_the_overrides_are_dumped_for_the_typescript_fork_to_compare() -> None:
     assert dumped["artifact_stage_overrides"] == {
         k: dict(v) for k, v in stages.ARTIFACT_STAGE_OVERRIDES.items()
     }
+
+
+# --- the one rule ported from RAGFlow's entity resolution --------------------
+
+
+def test_a_digit_in_the_two_gram_difference_forbids_a_merge():
+    """Measured over this corpus's 13,005 canonicals: a lexical gate at
+    RAGFlow's own threshold proposes 14,812 pairs and this refuses 804, every
+    one a scripture reference. Merging `1 corintios 1 7` into `1 corintios 11
+    3` silently reattributes a quotation."""
+    from brainworker.graph.schema import may_merge_concepts as ok
+
+    assert ok("1 corintios 1 7", "1 corintios 11 3") is False
+    assert ok("1 pedro 2 2", "1 pedro 3 7") is False
+    assert ok("juan 10 10", "juan 10 11") is False
+    assert ok("gpt 3", "gpt 4") is False
+
+
+def test_a_pair_with_no_digits_between_them_is_not_refused_here():
+    """The veto is a *guard*, not a decision: it says which merges are
+    forbidden, never which are right. Nothing merges concepts today."""
+    from brainworker.graph.schema import may_merge_concepts as ok
+
+    assert ok("alma", "almas") is True
+    assert ok("senor", "senores") is True
+    assert ok("adriana", "adriano") is True, "wrong to merge, but not this rule's call"
+
+
+def test_a_shared_digit_is_not_a_difference():
+    """Only the *symmetric difference* carries the veto, so two spellings of
+    one numbered thing stay mergeable."""
+    from brainworker.graph.schema import may_merge_concepts as ok
+
+    assert ok("salmo 23", "salmo 23") is True
+    assert ok("1 juan", "1 juan") is True

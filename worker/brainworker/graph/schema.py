@@ -264,6 +264,43 @@ def canonical_concept(name: str) -> str:
     return _collapse_space(_PUNCT.sub(" ", folded))
 
 
+def may_merge_concepts(a: str, b: str) -> bool:
+    """Whether two canonical concept names may ever be treated as one.
+
+    **Ported as a rule, not as a feature.** RAGFlow resolves near-duplicate
+    entities with an LLM behind a cheap lexical gate
+    (`rag/graphrag/entity_resolution.py`), and the most transferable thing in
+    it is a four-line veto: never merge a pair whose 2-gram symmetric
+    difference contains a digit. It is what stops "GPT-3" becoming "GPT-4".
+
+    Measured on this corpus before anything was built with it, over the 13,005
+    distinct canonicals in the 41 semantics artifacts: a gate at RAGFlow's own
+    threshold proposes **14,812** pairs and this veto refuses **804** of them —
+    and every one of those is a scripture reference. `1 corintios 1 7` against
+    `1 corintios 11 3`, `1 pedro 2 2` against `1 pedro 3 7`: one edit apart, a
+    verse apart, and merging them would silently reattribute a quotation in a
+    theology corpus.
+
+    **Nothing merges concepts today**, and that is a decision the same
+    measurement settled. The 14,008 pairs the veto *allows* are overwhelmingly
+    noise at that threshold — `aborigenes` against `abortistas`, `abu talib`
+    against `australia` — and tightening to a single edit leaves 358 pairs of
+    which a large share are `adriana`/`adriano`, `alejandra`/`alejandro`,
+    `adulterio`/`adultero`: different people and different concepts, one letter
+    apart. So the resolution pass is not built, the number that would justify
+    it is written down, and this guard exists so that anything which *does*
+    merge two concepts later cannot skip it.
+    """
+    if a == b:
+        return True
+    diff = _grams(a) ^ _grams(b)
+    return not any(ch.isdigit() for gram in diff for ch in gram)
+
+
+def _grams(text: str) -> set[str]:
+    return {text[i:i + 2] for i in range(len(text) - 1)}
+
+
 # ---------------------------------------------------------------------------
 # Indexes and constraints
 # ---------------------------------------------------------------------------

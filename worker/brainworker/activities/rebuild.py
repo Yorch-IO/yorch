@@ -196,7 +196,12 @@ async def replay_semantics(
         graph.ensure_schema()
         # A rebuild replays somebody's artifacts; it must project them back
         # under the tenant they belong to, not under whoever is replaying.
-        proj.project_concepts(graph, payload.get("concepts", []), tenant=registered.tenant_id)
+        # `version_id` so a replay revises this version's spelling votes
+        # rather than stacking a second set. A `semantics.json` written before
+        # spellings existed carries none and simply leaves the name alone.
+        proj.project_concepts(graph, payload.get("concepts", []),
+                              tenant=registered.tenant_id,
+                              version_id=registered.version_id)
         proj.project_claims(graph, payload.get("claims", []), tenant=registered.tenant_id)
         written = proj.project_semantic_edges(graph, edges)
 

@@ -1610,8 +1610,16 @@ async def extract_semantics(
                 # the graph holds 2,484.
                 key = canonical_concept(name)
                 entry = concepts.setdefault(
-                    key, {"name": name, "type": item.get("tipo"), "descriptions": []}
+                    key,
+                    {"name": name, "type": item.get("tipo"), "descriptions": [],
+                     # How often this run saw each *spelling* of the concept.
+                     # The first one seen used to become the label for the whole
+                     # corpus with no tie-break — measured at 231 of 13,005
+                     # concepts carrying a minority spelling — so the count goes
+                     # to the graph and the majority wins there.
+                     "spellings": {}},
                 )
+                entry["spellings"][name] = entry["spellings"].get(name, 0) + 1
                 if entry["type"] is None and item.get("tipo"):
                     # A type learned from any chunk beats the absence of one.
                     entry["type"] = item.get("tipo")
@@ -1725,7 +1733,8 @@ async def extract_semantics(
     condense_spend: Spend | None = None
     with Graph(settings.memgraph_url) as graph:
         graph.ensure_schema()
-        proj.project_concepts(graph, list(concepts.values()), tenant=tenant)
+        proj.project_concepts(graph, list(concepts.values()), tenant=tenant,
+                              version_id=registered.version_id)
         proj.project_claims(graph, claims, tenant=tenant)
         written = proj.project_semantic_edges(graph, edges)
 

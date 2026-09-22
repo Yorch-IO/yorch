@@ -491,6 +491,14 @@ def activate(graph: Graph, version: VersionNode) -> None:
 # Semantics
 # ---------------------------------------------------------------------------
 
+#: `k.name` is **not** set here after creation, and that is the whole point of
+#: `_TALLY_SPELLINGS` below. Under `ON CREATE SET` alone, whichever document
+#: reached a shared concept first owned its label for the entire corpus with no
+#: tie-break — measured by replaying all 41 semantics artifacts in timestamp
+#: order: **231 of 13,005 concepts (1.8%)** carried a display name that is not
+#: the majority spelling. `SEÑOR` beat 20 later mentions of `Señor`;
+#: `Darío Silva Silva` beat 12 of the book's own `Darío Silva-Silva`;
+#: `cristianismo` beat 22 of `Cristianismo`. Both graph screens render those.
 _MERGE_CONCEPTS = """
 UNWIND $rows AS row
 MERGE (k:Concept {id: row.id})
@@ -499,6 +507,33 @@ SET k.canonical = row.canonical, k.type = row.type,
     k.synonyms = row.synonyms, k.tenant_id = $tenant_id,
     k.description_raw = coalesce(k.description_raw, []) +
         [d IN row.descriptions WHERE NOT d IN coalesce(k.description_raw, [])]
+"""
+
+#: What each version calls this concept, one entry per (version, spelling).
+#:
+#: **Keyed by version so a retry replaces rather than adds.** `SET list = list +
+#: new` is the one write in this module a Temporal retry would double, which is
+#: why `description_raw` filters — but a *count* cannot be deduplicated by
+#: value, so this drops the version's previous entries first and appends its
+#: current ones. Re-indexing a version under a different cutting therefore
+#: revises its vote instead of stacking a second one.
+#:
+#: A flat `"<version>\x1f<count>\x1f<spelling>"` string rather than a map,
+#: because Memgraph cannot assign a dynamic map key from Cypher and the
+#: alternative — a property per spelling — is unbounded.
+_TALLY_SPELLINGS = """
+UNWIND $rows AS row
+MATCH (k:Concept {id: row.id})
+SET k.spellings =
+    [e IN coalesce(k.spellings, []) WHERE NOT e STARTS WITH row.prefix]
+    + row.entries
+RETURN k.id AS id, k.spellings AS spellings, k.name AS name
+"""
+
+_SET_CONCEPT_NAME = """
+UNWIND $rows AS row
+MATCH (k:Concept {id: row.id})
+SET k.name = row.name
 """
 
 #: Written by the condensation step, separately from the accumulation above. A
@@ -544,6 +579,7 @@ def project_concepts(
     *,
     tenant: str = LEGACY_TENANT_ID,
     now: str | None = None,
+    version_id: str = "",
 ) -> int:
     """Upsert concepts. Names collide across documents on purpose — see schema.
 
@@ -552,6 +588,18 @@ def project_concepts(
     reading. The append filters against what is already there, which is what
     keeps this idempotent: ``SET list = list + new`` is the one write in this
     module that a Temporal retry would double.
+
+    **The display name is the majority spelling, not the first one seen**, and
+    it is recomputed here rather than fixed at creation. `version_id` is what
+    makes that convergent: a version's votes replace its own previous ones. A
+    caller that passes none — a replay of a `semantics.json` written before
+    this existed — skips the tally entirely and leaves the name alone, which is
+    the same "an absent field takes its default" rule every payload here
+    follows.
+
+    The argmax is taken in Python rather than in Cypher. Parsing a delimited
+    list and reducing it to a maximum is expressible in Cypher and unreadable,
+    and this is the module that decides what a person sees on two screens.
     """
     rows = [
         {
@@ -569,11 +617,87 @@ def project_concepts(
         for c in concepts
     ]
     for batch in _batched(rows):
+        batch = list(batch)
         graph.write(
             _MERGE_CONCEPTS,
-            {"rows": list(batch), "tenant_id": tenant, "now": now or _now()},
+            {"rows": batch, "tenant_id": tenant, "now": now or _now()},
         )
+        if version_id:
+            _retally(graph, batch, concepts, version_id)
     return len(rows)
+
+
+#: The separator inside a tally entry. `\x1f` because it is the ASCII unit
+#: separator and cannot occur in a concept name the model produced.
+_TALLY_SEP = "\x1f"
+
+
+def _retally(
+    graph: Graph,
+    batch: Sequence[dict[str, Any]],
+    concepts: Sequence[dict[str, Any]],
+    version_id: str,
+) -> None:
+    """Record this version's vote for each concept's spelling, then pick.
+
+    The vote is a count of *mentions per spelling*, which is what the
+    measurement that prompted this counted, and the pick is the majority across
+    every version that has ever named the concept — so one book's heading in
+    capitals cannot outvote twenty prose mentions in another.
+
+    Ties are broken by the spelling itself, sorted, so the answer does not
+    depend on the order rows arrived in. An arbitrary winner is what this
+    replaces; an arbitrary winner that *moves* would be worse.
+    """
+    # One entry per (version, spelling), not per (version, concept): a run that
+    # saw `SEÑOR` four times and `Señor` once contributes both, or its own
+    # first-seen winner would be laundered into a count of one.
+    by_name = {
+        c["name"]: (c.get("spellings") or {c["name"]: 1})
+        for c in concepts if c.get("name")
+    }
+    prefix = f"{version_id}{_TALLY_SEP}"
+    rows = [
+        {
+            "id": r["id"],
+            "prefix": prefix,
+            "entries": [
+                f"{version_id}{_TALLY_SEP}{n}{_TALLY_SEP}{spelling}"
+                for spelling, n in sorted(by_name.get(r["name"], {r["name"]: 1}).items())
+            ],
+        }
+        for r in batch
+    ]
+    tallied = graph.write(_TALLY_SPELLINGS, {"rows": rows})
+    renames = []
+    for row in tallied:
+        best = _majority_spelling(row["spellings"] or [])
+        if best and best != row["name"]:
+            renames.append({"id": row["id"], "name": best})
+    if renames:
+        graph.write(_SET_CONCEPT_NAME, {"rows": renames})
+
+
+def _majority_spelling(entries: Sequence[str]) -> str:
+    """The spelling the most mentions use, ties broken by sorting.
+
+    A malformed entry is skipped rather than raising: this runs inside a paid
+    stage that has already spent, and a name that stays as it was costs a
+    reader nothing next to a projection that failed after extraction.
+    """
+    counts: dict[str, int] = {}
+    for entry in entries:
+        parts = str(entry).split(_TALLY_SEP)
+        if len(parts) != 3:
+            continue
+        _, raw, name = parts
+        try:
+            counts[name] = counts.get(name, 0) + int(raw)
+        except ValueError:
+            continue
+    if not counts:
+        return ""
+    return sorted(counts, key=lambda n: (-counts[n], n))[0]
 
 
 def read_concept_descriptions(

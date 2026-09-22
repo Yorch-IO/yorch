@@ -172,6 +172,11 @@ BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789 \
 BRAIN_DATABASE_URL="postgresql://brain:$BRAIN_PG_PASSWORD@127.0.0.1:5532/brain" \
 uv run python scripts/audit_version.py ver_… [--measure] [--json out.json]
 
+# Give every concept the spelling the corpus actually uses. Costs nothing — the
+# counts are in `semantics.json` artifacts already on disk, and the only writes
+# are `Concept.spellings` and `Concept.name`. Idempotent; `--dry-run` reports.
+uv run python scripts/retally_spellings.py [--dry-run]
+
 # How much a perfect reranker could recover, from the eval sets on disk, ≈$0;
 # `--rerank semantic-ranker-default-005` also measures the real one ($1 per
 # 1,000 questions). This is what put reranking on two levels and not three.
@@ -810,6 +815,63 @@ turn, on both planes. `brainworker/chat/`, `workflows/chat.py`,
   (`discoveryengine.googleapis.com`) that needed no extra role here — checked
   by calling it. `BRAIN_RERANK_MODEL=` (empty) turns it off everywhere
   without touching the ladder.
+- **A concept's display name is the majority spelling, and the resolution pass
+  RAGFlow built is measured and deliberately not.** Added 2026-09-22.
+  `_MERGE_CONCEPTS` set `k.name` under `ON CREATE SET`, so whichever document
+  reached a shared concept first owned its label for the whole corpus with no
+  tie-break. Re-measured by replaying all 41 semantics artifacts in timestamp
+  order: **231 of 13,005 concepts (1.8%)** carried a name that is not the
+  majority spelling — the same ratio as the 207 of 12,196 recorded in August,
+  grown with the corpus. Both graph screens render those.
+  **The tally is keyed by version, and that is what makes it convergent.**
+  `SET list = list + new` is the one write in `projection.py` a Temporal retry
+  would double, and `description_raw` gets away with filtering by value — a
+  *count* cannot. So each entry is `"<version>\x1f<count>\x1f<spelling>"`, a
+  version's previous entries are dropped before its current ones are appended,
+  and a re-index revises that document's vote instead of stacking a second one.
+  One entry per (version, **spelling**), not per (version, concept), or a run's
+  own first-seen winner is laundered into a count of one. Ties break on the
+  spelling, sorted: an arbitrary winner is what this replaces, and an arbitrary
+  winner that *moves* would be worse. The argmax is taken in Python because
+  parsing a delimited list and reducing it in Cypher is expressible and
+  unreadable.
+  **The LLM resolution pass is not built, and the number that would justify it
+  is written down.** RAGFlow resolves near-duplicate entities behind a cheap
+  lexical gate (`rag/graphrag/entity_resolution.py`). Measured on this corpus's
+  13,005 canonicals before anything was built: their gate proposes **14,812**
+  pairs, and the survivors are overwhelmingly noise — `aborigenes` against
+  `abortistas`, `abu talib` against `australia`. Tightening to a single edit
+  leaves **358**, of which a large share are `adriana`/`adriano`,
+  `alejandra`/`alejandro`, `adulterio`/`adultero`: different people and
+  different concepts, one letter apart. Their blocking key does not transfer
+  either — `type` here is 2,550 free-text values the model invented. So the
+  pass would spend on the stage that is already 87% of every dollar, to decide
+  pairs that are as often wrong as right.
+  **What does transfer is the veto, and it is load-bearing here.**
+  `_has_digit_in_2gram_diff` refuses any pair whose 2-gram symmetric difference
+  contains a digit — four lines, and it is what stops "GPT-3" becoming "GPT-4".
+  On this corpus it refuses **804 of the 14,812**, and every one is a scripture
+  reference: `1 corintios 1 7` against `1 corintios 11 3`, `1 pedro 2 2`
+  against `1 pedro 3 7`. Merging those silently reattributes a quotation in a
+  theology corpus. It is ported as `schema.may_merge_concepts`, a guard with no
+  caller, so that anything which *does* merge two concepts later cannot skip it.
+  **Applied to the real graph by `scripts/retally_spellings.py`**, which costs
+  nothing — the counts are in artifacts already on disk, and the only writes
+  are `Concept.spellings` and `Concept.name`. All four recorded cases are now
+  right: `SEÑOR`→`Señor`, `cristianismo`→`Cristianismo`,
+  `espíritu`→`Espíritu`, `Darío Silva Silva`→`Darío Silva-Silva`.
+  Two things it says rather than hides. **Coverage is 65%** — 12,516 of 19,288
+  concepts carry a tally, because only 41 runs still hold a `semantics.json`
+  and artifacts are pruned; a concept decided here by the three documents whose
+  artifacts survive has strictly more evidence than the one arbitrary vote it
+  replaces and is not the whole corpus, and every re-index adds its vote back.
+  And **the backfill runs in two phases**, which it did not at first: renaming
+  inside the replay loop decides from the votes counted *so far*, so the answer
+  depended on artifact order and a second run kept correcting more — 1,480,
+  then 440, then 4. Naming every concept once, after every vote is in, reaches
+  the fixpoint the projection reaches document by document and makes re-running
+  a genuine no-op.
+
 - **A person can rewrite a chunk, hide it from answers, or undo either — and
   an edited chunk gives up its byte-exact span, deliberately.** Added
   2026-09-22. RAGFlow's loudest claim is *"visualization of text chunking to
@@ -3342,21 +3404,6 @@ session's files.
   through the stores, and choosing the constant is a decision about whether it
   is frozen (and drifts as the corpus grows) or recomputed (and invalidates
   everything each time).
-
-- **A concept's display name is pinned to the first spelling ever projected.**
-  `_MERGE_CONCEPTS` (`graph/projection.py:432`) sets `k.name` under
-  `ON CREATE SET` while updating `k.canonical` on every merge, so whichever
-  document reached a shared concept first owns its label for the whole corpus,
-  with no tie-break. Measured 2026-09-03 by replaying all 40 semantics
-  artifacts in timestamp order: **207 of 12,196 concepts (1.7%) carry a display
-  name that is not the majority spelling**, out of 1,404 with more than one.
-  `SEÑOR` beat 19 later mentions of `Señor`; `espíritu` beat 12 of `Espíritu`
-  against 9 lowercase; `cristianismo` beat 22 of `Cristianismo`; and
-  `Darío Silva Silva` beat 11 mentions of the book's own `Darío Silva-Silva`.
-  Both graph screens render those labels. Reported rather than fixed because
-  "the majority spelling" is a rule somebody has to choose — the alternative,
-  moving the write out of `ON CREATE`, only swaps the first arbitrary winner for
-  the last — and because repairing the 207 already in the graph is a write.
 
 - **`PAGE_NUMBER_RE` is applied to every row on the page, not to the band its
   own comment names.** `_filter_header_footer` (`extract/pdf_text.py:201`) drops

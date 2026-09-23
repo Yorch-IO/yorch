@@ -7,7 +7,7 @@
     # because the containers build theirs from compose, so on the host it has to
     # be assembled. Getting the port wrong is the interesting mistake: 5432 is a
     # different Postgres, and this stack publishes 5532.
-    export BRAIN_WORKSPACE_DIR=~/.local/share/io.sek.companybrain/workspace
+    export BRAIN_WORKSPACE_DIR=~/.local/share/io.yorch.companybrain/workspace
     export BRAIN_QDRANT_URL=http://127.0.0.1:6433
     export BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789
     export BRAIN_DATABASE_URL="postgresql://brain:$BRAIN_PG_PASSWORD@127.0.0.1:5532/brain"

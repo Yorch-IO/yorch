@@ -2,7 +2,7 @@
 """Why one chunk did or did not reach an answer. Read-only.
 
     cd worker
-    export BRAIN_WORKSPACE_DIR=~/.local/share/io.sek.companybrain/workspace
+    export BRAIN_WORKSPACE_DIR=~/.local/share/io.yorch.companybrain/workspace
     export BRAIN_QDRANT_URL=http://127.0.0.1:6433
 
     uv run python scripts/probe_retrieval.py "¿Quién fue Jesucristo?" \

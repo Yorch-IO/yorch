@@ -166,7 +166,7 @@ uv run pytest tests/unit/test_artifacts.py -k rewritten -q
 # them; `infra/.env` names the ports and the password but no DATABASE_URL,
 # because the containers build theirs from compose — and 5432 is a *different*
 # Postgres. `--measure` re-runs the recorded recall measurement.
-BRAIN_WORKSPACE_DIR=~/.local/share/io.sek.companybrain/workspace \
+BRAIN_WORKSPACE_DIR=~/.local/share/io.yorch.companybrain/workspace \
 BRAIN_QDRANT_URL=http://127.0.0.1:6433 \
 BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789 \
 BRAIN_DATABASE_URL="postgresql://brain:$BRAIN_PG_PASSWORD@127.0.0.1:5532/brain" \
@@ -2987,7 +2987,7 @@ and each cost only quality. Every fix is pinned by a test **verified by removing
 the fix and watching the test go red**, not by assumption. The measurements were
 taken over the 45 files matching `docaget/libros/**/*.corrected.txt` with each
 book's own learned profile applied, and over the 40 semantics artifacts and 9
-runs with quote spans in `~/.local/share/io.sek.companybrain/workspace/runs`.
+runs with quote spans in `~/.local/share/io.yorch.companybrain/workspace/runs`.
 Nothing was re-indexed and no store was written.
 
 - **A claim's quote span added a character index to a byte offset**, so it
@@ -3278,7 +3278,7 @@ session's files.
   call it when the stack is down, which is the case its own doc comment
   describes.
 - **One catalog, two workspaces, so `rebuild` fails for half the library.**
-  `infra/.env` names `~/.local/share/io.sek.companybrain/workspace`; a stack
+  `infra/.env` names `~/.local/share/io.yorch.companybrain/workspace`; a stack
   started by hand from `infra/` gets compose's `./workspace` default. One
   Postgres holds `run_artifact` rows written under both, so a rebuild of a
   document indexed under the other one dies with `artifact is missing:

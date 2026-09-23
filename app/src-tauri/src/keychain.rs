@@ -26,7 +26,7 @@ use crate::error::{AppError, Result};
 
 /// Namespace for every entry. Changing it orphans every stored secret, which
 /// costs the user one sign-in and no data.
-const SERVICE: &str = "io.sek.companybrain";
+const SERVICE: &str = "io.yorch.companybrain";
 
 /// Which store answered. Reported to the UI, never inferred from a failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]

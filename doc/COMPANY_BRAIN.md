@@ -906,7 +906,7 @@ al día sola, y esta sección es la prueba.
 
 **One catalog, two workspaces.** The rebuild of `1.-Doctrina-del-Hombre` failed
 with `artifact is missing: runs/…/chunks.jsonl`. The file existed — in
-`~/.local/share/io.sek.companybrain/workspace`, which is what `infra/.env` names,
+`~/.local/share/io.yorch.companybrain/workspace`, which is what `infra/.env` names,
 while the running stack was mounted on `infra/workspace` (compose's `./workspace`
 default). One Postgres holds rows for runs written under both. Every document
 indexed under the other workspace therefore has a `run_artifact` row pointing at

@@ -518,7 +518,7 @@ jobs:
 
 ### Windows-specific behaviour worth knowing
 
-- The workspace lives under `%APPDATA%\io.sek.companybrain\`. Docker Desktop's
+- The workspace lives under `%APPDATA%\io.yorch.companybrain\`. Docker Desktop's
   WSL2 backend shares that automatically; no manual file-sharing setup.
 - Paths written into the Compose `.env` are normalised to forward slashes
   (`C:/Users/...`), because whether a backslash in a `.env` value is treated as

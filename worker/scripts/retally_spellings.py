@@ -2,7 +2,7 @@
 """Give every concept the spelling the corpus actually uses. Writes two fields.
 
     cd worker
-    export BRAIN_WORKSPACE_DIR=~/.local/share/io.sek.companybrain/workspace
+    export BRAIN_WORKSPACE_DIR=~/.local/share/io.yorch.companybrain/workspace
     export BRAIN_MEMGRAPH_URL=bolt://127.0.0.1:7789
     export BRAIN_DATABASE_URL="postgresql://brain:$BRAIN_PG_PASSWORD@127.0.0.1:5532/brain"
     uv run python scripts/retally_spellings.py [--dry-run]

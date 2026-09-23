@@ -29,7 +29,7 @@ SUMMARY = RUNS_DIR / "indexacion-resumen.md"
 #: catálogo — ver el defecto «un catálogo, dos workspaces» en CLAUDE.md.
 WORKSPACES = [
     pathlib.Path("/home/kheiron/yorch/infra/workspace"),
-    pathlib.Path.home() / ".local/share/io.sek.companybrain/workspace",
+    pathlib.Path.home() / ".local/share/io.yorch.companybrain/workspace",
 ]
 DESDE = sys.argv[1] if len(sys.argv) > 1 else "2026-08-22 01:20:00+00"
 

@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Company Brain",
   "version": "0.1.0",
-  "identifier": "io.sek.companybrain",
+  "identifier": "io.yorch.companybrain",
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "../dist",

@@ -1234,7 +1234,7 @@ mod live {
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 PathBuf::from(std::env::var_os("HOME").expect("HOME"))
-                    .join(".local/share/io.sek.companybrain")
+                    .join(".local/share/io.yorch.companybrain")
             })
     }
 }
